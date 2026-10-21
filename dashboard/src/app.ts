@@ -87,6 +87,12 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
         conn = state;
         render();
       },
+      onAuthFailure() {
+        // The server keeps refusing the viewer token: stop retrying and ask for a new one.
+        stopSource?.();
+        stopSource = null;
+        prompt.show();
+      },
     });
   }
 

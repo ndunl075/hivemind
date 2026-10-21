@@ -114,3 +114,22 @@ describe('live updates', () => {
     expect(list.getAttribute('aria-live')).toBe('polite');
   });
 });
+
+describe('auth failure from the live source', () => {
+  it('stops the source and shows the token prompt again', () => {
+    let h: LiveHandlers | null = null;
+    let stopped = 0;
+    const source: LiveSource = {
+      start(handlers) {
+        h = handlers;
+        return () => { stopped += 1; };
+      },
+    };
+    const snap = structuredClone(fixtureSnapshot);
+    app = mountApp(root, { createSource: () => source, sourceNeedsToken: true, room: 'demo', token: 'hm_v.test.1.AAAA', demo: null, clock: () => snap.now });
+    expect(root.querySelector('[inert]')).toBeNull();
+    h!.onAuthFailure!();
+    expect(stopped).toBe(1);
+    expect(root.querySelector('[inert]')).not.toBeNull();
+  });
+});
