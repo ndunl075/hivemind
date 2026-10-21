@@ -19,6 +19,7 @@ import {
 import { AgentStore } from './agents';
 import { BudgetCounter } from './budget';
 import type { Env } from './env';
+import { createGithub, type GithubApi } from './features/github';
 import { createLocks } from './features/locks';
 import { handleMcp } from './features/mcp';
 import { createMessages } from './features/messages';
@@ -34,7 +35,7 @@ import { WaitRegistry } from './waits';
 
 /** Set by the Worker after it verified the token. Only the Worker can reach a Room. */
 export interface InternalClaims {
-  kind: 'agent' | 'viewer' | 'admin';
+  kind: 'agent' | 'viewer' | 'admin' | 'webhook';
   room: string;
   person?: string;
   generation?: number;
@@ -45,11 +46,15 @@ const HOUSEKEEPING_EVERY_MS = 60_000;
 /** The request counter is written to storage at most once per this many requests, ahead of the count (ARCHITECTURE.md §16). */
 const BUDGET_PERSIST_EVERY = 25;
 const DEFAULT_MODE: RoomMode = 'enforce';
+/** GitHub webhook deliveries a room accepts (ping and rejected payloads included); see webhookGate. */
+const WEBHOOK_PER_MINUTE = 10;
+const WEBHOOK_PER_DAY = 1_000;
 
 export class Room extends DurableObject<Env> {
   private meta = new Map<string, string>();
   agents!: AgentStore;
   features!: Features;
+  private github!: GithubApi;
   budget!: BudgetCounter;
   readonly waits = new WaitRegistry();
   private pipeline!: Pipeline;
@@ -67,6 +72,7 @@ export class Room extends DurableObject<Env> {
   private budgetSinceBoot = 0;
   private readonly burst = new Map<string, { start: Millis; count: number }>();
   private readonly messageTimes = new Map<string, Millis[]>();
+  private webhookTimes: Millis[] = [];
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
@@ -131,6 +137,8 @@ export class Room extends DurableObject<Env> {
     features.pushes = createPushes(this.roomCtx, features);
     features.snapshot = createSnapshot(this.roomCtx, features);
     this.features = features;
+
+    this.github = createGithub(this.roomCtx, features, { graceMs: () => this.webhookGraceMs() });
 
     this.svc = {
       ctx: this.roomCtx,
@@ -333,6 +341,7 @@ export class Room extends DurableObject<Env> {
   private afterRequest(): void {
     const now = this.now();
     this.agents.flush();
+    this.github.flushDue();
     if (now - this.lastHousekeeping >= HOUSEKEEPING_EVERY_MS) {
       this.lastHousekeeping = now;
       this.dropOldBudgetKeys(`budget:${this.budget.date}`);
@@ -379,6 +388,12 @@ export class Room extends DurableObject<Env> {
     if (!claims) return errorResponse('bad request', 400);
     const url = new URL(request.url);
     try {
+      // A webhook delivery is checked and limited before it is counted, so stale or excess deliveries can't use up the
+      // daily budget (and never trip the budget guard on their own).
+      if (claims.kind === 'webhook') {
+        const refused = this.webhookGate(claims);
+        if (refused) return refused;
+      }
       this.onRequest();
       if (claims.room && this.roomName !== claims.room) {
         this.roomName = claims.room;
@@ -405,7 +420,7 @@ export class Room extends DurableObject<Env> {
     try {
       const raw = request.headers.get('x-hm-claims');
       const c = raw ? (JSON.parse(raw) as InternalClaims) : null;
-      return c && (c.kind === 'agent' || c.kind === 'viewer' || c.kind === 'admin') ? c : null;
+      return c && (c.kind === 'agent' || c.kind === 'viewer' || c.kind === 'admin' || c.kind === 'webhook') ? c : null;
     } catch {
       return null;
     }
@@ -461,6 +476,9 @@ export class Room extends DurableObject<Env> {
         if (method !== 'POST') throw new HttpError(405, 'method not allowed');
         return json(this.unlock(person, (await this.body(request)) as Partial<UnlockRequest>));
       }
+      case '/github':
+        if (claims.kind !== 'webhook') throw new HttpError(401, 'webhook delivery required');
+        return this.githubDelivery(request);
       case '/ws':
         if (claims.kind !== 'viewer') throw new HttpError(401, 'viewer token required');
         return this.upgrade(request);
@@ -468,6 +486,61 @@ export class Room extends DurableObject<Env> {
         if (path.startsWith('/admin/') && claims.kind === 'admin') return this.admin(path, request);
         throw new HttpError(404, 'not found');
     }
+  }
+
+  /**
+   * A verified GitHub delivery (§12). The Worker checked the signature and webhookGate the generation and limits.
+   * A webhook queues a push notice and nothing else.
+   */
+  private githubDelivery(request: Request): Promise<Response> | Response {
+    if (request.method !== 'POST') throw new HttpError(405, 'method not allowed');
+    const binding = this.webhookBinding();
+    if (!binding) throw new HttpError(404, 'the GitHub webhook is not enabled for this room');
+    const isPing = request.headers.get('x-gh-event') === 'ping';
+    return request.text().then((text) => {
+      if (isPing) return json({ ok: true, status: 'pong' });
+      const r = this.github.receive(text, binding);
+      if (r.ok) return json({ ok: true, status: r.status });
+      if (r.status === 'ignored') return json({ ok: true, status: 'ignored', reason: r.reason });
+      return errorResponse(r.reason, 400);
+    });
+  }
+
+  /** The repo the webhook is bound to, or null when it is off. */
+  private webhookBinding(): { repo: string; fullName: string } | null {
+    try {
+      const b = JSON.parse(this.meta.get('webhook_binding') ?? '') as { repo?: unknown; fullName?: unknown };
+      return typeof b.repo === 'string' && typeof b.fullName === 'string' ? { repo: b.repo, fullName: b.fullName } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** How long a webhook push is held: the heartbeat interval (the slowest one while heartbeats are off) x 1.5. */
+  private webhookGraceMs(): Millis {
+    const hb = this.budget.level().heartbeatMs;
+    return (hb === 0 ? LIMITS.guardSlowerHeartbeatMs : hb) * 1.5;
+  }
+
+  /**
+   * Runs before a webhook delivery is counted. A stale generation (rotated or switched off) is refused without cost.
+   * Every other delivery, ping or not, uses the per-minute and per-day allowance; past either it is a 429. Deliveries
+   * within the allowance count as requests, at most WEBHOOK_PER_DAY a day, far below the guard's threshold.
+   */
+  private webhookGate(claims: InternalClaims): Response | null {
+    const current = this.meta.get('webhook_generation');
+    if (current === undefined) return errorResponse('the GitHub webhook is not enabled for this room', 404);
+    if (claims.generation !== Number(current)) return errorResponse('this webhook secret was rotated; use the new payload URL and secret', 401);
+    const now = this.now();
+    this.webhookTimes = this.webhookTimes.filter((t) => now - t < 60_000);
+    if (this.webhookTimes.length >= WEBHOOK_PER_MINUTE) return errorResponse('too many deliveries', 429, { 'retry-after': '60' });
+    const key = `webhook_day:${utcDate(now)}`;
+    const today = Number(this.meta.get(key) ?? 0);
+    if (today >= WEBHOOK_PER_DAY) return errorResponse('daily webhook delivery limit reached', 429, { 'retry-after': '3600' });
+    this.webhookTimes.push(now);
+    this.setMeta(key, String(today + 1));
+    for (const k of [...this.meta.keys()]) if (k.startsWith('webhook_day:') && k !== key) this.delMeta(k);
+    return null;
   }
 
   private unlock(person: string, b: Partial<UnlockRequest> & { path?: unknown; agent?: unknown }): UnlockResponse {
@@ -567,6 +640,23 @@ export class Room extends DurableObject<Env> {
         }
         throw new HttpError(400, 'rotate must be agents or viewer');
       }
+      case '/admin/webhook': {
+        const b = await this.body(request);
+        if (b.disable === true) {
+          this.delMeta('webhook_generation');
+          this.delMeta('webhook_binding');
+          return json({});
+        }
+        // The webhook is bound to one repository: its root commit id and its GitHub owner/name.
+        if (typeof b.repo !== 'string' || !/^[0-9a-f]{40,64}$/i.test(b.repo)) throw new HttpError(400, 'repo must be the repository root commit id');
+        if (typeof b.fullName !== 'string' || !/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(b.fullName)) throw new HttpError(400, 'fullName must be the GitHub owner/name');
+        this.setMeta('webhook_binding', JSON.stringify({ repo: b.repo.toLowerCase(), fullName: b.fullName.toLowerCase() }));
+        // The counter only goes up (and survives a room delete), so an old payload URL and secret never work again.
+        const generation = Number(this.meta.get('webhook_counter') ?? 0) + 1;
+        this.setMeta('webhook_counter', String(generation));
+        this.setMeta('webhook_generation', String(generation));
+        return json({ generation, fullName: b.fullName.toLowerCase() });
+      }
       case '/admin/delete': {
         this.wipe();
         return json({ deleted: true });
@@ -580,6 +670,7 @@ export class Room extends DurableObject<Env> {
   private wipe(): void {
     const agentGen = this.num('agent_generation') + 1;
     const viewerGen = this.num('viewer_generation') + 1;
+    const webhookCounter = this.meta.get('webhook_counter');
     this.closeViewers('room deleted');
     this.waits.cancelAll();
     if (this.snapshotTimer !== null) {
@@ -594,5 +685,6 @@ export class Room extends DurableObject<Env> {
     this.boot();
     this.setMeta('agent_generation', String(agentGen));
     this.setMeta('viewer_generation', String(viewerGen));
+    if (webhookCounter !== undefined) this.setMeta('webhook_counter', webhookCounter);
   }
 }

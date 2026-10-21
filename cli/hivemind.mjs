@@ -6,7 +6,7 @@
  */
 import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { invite, revoke, room, rotate } from './commands/admin.mjs';
+import { invite, revoke, room, rotate, webhook } from './commands/admin.mjs';
 import { CliError, createContext } from './commands/context.mjs';
 import { doctor } from './commands/doctor.mjs';
 import { join, leave, update } from './commands/join.mjs';
@@ -26,6 +26,8 @@ Once per team (admin; asks for the admin secret in a terminal, or reads HIVEMIND
   hivemind revoke <room> <person>          revoke one person's token
   hivemind rotate <room> --agents|--viewer invalidate all agent tokens, or the dashboard link
   hivemind room delete <room> [--yes]      delete the room's data
+  hivemind webhook <room> [--repo o/n]     inside the project: create or rotate the room's GitHub push webhook for it
+                                           (URL and secret, once); --off switches it off
 
 Once per project repo:
   hivemind init                            write .hivemind/project.json and the protocol in AGENTS.md and CLAUDE.md
@@ -54,6 +56,7 @@ const COMMANDS = {
   invite,
   revoke,
   rotate,
+  webhook,
   init,
   join,
   doctor,
