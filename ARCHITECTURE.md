@@ -505,7 +505,7 @@ The server name is `hivemind`, so tools appear as `mcp__hivemind__<name>`. Every
 - **Dashboard broadcast** uses the WebSocket Hibernation API (`ctx.acceptWebSocket`), with ping/pong answered by `setWebSocketAutoResponse` so idle viewers cost nothing. Viewers get a full **snapshot** (a few KB) on connect and on every change, debounced to at most 4 per second, plus small **pulse** events (message sent, edit denied, push) that drive animations.
 - **`wait`** parks a promise per caller, resolved by the first matching event or a 45 s timer. Parked waits end if the Room restarts. The caller simply gets a timeout.
 - **Limits:** 50 agents per room, messages of 2,000 chars, 10 messages per minute per sender, a burst of 20 requests per second per person.
-- **Feature boundaries.** `room.ts` owns storage, the WebSocket plumbing, the `wait` registry, limits and the budget guard. Each feature in `server/src/features/` plugs into the pipeline and talks to other features only through the internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi` with `notify()`, `PushesApi`, `SnapshotApi`, and the optional `BriefingContributor`), built by factories that receive a shared `RoomContext`, so slices can be built in parallel (§20).
+- **Feature boundaries.** `room.ts` owns storage, the WebSocket plumbing, the `wait` registry, limits and the budget guard. Each feature in `server/src/features/` plugs into the pipeline and talks to other features only through the internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi` with `notify()`, `PushesApi`, `SnapshotApi`), built by factories that receive a shared `RoomContext`. A feature may also offer `briefingLines()` (`BriefingContributor`), which the Room collects for the briefing, so slices can be built in parallel (§20).
 
 ---
 
@@ -900,7 +900,7 @@ hivemind/
 │   └── evidence/               one verification note per worker task
 ├── shared/                     architect-owned
 │   ├── contracts.ts            wire types (/hook, MCP tool I/O, dashboard snapshot and pulses) and the
-│   │                           internal feature interfaces (LocksApi, TasksApi, MessagesApi, SnapshotApi)
+│   │                           internal feature interfaces (LocksApi, TasksApi, MessagesApi, PushesApi, SnapshotApi)
 │   ├── hook-modules.ts         interfaces of the hook's modules (claude, codex, git)
 │   ├── state.ts                agent state and takeability from timestamps (§5), used by server and dashboard
 │   ├── protocol.md             the protocol text in §6.5, the single source
@@ -976,7 +976,7 @@ Rules every worker follows are in [`docs/parallel-sessions.md`](docs/parallel-se
 
 - No two workers own the same file. Each brief lists exactly what it owns, including its own `docs/evidence/<task>.md`. Owning a file includes its colocated tests (§18).
 - **Architect-only hotspots:** everything in `shared/` (except `shared/fixtures/hooks/`, which W0 writes), root `package.json` and lockfile, `.github/`, `docs/parallel-sessions.md`, `docs/worker-briefs.md`, and after Wave 1 also `server/src/worker.ts`, `server/src/room.ts`, `server/src/pipeline.ts`, `server/wrangler.toml`, `cli/hook/hook.mjs` and `cli/hook/claude.mjs`. A worker that needs a change there asks for it under **Requests for the architect** in its PR description.
-- **Features meet only through frozen interfaces.** The internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi`, `SnapshotApi`) and the hook module interfaces in `shared/hook-modules.ts` are written in Wave 0. Wave 1 provides a working basic implementation behind every one of them, so each Wave 2 slice can be built and tested on its own against the others' basic versions.
+- **Features meet only through frozen interfaces.** The internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi`, `PushesApi`, `SnapshotApi`) and the hook module interfaces in `shared/hook-modules.ts` are written in Wave 0. Wave 1 provides a working basic implementation behind every one of them, so each Wave 2 slice can be built and tested on its own against the others' basic versions.
 - All dependencies each worker needs are installed in Wave 0 (listed in `docs/worker-briefs.md`).
 - **Contract checkpoint:** between waves, the architect folds approved contract requests into `shared/`, then launches the next wave.
 
