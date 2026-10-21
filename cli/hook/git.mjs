@@ -48,13 +48,18 @@ function orNull(p) {
 }
 
 /**
- * Display name from an origin URL (https or scp-like), or null.
+ * Display name from an origin URL (https, scp-like) or a local path (Windows drive or UNC path, POSIX absolute path,
+ * file:// URL): the last path segment without `.git`. Null when there is none.
  * @param {string | null} url
  * @returns {string | null}
  */
-function repoNameOf(url) {
+export function repoNameOf(url) {
   if (!url) return null;
-  const last = url.replace(/\/+$/, '').replace(/\.git$/, '').split(/[/:]/).pop();
+  const text = url.trim();
+  const local = /^[A-Za-z]:[\\/]/.test(text) || text.startsWith('\\\\') || text.startsWith('/') || /^file:/i.test(text);
+  // A local path may contain `:` (a drive letter); only a remote URL treats it as a separator.
+  const separators = local ? /[\\/]/ : /[\\/:]/;
+  const last = text.replace(/[\\/]+$/, '').replace(/\.git$/, '').split(separators).pop();
   return last ? last.slice(0, 200) : null;
 }
 

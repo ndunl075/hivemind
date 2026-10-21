@@ -586,6 +586,19 @@ async function run() {
     state = loadState(statePath) ?? state;
   }
   if (event === 'PostToolUse') {
+    // An edit that went through is the agent's own divergent file from now on, even when this event is throttled:
+    // remember it locally (no network) so a push before the next heartbeat is still recognised (§12).
+    if (input.editPaths.length > 0 && state.gitMemory) {
+      const edited = gitMod.normalize(ident.root, input.cwd, input.editPaths);
+      if (edited.length > 0) {
+        updateState((s) => {
+          if (!s.gitMemory) return;
+          const merged = [...new Set([...s.gitMemory.divergent, ...edited])].sort();
+          s.gitMemory = { ...s.gitMemory, divergent: merged.slice(0, limits.maxDivergentPaths) };
+        });
+        state = loadState(statePath) ?? state;
+      }
+    }
     if (state.heartbeatMs === 0) return done(null);
     const interval = state.heartbeatMs ?? limits.heartbeatMs;
     if (state.shellSeq <= state.shellAck && now < state.lastHeartbeat + interval) return done(null);

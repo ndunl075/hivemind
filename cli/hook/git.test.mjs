@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { GIT_ENV_OVERRIDES, identity, normalize, refs, staleWarnings, state } from './git.mjs';
+import { GIT_ENV_OVERRIDES, identity, normalize, refs, repoNameOf, staleWarnings, state } from './git.mjs';
 
 let base;
 let repo;
@@ -125,5 +125,28 @@ describe('git.mjs', () => {
     mkdirSync(lonely);
     const push = { path: 'a.txt', sha: 'abcdef1234', blob: 'b'.repeat(40), by: 'codex-ana', branch: 'main', at: Date.now() };
     expect(await staleWarnings(lonely, 'main', [push])).toEqual([`codex-ana pushed changes to a.txt 0s ago. Fetch and pull first.`]);
+  });
+});
+
+describe('repoNameOf (issue #21)', () => {
+  it('names remote URLs and local paths by their last segment, without .git', () => {
+    const cases = {
+      'https://example.invalid/team/widgets.git': 'widgets',
+      'https://example.invalid/team/widgets/': 'widgets',
+      'git@example.invalid:team/widgets.git': 'widgets',
+      'git@example.invalid:widgets.git': 'widgets',
+      'ssh://git@example.invalid:2222/team/widgets.git': 'widgets',
+      [String.raw`C:\some\folder\origin.git`]: 'origin',
+      [`${String.raw`C:\some\folder\origin`}\\`]: 'origin',
+      'c:/some/folder/origin.git': 'origin',
+      [String.raw`\\server\share\repos\origin.git`]: 'origin',
+      '/srv/git/origin.git': 'origin',
+      'file:///C:/some/folder/origin.git': 'origin',
+      'file:///srv/git/origin': 'origin',
+    };
+    for (const [url, name] of Object.entries(cases)) expect(repoNameOf(url), url).toBe(name);
+    expect(repoNameOf(null)).toBeNull();
+    expect(repoNameOf('')).toBeNull();
+    expect(repoNameOf('/')).toBeNull();
   });
 });
