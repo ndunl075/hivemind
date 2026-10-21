@@ -21,8 +21,10 @@ export interface GithubPush {
   before: string;
   /** The SHA the branch points to after the push. */
   after: string;
-  /** When the pushed head commit was made, if the payload says (ms). */
-  commitAt: number | null;
+  /** When GitHub received the push (`repository.pushed_at`, ms), if the payload says. Not the commit's own date. */
+  pushedAt: number | null;
+  /** Ids of the commits the payload lists (at most 20), lowercase. */
+  commitIds: string[];
   /** Who pushed, reduced to a safe `github:<login>` label. */
   by: string;
   files: string[];
@@ -30,8 +32,8 @@ export interface GithubPush {
   incomplete: boolean;
 }
 
-/** A push whose head commit is older than this is a late redelivery or an old branch, not news. */
-export const MAX_COMMIT_AGE_MS = LIMITS.pushTtlMs;
+/** A push GitHub received longer ago than this is a late redelivery, not news. */
+export const MAX_PUSH_AGE_MS = LIMITS.pushTtlMs;
 
 export type PushParse = { ok: true; push: GithubPush } | { ok: false; ignore: string } | { ok: false; error: string };
 
@@ -59,10 +61,12 @@ export function parsePush(raw: unknown, now: number = Date.now()): PushParse {
   if (raw.deleted === true || ZERO_SHA.test(after)) return { ok: false, ignore: 'branch deleted' };
 
   const before = typeof raw.before === 'string' && /^[0-9a-f]{40,64}$/i.test(raw.before) && !ZERO_SHA.test(raw.before) ? raw.before.toLowerCase() : '';
-  const head = isObj(raw.head_commit) ? raw.head_commit : null;
-  const parsedAt = head && typeof head.timestamp === 'string' ? Date.parse(head.timestamp) : Number.NaN;
-  const commitAt = Number.isFinite(parsedAt) ? parsedAt : null;
-  if (commitAt !== null && now - commitAt > MAX_COMMIT_AGE_MS) return { ok: false, ignore: 'the pushed commit is more than 24 hours old' };
+  // In push events `repository.pushed_at` is epoch seconds (other events send an ISO string). The commit dates are the
+  // authors' and say nothing about when the push happened, so they are not used.
+  const pushedRaw = isObj(repo) ? repo.pushed_at : undefined;
+  const pushedMs = typeof pushedRaw === 'number' ? pushedRaw * 1000 : typeof pushedRaw === 'string' ? Date.parse(pushedRaw) : Number.NaN;
+  const pushedAt = Number.isFinite(pushedMs) && pushedMs > 0 ? pushedMs : null;
+  if (pushedAt !== null && now - pushedAt > MAX_PUSH_AGE_MS) return { ok: false, ignore: 'the push is more than 24 hours old' };
 
   const commits = Array.isArray(raw.commits) ? raw.commits : [];
   const seen = new Set<string>();
@@ -79,6 +83,7 @@ export function parsePush(raw: unknown, now: number = Date.now()): PushParse {
       files.push(canon);
     }
   };
+  const commitIds = commits.flatMap((c) => (isObj(c) && typeof c.id === 'string' && /^[0-9a-f]{7,64}$/i.test(c.id) ? [c.id.toLowerCase()] : [])).slice(0, GITHUB_COMMIT_CAP);
   const all = [...commits];
   if (isObj(raw.head_commit)) all.push(raw.head_commit);
   for (const c of all) {
@@ -94,7 +99,7 @@ export function parsePush(raw: unknown, now: number = Date.now()): PushParse {
   return {
     ok: true,
     push: {
-      fullName: fullName.toLowerCase(), repoName: name.toLowerCase(), branch, before, after: after.toLowerCase(), commitAt,
+      fullName: fullName.toLowerCase(), repoName: name.toLowerCase(), branch, before, after: after.toLowerCase(), pushedAt, commitIds,
       by: pusherLabel(typeof sender === 'string' && sender ? sender : pusher), files, incomplete,
     },
   };

@@ -56,6 +56,8 @@ function payload(over: Record<string, unknown> = {}): string {
   });
 }
 
+/** The `repository` object of a push event: `pushed_at` is epoch seconds. */
+const repo = (pushedMs: number) => ({ name: 'Demo-App', full_name: 'acme/Demo-App', pushed_at: Math.floor(pushedMs / 1000) });
 const BLOB = (n: number) => String(n).padStart(40, 'b');
 const pushedBy = (sha: string, branch: string, files: string[]): GitStateReport => ({
   divergent: [], upstream: `origin/${branch}`, truncated: false,
@@ -402,24 +404,35 @@ describe('notices', () => {
     expect(await notices(room, ben.cs)).toEqual([]);
   });
 
-  it('announces the same commit on another branch (a merge of the pull request branch), and keeps the author\'s blob so the author is not warned', async () => {
+  it('after a real merge (the payload lists the branch commits) keeps the author\'s blob, so she is not warned about her own change', async () => {
     clock();
-    const room = 'wh-partial';
+    const room = 'wh-merge';
     const { path, secret } = await enable(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     const ben = await agent(room, 'ben', { checkout: 'c2' });
     await ana.hook({ git: pushedBy(AFTER, 'feature/x', ['a.ts']) });
     expect(await notices(room, ben.cs)).toHaveLength(1);
-    // The pull request is squash-merged on github.com: a new commit on main with the same file.
-    const squash = 'd'.repeat(40);
-    await deliver(path, secret, payload({ after: squash, commits: [{ modified: ['a.ts', 'b.ts'] }] }));
+    const merge = 'd'.repeat(40);
+    await deliver(path, secret, payload({ after: merge, commits: [{ id: AFTER, modified: ['a.ts'] }, { id: merge, modified: ['b.ts'] }] }));
     await afterGrace(ana);
     expect(await notices(room, ben.cs)).toEqual(['github:octocat pushed main (2 files: a.ts, b.ts). Pull before editing those.']);
-    const edit = await ben.hook(editBody('a.ts'));
     // a.ts keeps the blob Ana reported (the content of her branch); b.ts has none.
-    expect(edit.lastPush).toEqual([{ path: 'a.ts', sha: squash, blob: BLOB(1), by: 'github:octocat', branch: 'main', at: expect.any(Number) }]);
-    const other = await ben.hook({ ...editBody('b.ts') });
-    expect(other.lastPush).toEqual([{ path: 'b.ts', sha: squash, blob: '', by: 'github:octocat', branch: 'main', at: expect.any(Number) }]);
+    const edit = await ben.hook(editBody('a.ts'));
+    expect(edit.lastPush).toEqual([{ path: 'a.ts', sha: merge, blob: BLOB(1), by: 'github:octocat', branch: 'main', at: expect.any(Number) }]);
+    expect((await ben.hook(editBody('b.ts'))).lastPush).toEqual([{ path: 'b.ts', sha: merge, blob: '', by: 'github:octocat', branch: 'main', at: expect.any(Number) }]);
+  });
+
+  it('after a squash merge (a new commit that can\'t be linked to the branch) inherits no blob', async () => {
+    clock();
+    const room = 'wh-squash';
+    const { path, secret } = await enable(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    await ana.hook({ git: pushedBy(AFTER, 'feature/x', ['a.ts']) });
+    const squash = 'd'.repeat(40);
+    await deliver(path, secret, payload({ after: squash, commits: [{ id: squash, modified: ['a.ts'] }] }));
+    await afterGrace(ana);
+    expect((await ben.hook(editBody('a.ts'))).lastPush).toEqual([{ path: 'a.ts', sha: squash, blob: '', by: 'github:octocat', branch: 'main', at: expect.any(Number) }]);
   });
 
   it('drops the whole webhook push when an agent already reported that commit on that branch, even for files the agent did not list', async () => {
@@ -449,7 +462,7 @@ describe('notices', () => {
     // GitHub redelivers an older push (made at T0 + 10 s) a minute later.
     vi.setSystemTime(T0 + 120_000);
     await deliver(path, secret, payload({
-      commits: [{ modified: ['a.ts', 'z.ts'] }], head_commit: { timestamp: new Date(T0 + 10_000).toISOString() },
+      commits: [{ modified: ['a.ts', 'z.ts'] }], repository: repo(T0 + 10_000),
     }));
     await afterGrace(ana);
     expect(await notices(room, ben.cs)).toEqual(['github:octocat pushed main (1 file: z.ts). Pull before editing that file.']);
@@ -612,7 +625,28 @@ describe('backlog and large pushes', () => {
     expect(got[1]).toMatch(/lists only some of the files/);
     expect(got[1]).not.toContain('\n');
 
-    const old = await deliver(path, secret, payload({ after: '9'.repeat(40), head_commit: { timestamp: new Date(Date.now() - 25 * 60 * 60_000).toISOString() } }));
+    const old = await deliver(path, secret, payload({ after: '9'.repeat(40), repository: repo(Date.now() - 25 * 60 * 60_000) }));
     expect(old.json).toMatchObject({ ok: true, status: 'ignored' });
+  });
+
+  it('orders by when GitHub got the push, not by the commit dates: an old commit pushed now is news, a late redelivery of an older push is not', async () => {
+    clock();
+    const room = 'wh-order';
+    const { path, secret } = await enable(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    // A commit made last Friday, pushed just now (its date is in the commit, never read).
+    const friday = new Date(T0 - 3 * 24 * 60 * 60_000).toISOString();
+    const r = await deliver(path, secret, payload({
+      after: '1'.repeat(40), commits: [{ id: '1'.repeat(40), timestamp: friday, modified: ['f.ts'] }],
+      head_commit: { timestamp: friday }, repository: repo(T0 - 5_000),
+    }));
+    expect(r.json).toMatchObject({ status: 'queued' });
+    await afterGrace(ana);
+    expect(await notices(room, ben.cs)).toEqual(['github:octocat pushed main (1 file: f.ts). Pull before editing that file.']);
+    // The same login, an older push redelivered later: it does not replace the newer row.
+    await deliver(path, secret, payload({ before: 'f'.repeat(40), after: '2'.repeat(40), commits: [{ modified: ['f.ts'] }], repository: repo(Date.now() - 20_000) }));
+    await afterGrace(ana);
+    expect((await ben.hook(editBody('f.ts'))).lastPush?.map((p) => p.sha)).toEqual(['1'.repeat(40)]);
   });
 });

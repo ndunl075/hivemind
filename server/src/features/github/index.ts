@@ -14,7 +14,9 @@
  *   than the push is never overwritten. A delivery repeated (same branch, before and after) is ignored for 24 hours.
  *   Held pushes of one branch collapse into one.
  * - Stale-copy checks: the payload has no blob SHAs. Rows get an empty blob, except where an agent on another branch
- *   reported the file in the last 24 hours: its blob is kept, so a squash merge of that branch doesn't warn the author.
+ *   reported the file at one of the payload's own commits (a real merge): its blob is kept, so the author isn't warned
+ *   about her own change. A squash merge can't be linked to the branch and may warn its author once.
+ * - Ordering and staleness use `repository.pushed_at` (when GitHub got the push), not the commits' own dates.
  * - The held pushes are delivered by flushDue(), which the Room calls after every request (there are no alarms).
  */
 import { LIMITS, type Actor, type Features, type Millis, type RoomContext } from '../../../../shared/contracts';
@@ -56,13 +58,13 @@ export interface GithubOptions {
 
 interface Held {
   repo: string; fullName: string; branch: string; before: string; sha: string; pusher: string;
-  files: string[]; incomplete: boolean; pushAt: Millis; receivedAt: Millis;
+  files: string[]; commitIds: string[]; incomplete: boolean; pushAt: Millis; receivedAt: Millis;
 }
 
 export function createGithub(ctx: RoomContext, features: Features, options: GithubOptions = {}): GithubApi {
   ctx.sql.exec(`CREATE TABLE IF NOT EXISTS github_pushes (
     repo TEXT NOT NULL, full_name TEXT NOT NULL, branch TEXT NOT NULL, before_sha TEXT NOT NULL, sha TEXT NOT NULL,
-    pusher TEXT NOT NULL, files TEXT NOT NULL, incomplete INTEGER NOT NULL, push_at INTEGER NOT NULL,
+    pusher TEXT NOT NULL, files TEXT NOT NULL, commit_ids TEXT NOT NULL DEFAULT '[]', incomplete INTEGER NOT NULL, push_at INTEGER NOT NULL,
     received_at INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (full_name, branch, before_sha, sha))`).toArray();
 
   const graceMs = (): Millis => Math.max(GRACE_MS, options.graceMs?.() ?? 0);
@@ -77,7 +79,7 @@ export function createGithub(ctx: RoomContext, features: Features, options: Gith
 
   const finish = (r: Record<string, unknown>): void => {
     ctx.sql.exec(
-      "UPDATE github_pushes SET done = 1, files = '[]' WHERE full_name = ? AND branch = ? AND before_sha = ? AND sha = ?",
+      "UPDATE github_pushes SET done = 1, files = '[]', commit_ids = '[]' WHERE full_name = ? AND branch = ? AND before_sha = ? AND sha = ?",
       String(r.full_name), String(r.branch), String(r.before_sha), String(r.sha),
     ).toArray();
   };
@@ -91,13 +93,18 @@ export function createGithub(ctx: RoomContext, features: Features, options: Gith
     if (reportedByAgent(p.repo, p.branch, p.sha)) return;
     const actor: Actor = { callsign: p.pusher, person: 'github', kind: 'claude', repo: p.repo, checkout: null };
     const known = new Map(features.pushes.latest(actor, p.repo, p.files).map((l) => [l.path.toLowerCase(), l]));
+    // latest() leaves out the pusher's own rows; a late redelivery from the same login must not overwrite a newer one.
+    const own = new Map(ctx.sql.exec('SELECT path, pushed_at FROM pushes WHERE repo = ? AND callsign = ?', p.repo, p.pusher).toArray()
+      .map((r) => [String(r.path).toLowerCase(), Number(r.pushed_at)]));
+    const ids = new Set(p.commitIds);
     const rows: Array<{ path: string; blob: string }> = [];
     for (const path of p.files) {
       const l = known.get(path.toLowerCase());
-      if (l && l.at > p.pushAt) continue; // a newer push of this file is the better answer
-      // An agent's report of this file on another branch (the pull request's branch) has the content a squash or
-      // fast-forward merge brings, so keep its blob: the author's agent then isn't warned about its own change.
-      const blob = l && !l.by.startsWith('github:') && l.branch !== p.branch ? l.blob : '';
+      if ((l && l.at > p.pushAt) || (own.get(path.toLowerCase()) ?? 0) > p.pushAt) continue; // a newer push of this file is the better answer
+      // A real merge (not a squash) lists the pull request's own commits. When an agent reported this file at one of
+      // them, the merged content is that agent's, so keep its blob: the author's agent isn't warned about its own
+      // change. A squash makes a new commit that can't be linked to the branch, so it gets no blob.
+      const blob = l && !l.by.startsWith('github:') && l.branch !== p.branch && ids.has(l.sha.toLowerCase()) ? l.blob : '';
       rows.push({ path, blob });
     }
     if (rows.length === 0) return;
@@ -131,19 +138,22 @@ export function createGithub(ctx: RoomContext, features: Features, options: Gith
 
       // Held pushes of this branch collapse into this one: it carries their files too.
       let files = push.files;
+      let commitIds = push.commitIds;
       let incomplete = push.incomplete;
       for (const old of ctx.sql.exec('SELECT * FROM github_pushes WHERE full_name = ? AND branch = ? AND done = 0', push.fullName, push.branch).toArray()) {
         try {
           const merged = new Set([...(JSON.parse(String(old.files)) as string[]), ...files]);
           files = [...merged].slice(0, LIMITS.maxDivergentPaths);
+          commitIds = [...new Set([...(JSON.parse(String(old.commit_ids)) as string[]), ...commitIds])].slice(-100);
           incomplete = incomplete || Number(old.incomplete) === 1 || merged.size > LIMITS.maxDivergentPaths;
         } catch { /* a corrupt row adds nothing */ }
         finish(old);
       }
-      const pushAt = push.commitAt !== null && push.commitAt <= now ? push.commitAt : now;
+      // When GitHub got the push, never later than now; the receive time when the payload has none.
+      const pushAt = push.pushedAt !== null ? Math.min(now, push.pushedAt) : now;
       ctx.sql.exec(
-        'INSERT INTO github_pushes (repo, full_name, branch, before_sha, sha, pusher, files, incomplete, push_at, received_at, done) VALUES (?,?,?,?,?,?,?,?,?,?,0)',
-        binding.repo, push.fullName, push.branch, push.before, push.after, push.by, JSON.stringify(files), incomplete ? 1 : 0, pushAt, now,
+        'INSERT INTO github_pushes (repo, full_name, branch, before_sha, sha, pusher, files, commit_ids, incomplete, push_at, received_at, done) VALUES (?,?,?,?,?,?,?,?,?,?,?,0)',
+        binding.repo, push.fullName, push.branch, push.before, push.after, push.by, JSON.stringify(files), JSON.stringify(commitIds), incomplete ? 1 : 0, pushAt, now,
       ).toArray();
       refreshDue();
       return { ok: true, status: 'queued' };
@@ -162,7 +172,7 @@ export function createGithub(ctx: RoomContext, features: Features, options: Gith
             if (now - Number(r.received_at) <= LIMITS.pushTtlMs) {
               deliver({
                 repo: String(r.repo), fullName: String(r.full_name), branch: String(r.branch), before: String(r.before_sha), sha: String(r.sha),
-                pusher: String(r.pusher), files: JSON.parse(String(r.files)) as string[], incomplete: Number(r.incomplete) === 1,
+                pusher: String(r.pusher), files: JSON.parse(String(r.files)) as string[], commitIds: JSON.parse(String(r.commit_ids)) as string[], incomplete: Number(r.incomplete) === 1,
                 pushAt: Number(r.push_at), receivedAt: Number(r.received_at),
               });
             }
