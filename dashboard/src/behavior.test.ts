@@ -116,20 +116,35 @@ describe('live updates', () => {
 });
 
 describe('auth failure from the live source', () => {
-  it('stops the source and shows the token prompt again', () => {
-    let h: LiveHandlers | null = null;
+  it('stops the source, forgets the token, re-prompts, and restarts with the new token', async () => {
+    const handlers: LiveHandlers[] = [];
+    const tokens: (string | null)[] = [];
     let stopped = 0;
-    const source: LiveSource = {
-      start(handlers) {
-        h = handlers;
-        return () => { stopped += 1; };
-      },
+    const createSource = (opts: { token: string | null }): LiveSource => {
+      tokens.push(opts.token);
+      return {
+        start(h) {
+          handlers.push(h);
+          return () => { stopped += 1; };
+        },
+      };
     };
+    localStorage.setItem('hivemind.viewer.demo', 'hm_v.test.1.AAAA');
     const snap = structuredClone(fixtureSnapshot);
-    app = mountApp(root, { createSource: () => source, sourceNeedsToken: true, room: 'demo', token: 'hm_v.test.1.AAAA', demo: null, clock: () => snap.now });
+    app = mountApp(root, { createSource, sourceNeedsToken: true, room: 'demo', token: 'hm_v.test.1.AAAA', demo: null, clock: () => snap.now });
     expect(root.querySelector('[inert]')).toBeNull();
-    h!.onAuthFailure!();
+
+    handlers[0]!.onAuthFailure!();
+    await Promise.resolve();
     expect(stopped).toBe(1);
     expect(root.querySelector('[inert]')).not.toBeNull();
+    expect(localStorage.getItem('hivemind.viewer.demo')).toBeNull();
+
+    const overlay = root.querySelector<HTMLElement>('.token-overlay')!;
+    const input = overlay.querySelector('input')!;
+    input.value = 'hm_v.test.2.BBBB';
+    overlay.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(tokens).toEqual(['hm_v.test.1.AAAA', 'hm_v.test.2.BBBB']);
+    expect(root.querySelector('[inert]')).toBeNull();
   });
 });

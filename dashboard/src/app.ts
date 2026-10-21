@@ -3,7 +3,7 @@ import type { Pulse, Snapshot } from '../../shared/contracts';
 import { h } from './dom';
 import type { LiveSource, SourceOptions } from './live/types';
 import { buildViewModel, showReconnectBanner, type ConnectionState, type ViewModel } from './model';
-import { saveToken } from './token';
+import { forgetToken, saveToken } from './token';
 import { createBanners, createFooter, createTokenPrompt, createTopbar, type BannerItem } from './views/chrome';
 import { createGraph } from './views/graph';
 import { createActivityPanel, createLocksPanel, createTasksPanel } from './views/panels';
@@ -88,10 +88,16 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
         render();
       },
       onAuthFailure() {
-        // The server keeps refusing the viewer token: stop retrying and ask for a new one.
-        stopSource?.();
-        stopSource = null;
-        prompt.show();
+        // The server keeps refusing the viewer token: stop retrying, forget it, and ask for a new one.
+        queueMicrotask(() => {
+          stopSource?.();
+          stopSource = null;
+          forgetToken(deps.room);
+          token_ = null;
+          conn = 'connecting';
+          render();
+          prompt.show();
+        });
       },
     });
   }
