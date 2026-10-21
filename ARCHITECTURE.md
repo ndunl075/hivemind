@@ -301,7 +301,7 @@ Why it's laid out this way:
 - **Tokens never appear in command lines, shell history or project files.** Claude Code gets the token through `headersHelper` (partly confirmed; user scope is manual check M2 in `docs/manual-checks.md`). Codex gets a static header in its user-level config; the spike confirmed Codex accepts a static `Authorization` in `http_headers`. If not, fall back to `bearer_token_env_var` with a user-level environment variable, and document how to set it so the Codex app can see it on each OS.
 - **Hivemind's tools don't prompt.** Without the Claude allow rule and the Codex approval mode, every `status` or `post` would wait for a person to click approve. The spike confirmed the `mcp__hivemind` allow rule via `--settings`; the user-level setting is checked in M2.
 - **One room per laptop at a time** `[DECIDED]`. Fine for a hackathon.
-- **`HIVEMIND_HOME` overrides `~/.hivemind`** for the hook and the CLI. Tests and smoke runs point it at a temporary folder, together with project-level hook registration in a throwaway project, so they never touch a real laptop's setup.
+- **The Hivemind home** is, in order: `$HIVEMIND_HOME`; otherwise the folder the hook is installed in (`<home>` when it runs as `<home>/hook/hook.mjs` next to `<home>/config.json`); otherwise `~/.hivemind`. The CLI resolves it the same way (`$HIVEMIND_HOME`, else the home recorded at `join`, else `~/.hivemind`), so `off`, `on` and `leave` act on the same folder the hook reads. Tests and smoke runs point it at a temporary folder, together with project-level hook registration in a throwaway project, so they never touch a real laptop's setup.
 
 ### 6.2 Hook events
 
@@ -350,7 +350,7 @@ While the budget guard has heartbeats off (`heartbeatMs: 0`, §16), none of the 
 
 1. **Everything runs inside one top-level `try`.** `hook.mjs` has no static imports of its own modules. It loads `claude.mjs` or `codex.mjs`, and `git.mjs`, with dynamic `import()` inside the `try`, so a missing or broken module can't crash the process before error handling exists.
 2. Read stdin JSON. The tool (`claude` or `codex`) comes from `argv`.
-3. If `$HIVEMIND_HOME/off` exists (default `~/.hivemind/off`), exit 0 silently. This is the local kill switch.
+3. If `<home>/off` exists (home resolved as in §6.1), exit 0 silently. This is the local kill switch.
 4. Resolve the checkout from `cwd`: run `git rev-parse --show-toplevel` and `git rev-list --max-parents=0 HEAD`, and cache both per `cwd` in a per-session state file under the OS temp directory. If the root commit isn't mapped in `$HIVEMIND_HOME/config.json`, exit 0 silently. Every Git command runs with `GIT_OPTIONAL_LOCKS=0`, so the hook never takes Git's index lock and can't make an agent's own `git commit` fail.
 5. **Circuit breaker:** if the session state says the server failed 3 times in a row and the last attempt was under 60 s ago, skip the network entirely. Allow the action and go to step 12.
 6. **Local fast paths, no network:**

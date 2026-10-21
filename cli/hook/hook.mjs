@@ -48,7 +48,8 @@ import {
   appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { homedir, hostname } from 'node:os';
-import { join, sep } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
 
 const EVENTS = new Set(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd']);
@@ -471,13 +472,30 @@ function claimOutageNotice(event) {
 }
 
 /**
+ * When `join` installed this script as `<home>/hook/hook.mjs` next to `<home>/config.json`, that `<home>` is the
+ * Hivemind home, even if HIVEMIND_HOME isn't set in the agent's environment. Node runs the script by its real path,
+ * so a symlinked or junctioned hook folder is detected next to its target (and otherwise falls back to ~/.hivemind).
+ * @returns {string | null}
+ */
+function installedHome() {
+  try {
+    const hookDir = dirname(fileURLToPath(import.meta.url));
+    if (basename(hookDir) !== 'hook') return null;
+    const home = dirname(hookDir);
+    return existsSync(join(home, 'config.json')) ? home : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @returns {Promise<{ out: HookOutcome | null; event: HookEvent | null; adapter: ToolAdapter | null }>}
  */
 async function run() {
   const tool = process.argv[2];
   if (tool !== 'claude' && tool !== 'codex') return { out: null, event: null, adapter: null };
 
-  ctx.home = process.env.HIVEMIND_HOME || join(homedir(), '.hivemind');
+  ctx.home = process.env.HIVEMIND_HOME || installedHome() || join(homedir(), '.hivemind');
   const home = ctx.home;
   if (existsSync(join(home, 'off'))) return { out: null, event: null, adapter: null };
   const config = readConfig(home);
