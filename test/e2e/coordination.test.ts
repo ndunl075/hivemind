@@ -108,9 +108,9 @@ describe('release by push', () => {
     await ana.shell('git push', () => ana.commitAndPush('ana changes a.txt'));
     const notice = await nico.heartbeat();
     expect(notice.context).toMatch(/claude-ana pushed main \(1 file: a\.txt\)\. Pull before editing that file\./);
-    // Pushing alone does not release a lock younger than one heartbeat interval; the next report does (rule 3).
+    // A lock younger than one heartbeat interval survives a report (rule 3, covered by the server tests); once it is older,
+    // the next report releases it. On a slow machine the push report may already be late enough, so nothing is asserted in between.
     await sleep(Math.max(0, lockedAt + 16_500 - Date.now()));
-    expect((await nico.preEdit('a.txt')).denied).toBe(true);
     await ana.heartbeat();
 
     const woke = await waiting;
