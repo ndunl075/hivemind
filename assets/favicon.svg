@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140" width="32" height="32" role="img" aria-label="Hivemind">
+  <rect width="140" height="140" rx="28" fill="#161618"/>
+  <polygon points="70,46 83.7,54 83.7,86 70,94 56.3,86 56.3,54" fill="#A99BFF"/>
+  <polygon points="56,38 83.7,54 83.7,86 56,102 28.3,86 28.3,54" fill="none" stroke="#E4E5EA" stroke-width="8" stroke-linejoin="round"/>
+  <polygon points="84,38 111.7,54 111.7,86 84,102 56.3,86 56.3,54" fill="none" stroke="#8E8EA0" stroke-width="8" stroke-linejoin="round"/>
+</svg>
