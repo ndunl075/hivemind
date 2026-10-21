@@ -35,8 +35,10 @@ const MAX_LIVE_TASKS = 300;
 const KEEP_CLOSED = 200;
 /** Titles below this overlap are not worth showing as "similar". */
 const SIMILAR_FLOOR = 0.2;
+/** A teammate's title with a leading "[DONE" defused, so it cannot pass for the server's own marker. */
+const plainTitle = (title: string): string => title.replace(/^\s*\[(\s*DONE)/i, '($1');
 /** Prefix on a finished task in `similar`: its work already exists, so the agent should check it first. */
-const DONE_MARK = '[DONE: work already exists, check it before starting]';
+export const DONE_MARK = '[DONE: work already exists, check it before starting]';
 
 export interface ClaimOutcome {
   result: 'ok';
@@ -281,7 +283,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
           .filter((x) => x.score >= SIMILAR_FLOOR)
           .sort((a, b) => b.score - a.score || b.t.id - a.t.id)
           .slice(0, LIMITS.similarTasksShown)
-          .map((x) => ({ id: x.t.id, title: x.t.status === 'done' ? `${DONE_MARK} ${x.t.title}` : x.t.title }));
+          .map((x) => ({ id: x.t.id, title: x.t.status === 'done' ? `${DONE_MARK} ${plainTitle(x.t.title)}` : plainTitle(x.t.title) }));
         const t: TaskView = {
           id: nextId++, title: c.title, description: c.description, status: 'open', owner: null, createdBy: actor.callsign,
           dependsOn: c.deps, areas: repo === null ? [] : c.folders.map((folder) => ({ repo, folder })), note: null,

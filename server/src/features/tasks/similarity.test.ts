@@ -33,14 +33,14 @@ describe('differently worded titles', () => {
   });
 
   it('scores the same job worded two ways as similar, but not as an exact duplicate', () => {
-    const score = jaccard(alice, cara);
-    expect(score).toBeGreaterThan(0.5);
-    expect(score).toBeLessThan(0.8);
-    expect(similarity(alice, cara)).toBeGreaterThanOrEqual(0.2);
+    expect(jaccard(alice, cara)).toBeLessThan(0.8);
+    expect(similarity(alice, cara)).toBeGreaterThan(0.5);
   });
 
   it('treats plural and tense variants of one title as a duplicate', () => {
     expect(jaccard('Add discounts to checkout', 'Adding discount to the checkout')).toBeGreaterThanOrEqual(0.8);
+    expect(jaccard('Parse strings', 'Parse string')).toBe(1);
+    expect(stem('speeds')).toBe(stem('speed'));
   });
 
   it('a shared rare token like SAVE10 is enough to be similar', () => {
@@ -55,5 +55,28 @@ describe('differently worded titles', () => {
     }
     // sharing only generic words (add, code, function) is at most a weak suggestion, never a duplicate
     expect(similarity('Add retry code function', alice)).toBeLessThan(0.3);
+  });
+
+  it('opposite-verb titles are not duplicates (they may still be similar)', () => {
+    for (const [a, b] of [
+      ['Add v2 API', 'Fix v2 API'], ['Add React 18 hooks', 'Fix React 18 hooks'], ['Fix SAVE10', 'Add SAVE10'],
+      ['Add HTTP2', 'Fix HTTP2'], ['Add login page', 'Fix login page'],
+    ] as const) {
+      expect(jaccard(a, b)).toBeLessThan(0.8);
+      expect(similarity(a, b)).toBeGreaterThanOrEqual(0.2);
+    }
+  });
+
+  it('bare numbers are not rare tokens, but #12 and v2 are', () => {
+    expect(similarity('Fix 3 failing tests in auth', 'Add 3 columns to users table')).toBeLessThan(0.2);
+    expect(similarity('Update copyright to 2026', 'Fix timezone bug in 2026 report generator')).toBeLessThan(0.2);
+    expect(similarity('Revisit #12 wording', 'Ship #12 hotfix')).toBeGreaterThanOrEqual(0.3);
+    expect(similarity('Revisit docs for v2', 'Ship v2 hotfix')).toBeGreaterThanOrEqual(0.3);
+  });
+
+  it('matches identifiers however their case is written', () => {
+    expect(similarity('Add OAuth2 login', 'Add oauth2 login')).toBeGreaterThan(0.5);
+    expect(similarity('Fix GitHub webhook', 'Fix github webhook')).toBeGreaterThan(0.5);
+    expect(similarity('Port JavaScript parser', 'Port javascript parser')).toBeGreaterThan(0.5);
   });
 });
