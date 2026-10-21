@@ -809,13 +809,15 @@ Cloudflare's Workers Free plan allows about **100,000 Worker requests a day** an
 
 | Source | Rate | Requests a day |
 |---|---|---|
-| Heartbeats (`PostToolUse` throttled to 1 per 15 s, plus forced ones after shell commands) | about 1 per 15 s per working agent (forced ones replace throttled ones, so the rate barely changes) | 23,040 |
+| Heartbeats (`PostToolUse` throttled to 1 per 15 s, plus forced ones after shell commands) | about 1 per 15 s per working agent (a forced one restarts the 15 s window, so it adds about half a request, not one; measured in `test/e2e/team-scale.test.ts`) | 23,040 |
 | Edit checks (`PreToolUse`) | about 1.5 edits a minute per agent | 8,640 |
 | MCP tool calls (the `me` check is local and costs nothing) | about 20 an hour per agent | 1,920 |
 | Session, prompt and stop events | about 15 an hour per agent | about 2,000 (more if agents run very short turns) |
 | **Total** | | **about 36,000** (36% of each cap) |
 
 At 16 agents and 3 edits a minute, the same rates come to about 88,000. That's why there's a guard.
+
+Measured with a six-person team (12 laptops, 18 agents, `test/e2e/team-scale.test.ts`, [evidence](docs/evidence/team-scale-e2e.md)): each `PreToolUse`, MCP call, prompt, stop and session event is exactly one request, and heartbeats are throttled to one per 15 s as designed. A first edit of a path Git hasn't reported yet, and every shell command, send a heartbeat at once, but a forced heartbeat restarts the 15 s window, so it adds about half a request on average, not one: up to about +1% at 6 new files and 2 shell commands an hour per agent. At those rates, and counting every agent as continuously busy for 12 hours (an upper bound: idle or waiting agents send nothing), the 18 agents would cost about 80,000 requests a day (80% of the cap). The guard's 30 s step (at 60,000) would then engage after about 9 of the 12 hours and bring the day to about 73,000.
 
 **Budget guard** `[DECIDED]`: the Room counts requests per UTC day in memory, persisted to `meta` ahead of the count, about once per 25 requests (the stored value is the count plus a margin of at most 24, and never more than the requests since the last restart, so an eviction can overcount by at most that margin, never undercounts, and repeated restarts don't compound), and raises `heartbeatMs` as the count climbs:
 - 30 s at 60% of the cap,
