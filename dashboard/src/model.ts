@@ -146,9 +146,12 @@ function edgeIsLive(kind: EdgeKind, at: Millis, now: Millis): boolean {
 
 /**
  * A blocked edge (A denied a file B holds) is drawn only while it still applies (§14.2): both agents are
- * still alive, the label's lock still exists, B still holds it, and A has not since taken it. The edge only
- * carries the file's base name, so a lock matches when its path is that name or ends with "/<name>". A folder
- * lock held by B can't be matched to the name, so it keeps the edge (the max age still removes it).
+ * still alive, B holds the lock that caused the denial (acquired no later than the edge, so a release and
+ * re-take doesn't bring it back), and A has not since taken the file. Names compare case-insensitively.
+ * A folder lock held by B counts when its name is the label (folder denials) or it contains a file lock
+ * matching the label.
+ * Accepted limitations: edges carry only a base name, so same-basename files can collide (fixing that needs
+ * a server change), and locks beyond the snapshot cap make an edge disappear.
  */
 function blockedStillApplies(
   e: EdgeView,
@@ -159,11 +162,14 @@ function blockedStillApplies(
   if (e.to === undefined) return true;
   if (stateOf.get(e.to)?.state === 'ended') return false;
   if (e.label === undefined) return true;
-  const name = e.label;
-  const matching = locks.filter((l) => l.kind === 'file' && (l.path === name || l.path.endsWith(`/${name}`)));
-  if (matching.some((l) => l.holder === e.from)) return false;
-  if (matching.some((l) => l.holder === e.to)) return true;
-  return locks.some((l) => l.kind !== 'file' && l.holder === e.to);
+  const name = e.label.toLowerCase();
+  const lower = (l: LockView) => l.path.toLowerCase().replace(/\/+$/, '');
+  const named = (l: LockView) => lower(l) === name || lower(l).endsWith(`/${name}`);
+  const files = locks.filter((l) => l.kind === 'file' && named(l));
+  if (files.some((l) => l.holder === e.from)) return false;
+  const heldThen = (l: LockView) => l.holder === e.to && l.acquiredAt <= e.at;
+  if (files.some(heldThen)) return true;
+  return locks.some((l) => l.kind === 'folder' && heldThen(l) && (named(l) || files.some((f) => lower(f).startsWith(`${lower(l)}/`))));
 }
 
 function tone(type: string): ActivityTone {

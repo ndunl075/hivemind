@@ -97,6 +97,21 @@ describe('edges', () => {
       expect(hasBlocked(end('claude-nico-2'))).toBe(false);
       expect(hasBlocked(end('codex-ana'))).toBe(false);
     });
+    it('does not come back when the lock was re-taken after the edge', () => {
+      expect(hasBlocked(withLocks((l) => l.filter(noFolder).map((y) => (isLogin(y) ? { ...y, acquiredAt: snap.edges.find((q) => q.kind === 'blocked')!.at + 1000 } : y))))).toBe(false);
+    });
+    it('keeps the edge for a folder denial and for a folder that contains the file', () => {
+      expect(hasBlocked(withLocks((l) => l.filter((y) => !isLogin(y))))).toBe(false); // folder src/auth/ has no matching file lock any more
+      const folder = { ...snap.locks.find((y) => y.kind === 'folder')!, path: 'src/Login.ts/' };
+      expect(hasBlocked(withLocks((l) => [...l.filter((y) => !isLogin(y) && noFolder(y)), folder]))).toBe(true);
+    });
+    it('removes the edge when B only holds an unrelated folder', () => {
+      const folder = { ...snap.locks.find((y) => y.kind === 'folder')!, path: 'infra/' };
+      expect(hasBlocked(withLocks((l) => [...l.filter((y) => !isLogin(y) && noFolder(y)), folder]))).toBe(false);
+    });
+    it('matches names case-insensitively', () => {
+      expect(hasBlocked(withLocks((l) => l.filter(noFolder).map((y) => (isLogin(y) ? { ...y, path: 'SRC/Auth/LOGIN.ts' } : y))))).toBe(true);
+    });
     it('goes after LIMITS.blockedEdgeMs', () => {
       expect(hasBlocked(snap, now + LIMITS.blockedEdgeMs - 61_000)).toBe(true);
       expect(hasBlocked(snap, now + LIMITS.blockedEdgeMs)).toBe(false);
