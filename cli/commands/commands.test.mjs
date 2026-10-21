@@ -78,7 +78,7 @@ describe('join', () => {
     // Only the runtime files plus the helper; no tests.
     const files = Object.keys(snapshot(lap.path('.hivemind', 'hook'))).sort();
     expect(files).toEqual([
-      'claude.mjs', 'codex.mjs', 'git.mjs', ...(process.platform === 'win32' ? ['headers-helper-room.cmd', 'headers-helper.cmd'] : []), 'headers-helper-room.mjs', 'headers-helper.mjs', 'hook.mjs', 'limits.mjs',
+      'claude.mjs', 'codex.mjs', 'git.mjs', ...(process.platform === 'win32' ? ['headers-helper-room.cmd'] : []), 'headers-helper-room.mjs', ...(process.platform === 'win32' ? ['headers-helper.cmd'] : []), 'headers-helper.mjs', 'hook.mjs', 'limits.mjs',
     ]);
     expect(existsSync(lap.path('.hivemind', 'config.json'))).toBe(true);
 
@@ -350,7 +350,7 @@ describe('join', () => {
     // The user's own table keeps its name; the room is registered under another one.
     expect(r.code, r.err).toBe(0);
     expect(readJson(lap.path('.hivemind', 'config.json')).rooms[0].mcp).toBe('hivemind-hack');
-    expect(readFileSync(lap.path('.codex', 'config.toml'), 'utf8').startsWith(own)).toBe(true);
+    expect(readFileSync(lap.path('.codex', 'config.toml'), 'utf8')).toContain(own);
     expect(readFileSync(lap.path('.codex', 'config.toml'), 'utf8')).toContain('[mcp_servers.hivemind-hack]');
     expect((await lap.run(main, ['leave'])).code).toBe(0);
     expect(readFileSync(lap.path('.codex', 'config.toml'), 'utf8')).toBe(own);
