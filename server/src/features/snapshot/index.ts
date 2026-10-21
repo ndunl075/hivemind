@@ -11,10 +11,15 @@ import {
 
 /** Newest events shown in the activity feed. */
 export const ACTIVITY_LIMIT = 50;
-/** How many events are scanned for edges (an edge never lives longer than the longest window). */
-const EDGE_SCAN_LIMIT = 200;
+/** Hard cap on edge-carrying events scanned (only events inside the edge windows are read). */
+const EDGE_SCAN_LIMIT = 1000;
+/** Size caps, so a busy room can't make a snapshot grow without bound. */
+export const ACTIVITY_TEXT_MAX = 200;
+export const DONE_TASKS_MAX = 50;
+export const LOCKS_MAX = 300;
 
-const EDGE_KINDS: readonly EdgeKind[] = ['message', 'broadcast', 'blocked', 'waiting', 'nearby'];
+/** Only these come from events; waiting and nearby are derived from tasks and locks. */
+const EVENT_EDGE_KINDS: readonly EdgeKind[] = ['message', 'broadcast', 'blocked'];
 
 interface EventData {
   text?: unknown;
@@ -36,7 +41,7 @@ const edgeWindow = (kind: EdgeKind): Millis =>
 
 function edgeFromEvent(data: EventData, ts: Millis): EdgeView | null {
   const e = data.edge;
-  if (e && typeof e.from === 'string' && EDGE_KINDS.includes(e.kind as EdgeKind)) {
+  if (e && typeof e.from === 'string' && EVENT_EDGE_KINDS.includes(e.kind as EdgeKind)) {
     return {
       kind: e.kind as EdgeKind, from: e.from, ...(typeof e.to === 'string' ? { to: e.to } : {}),
       ...(typeof e.label === 'string' ? { label: e.label } : {}), at: ts,
@@ -98,18 +103,19 @@ export const createSnapshot: FeatureFactory<'snapshot'> = (ctx, features) => {
       ts: Number(r.ts),
       type: String(r.type),
       actor: typeof r.actor === 'string' ? r.actor : null,
-      text: String(parseData(r.data).text ?? r.type),
+      text: String(parseData(r.data).text ?? r.type).slice(0, ACTIVITY_TEXT_MAX),
     }));
 
   const recentEdges = (now: Millis): EdgeView[] => {
     const seen = new Map<string, EdgeView>();
-    const rows = ctx.sql.exec('SELECT ts, data FROM events WHERE ts >= ? ORDER BY seq DESC LIMIT ?',
+    const rows = ctx.sql.exec(
+      `SELECT ts, data FROM events WHERE ts >= ? AND (data LIKE '%"edge":%' OR data LIKE '%"pulse":%') ORDER BY seq DESC LIMIT ?`,
       now - Math.max(LIMITS.messageEdgeMs, LIMITS.blockedEdgeMs), EDGE_SCAN_LIMIT).toArray();
     for (const r of rows) {
       const ts = Number(r.ts);
       const edge = edgeFromEvent(parseData(r.data), ts);
       if (!edge || now - ts >= edgeWindow(edge.kind)) continue;
-      const key = `${edge.kind}|${edge.from}|${edge.to ?? ''}`;
+      const key = `${edge.kind}|${edge.from}|${edge.to ?? ''}|${edge.label ?? ''}`; // one blocked edge per file
       if (!seen.has(key)) seen.set(key, edge); // newest first, so the first one seen is the latest
     }
     return [...seen.values()];
@@ -118,8 +124,11 @@ export const createSnapshot: FeatureFactory<'snapshot'> = (ctx, features) => {
   return {
     build(): Snapshot {
       const now = ctx.now();
-      const tasks = features.tasks.list();
-      const locks = features.locks.list();
+      const all = features.tasks.list();
+      const finished = (t: TaskView): boolean => t.status === 'done' || t.status === 'dropped';
+      const recentDone = new Set(all.filter(finished).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, DONE_TASKS_MAX));
+      const tasks = all.filter((t) => !finished(t) || recentDone.has(t));
+      const locks = features.locks.list().slice(0, LOCKS_MAX);
       return {
         type: 'snapshot',
         room: '',

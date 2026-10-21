@@ -29,5 +29,7 @@ Both are under the 1 s target (the second includes the Room's 250 ms minimum gap
 
 ## Notes
 
-- With `sourceNeedsToken` true, `?demo=offline` and other fake modes need a token in the URL too before the source starts (the app starts no source without one); any well-formed `#v=hm_v...` value works for the fake.
-- `usage` stays the Room's value; the snapshot does not compute it.
+- `usage` is supplied by the Room, not the snapshot: `build()` returns a placeholder and the Room overwrites it from its request counter. `snapshot.test.ts` checks that the socket snapshot has `usage.requests > 0` after requests.
+- Edges are read from events inside the 2-minute window that carry an edge or pulse (hard cap 1000 rows), not from the newest N events. Activity text is cut at 200 characters, finished tasks to the last 50, locks to 300.
+- Backoff resets only after a socket stays open 10 s. Three closes in a row without an open call the optional `onAuthFailure` handler; `app.ts` does not use it yet (see the PR, Requests for the architect).
+- `sourceNeedsToken` is computed from the URL: false when `?demo=` is set.

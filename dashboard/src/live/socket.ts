@@ -11,6 +11,10 @@ export const BACKOFF_START_MS = 500;
 export const BACKOFF_MAX_MS = 15_000;
 /** The server answers the text 'ping' without waking the room; it keeps idle proxies from dropping the socket. */
 export const PING_EVERY_MS = 25_000;
+/** A connection counts as healthy (the backoff resets) only after staying open this long. */
+export const STABLE_AFTER_MS = 10_000;
+/** This many closes in a row without a successful open are treated as the token being refused. */
+export const AUTH_FAILURE_AFTER = 3;
 
 /** Delay before reconnect attempt number `attempt` (0 = first retry); `random` is in [0, 1). */
 export function backoffDelay(attempt: number, random: number): number {
@@ -58,11 +62,19 @@ export function createSocketSource(opts: SourceOptions, env: SocketEnv = browser
       let socket: SocketLike | null = null;
       let retry: unknown = null;
       let ping: unknown = null;
+      let stable: unknown = null;
+      let failures = 0; // closes in a row without an open
+      let authReported = false;
 
       const connect = (): void => {
         retry = null;
+        if (!opts.token) { // never connect without a token: ask for one
+          h.onStatus('closed');
+          h.onAuthFailure?.();
+          return;
+        }
         h.onStatus('connecting');
-        const protocols = opts.token ? [DASHBOARD_SUBPROTOCOL, opts.token] : [DASHBOARD_SUBPROTOCOL];
+        const protocols = [DASHBOARD_SUBPROTOCOL, opts.token];
         let ws: SocketLike;
         try {
           ws = env.open(env.url, protocols);
@@ -71,8 +83,13 @@ export function createSocketSource(opts: SourceOptions, env: SocketEnv = browser
           return;
         }
         socket = ws;
+        let opened = false;
         ws.onopen = () => {
           if (stopped || socket !== ws) return;
+          opened = true;
+          failures = 0;
+          authReported = false;
+          stable = env.setTimeout(() => { attempt = 0; }, STABLE_AFTER_MS);
           h.onStatus('open');
           ping = env.setInterval(() => {
             try { ws.send('ping'); } catch { /* the close handler takes over */ }
@@ -84,7 +101,6 @@ export function createSocketSource(opts: SourceOptions, env: SocketEnv = browser
           try { raw = JSON.parse(ev.data); } catch { return; }
           const msg = parseMessage(raw);
           if (!msg) return;
-          attempt = 0; // the connection is really serving data
           if (msg.type === 'snapshot') h.onSnapshot(msg);
           else h.onPulse(msg);
         };
@@ -93,11 +109,20 @@ export function createSocketSource(opts: SourceOptions, env: SocketEnv = browser
           socket = null;
           if (ping !== null) env.clearInterval(ping);
           ping = null;
+          if (stable !== null) env.clearTimeout(stable);
+          stable = null;
           if (stopped) return;
+          if (!opened) {
+            failures++;
+            if (failures >= AUTH_FAILURE_AFTER && !authReported) {
+              authReported = true;
+              h.onAuthFailure?.();
+            }
+          }
           h.onStatus('closed');
           scheduleRetry();
         };
-        ws.onerror = () => { /* a close always follows */ };
+        ws.onerror = (ev) => { console.debug('[hivemind] dashboard socket error', ev); }; // a close always follows
       };
 
       const scheduleRetry = (): void => {
@@ -110,6 +135,7 @@ export function createSocketSource(opts: SourceOptions, env: SocketEnv = browser
         stopped = true;
         if (retry !== null) env.clearTimeout(retry);
         if (ping !== null) env.clearInterval(ping);
+        if (stable !== null) env.clearTimeout(stable);
         const s = socket;
         socket = null;
         try { s?.close(); } catch { /* already closed */ }

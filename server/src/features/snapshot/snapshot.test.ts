@@ -44,6 +44,7 @@ describe('snapshot', () => {
 
     expect(snap).toMatchObject({ type: 'snapshot', room, mode: 'enforce' });
     expect(snap.usage.cap).toBe(LIMITS.dailyRequestCap);
+    expect(snap.usage.requests).toBeGreaterThan(0); // supplied by the Room from its request counter
     expect(typeof snap.now).toBe('number');
     expect(snap.agents.map((x) => x.callsign).sort()).toEqual(['claude-ana', 'claude-nico']);
     expect(snap.locks.map((l) => l.path)).toEqual(['src/auth/login.ts']);
@@ -83,6 +84,29 @@ describe('snapshot', () => {
     });
     expect(later.edges.some((e) => e.kind === 'message')).toBe(false);
     expect(later.activity).toHaveLength(1);
+  });
+
+  it('keeps an edge inside its window however many newer events there are', async () => {
+    const room = 'snap-many';
+    const snap = await inRoom(room, (r) => {
+      const ctx = (r as unknown as { roomCtx: { emit(e: unknown): void } }).roomCtx;
+      ctx.emit({ type: 'message', actor: 'x', text: 'm', pulse: { kind: 'message', from: 'x', to: 'y' } });
+      for (let i = 0; i < 300; i++) ctx.emit({ type: 'note', actor: null, text: `n${i}` });
+      return r.features.snapshot.build();
+    });
+    expect(snap.edges).toEqual([expect.objectContaining({ kind: 'message', from: 'x', to: 'y' })]);
+  });
+
+  it('truncates long activity text and caps finished tasks', () => {
+    const rows = [{ seq: 1, ts: 1, type: 'n', actor: null, data: JSON.stringify({ text: 'z'.repeat(500) }) }];
+    const mk = (id: number, status: string) => ({ id, title: 't', description: null, status, owner: null, createdBy: 'x', dependsOn: [], areas: [], note: null, createdAt: 0, updatedAt: id });
+    const tasks = [mk(1000, 'open'), ...Array.from({ length: 80 }, (_, i) => mk(i + 1, 'done'))];
+    const ctx = { now: () => 1000, mode: () => 'enforce', agents: () => [], sql: { exec: (q: string) => ({ toArray: () => (q.includes('LIKE') ? [] : rows) }) } };
+    const features = { tasks: { list: () => tasks, inProgressFor: () => null }, locks: { list: () => [] } };
+    const snap = createSnapshot(ctx as never, features as never).build();
+    expect(snap.activity[0]?.text).toHaveLength(200);
+    expect(snap.tasks.filter((t) => t.status === 'done')).toHaveLength(50);
+    expect(snap.tasks.some((t) => t.id === 1000)).toBe(true);
   });
 
   it('caps the activity feed', async () => {

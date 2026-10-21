@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fixtureSnapshot } from './fixture';
-import { BACKOFF_MAX_MS, BACKOFF_START_MS, backoffDelay, createSocketSource, PING_EVERY_MS, type SocketEnv, type SocketLike } from './socket';
-import { createSource, sourceNeedsToken } from './index';
+import { STABLE_AFTER_MS, BACKOFF_MAX_MS, BACKOFF_START_MS, backoffDelay, createSocketSource, PING_EVERY_MS, type SocketEnv, type SocketLike } from './socket';
+import { createSource, needsToken, sourceNeedsToken } from './index';
 
 class FakeSocket implements SocketLike {
   onopen: SocketLike['onopen'] = null;
@@ -39,7 +39,7 @@ function harness() {
     onStatus: (s: string) => { events.push(s); },
   };
   const fireNextTimer = () => { const t = timers.find((x) => x.live); if (!t) throw new Error('no timer'); t.live = false; t.fn(); return t.ms; };
-  return { env, sockets, intervals, events, snaps, pulses, handlers, fireNextTimer };
+  return { env, sockets, timers, intervals, events, snaps, pulses, handlers, fireNextTimer };
 }
 
 describe('backoffDelay', () => {
@@ -77,7 +77,7 @@ describe('socket source', () => {
     expect(h.sockets[0]!.sent).toEqual(['ping']);
   });
 
-  it('reconnects with growing delays and resets once data arrives', () => {
+  it('reconnects with growing delays and resets only after staying open', () => {
     const h = harness();
     createSocketSource({ room: 'demo', token: 't', demo: null }, h.env).start(h.handlers);
     h.sockets[0]!.onclose?.({});
@@ -89,9 +89,41 @@ describe('socket source', () => {
     expect(h.fireNextTimer()).toBe(2000);
     h.sockets[3]!.onopen?.({});
     h.sockets[3]!.deliver(fixtureSnapshot);
-    h.sockets[3]!.onclose?.({});
+    h.sockets[3]!.onclose?.({}); // opened, delivered, then dropped at once: no reset
+    expect(h.fireNextTimer()).toBe(4000);
+    h.sockets[4]!.onopen?.({});
+    h.timers.find((t) => t.live && t.ms === STABLE_AFTER_MS)!.fn(); // stayed open long enough
+    h.sockets[4]!.onclose?.({});
     expect(h.fireNextTimer()).toBe(500);
-    expect(h.sockets).toHaveLength(5);
+    expect(h.sockets).toHaveLength(6);
+  });
+
+  it('does not connect without a token and asks for one', () => {
+    const h = harness();
+    let auth = 0;
+    createSocketSource({ room: 'demo', token: null, demo: null }, h.env).start({ ...h.handlers, onAuthFailure: () => { auth++; } });
+    expect(h.sockets).toHaveLength(0);
+    expect(auth).toBe(1);
+    expect(h.events).toEqual(['closed']);
+  });
+
+  it('reports a refused token after repeated closes without an open, once per streak', () => {
+    const h = harness();
+    let auth = 0;
+    createSocketSource({ room: 'demo', token: 'bad', demo: null }, h.env).start({ ...h.handlers, onAuthFailure: () => { auth++; } });
+    for (let i = 0; i < 5; i++) {
+      h.sockets[i]!.onclose?.({});
+      if (i < 4) h.fireNextTimer();
+    }
+    expect(auth).toBe(1);
+    h.fireNextTimer();
+    h.sockets.at(-1)!.onopen?.({}); // a good connection ends the streak
+    h.sockets.at(-1)!.onclose?.({});
+    for (let i = 0; i < 3; i++) {
+      h.fireNextTimer();
+      h.sockets.at(-1)!.onclose?.({});
+    }
+    expect(auth).toBe(2);
   });
 
   it('stops: closes the socket, cancels the retry and ignores late events', () => {
@@ -109,7 +141,10 @@ describe('socket source', () => {
   });
 
   it('is the default source and needs a token; ?demo= keeps the fake', () => {
-    expect(sourceNeedsToken).toBe(true);
+    expect(sourceNeedsToken).toBe(true); // the test page has no ?demo=
+    expect(needsToken('?demo=offline')).toBe(false);
+    expect(needsToken('?demo=')).toBe(true);
+    expect(needsToken('')).toBe(true);
     expect(typeof createSource({ room: 'demo', token: 't', demo: 'offline' }).start).toBe('function');
   });
 });
