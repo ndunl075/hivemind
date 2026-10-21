@@ -1,0 +1,2 @@
+# Fake test token from the worker briefs (hm_a.test.*), committed in a test before the allowlist covered this rule.
+24964a374d1a17303b5280e68101e2b80878de79:server/src/worker.test.ts:generic-api-key:36
