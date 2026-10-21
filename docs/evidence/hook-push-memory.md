@@ -22,3 +22,10 @@ Verification: `cli/hook/hook.push.test.mjs` runs the real hook against a bare or
 
 `repoNameOf` (now exported) treats Windows drive paths, UNC paths, POSIX absolute paths and `file:` URLs as local paths and
 splits them on `/` and `\` only; remote URLs still split on `/` and `:` (scp-like form). Tests in `cli/hook/git.test.mjs`.
+
+## git.world.test.mjs flakiness on slow Windows runners
+
+The file's per-test timeout was already 90 s and it has no fixed sleeps. The race was the production 1.2 s Git budget in
+`state()`: on a loaded runner a test not about the budget could run out of it, get the truncated status-only fallback and
+see `pushed: null` (seen in CI as "a deleted file that was pushed carries the empty blob"). The test file now calls
+`state()` through a wrapper with a 60 s `budgetMs`; the budget tests still pass their own `budgetMs`. No assertion changed.

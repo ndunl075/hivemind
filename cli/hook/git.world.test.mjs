@@ -8,10 +8,15 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { staleWarnings, state } from './git.mjs';
+import { staleWarnings, state as gitState } from './git.mjs';
 
 // Each test runs a dozen or more Git processes; a Windows runner needs more than the default 5 s.
 vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
+
+// state() has a 1.2 s Git budget in production and falls back to a truncated status-only report when it runs out.
+// A slow Windows runner can exceed that in tests that are not about the budget, so every call here gets a generous one.
+// The budget tests pass their own budgetMs.
+const state = (root, previous, options = {}) => gitState(root, previous, { budgetMs: 60_000, ...options });
 
 let base;
 let counter = 0;
