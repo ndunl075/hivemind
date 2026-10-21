@@ -1,0 +1,52 @@
+{
+  "name": "hivemind",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Live coordination for AI coding agents (Claude Code and Codex) working in the same repo.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "hivemind": "cli/hivemind.mjs"
+  },
+  "files": [
+    "cli/",
+    "shared/protocol.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "smol-toml": "^1.9.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.6",
+    "@cloudflare/workers-types": "^5.20261021.1",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource/geist-mono": "^5.3.0",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.2",
+    "@vitest/runner": "^4.1.0",
+    "@vitest/snapshot": "^4.1.0",
+    "esbuild": "^0.28.2",
+    "happy-dom": "^21.0.4",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.151.3",
+    "ws": "^8.22.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p server/tsconfig.json && tsc -p dashboard/tsconfig.json",
+    "test": "vitest run && npm run test:workers && npm run test:dashboard",
+    "test:workers": "vitest run --config server/vitest.config.ts",
+    "test:hook": "vitest run cli/hook",
+    "test:cli": "vitest run cli/commands",
+    "test:dashboard": "vitest run --config dashboard/vitest.config.ts",
+    "test:e2e": "vitest run --config test/vitest.config.ts --dir test/e2e",
+    "test:smoke": "vitest run --config test/vitest.config.ts --dir test/smoke",
+    "build": "node dashboard/build.mjs",
+    "dev": "npm run build && wrangler dev -c server/wrangler.toml",
+    "deploy": "npm run build && wrangler deploy -c server/wrangler.toml",
+    "dev:dashboard": "node dashboard/build.mjs --serve"
+  }
+}

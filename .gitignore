@@ -5,6 +5,15 @@ node_modules/
 dist/
 .env
 .env.*
+!.env.example
 *.log
 *.pem
 *.key
+dashboard/dist/
+test-results/
+playwright-report/
+coverage/
+.DS_Store
+*.tsbuildinfo
+.claude/settings.local.json
+.hivemind-secrets*

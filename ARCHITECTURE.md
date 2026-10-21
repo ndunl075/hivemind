@@ -313,7 +313,7 @@ One command handles every event; the script reads `hook_event_name` from stdin.
 | `UserPromptSubmit` | — | Mark working. Deliver unread messages. Carries Git state unless heartbeats are off. | yes | no |
 | `PreToolUse` | edit tools: Claude `Edit\|Write\|MultiEdit\|NotebookEdit`, Codex `apply_patch\|Edit\|Write` | Lock check (§9), the task gate (§10), stale-copy check (§12). | yes | **yes** |
 | `PreToolUse` | `mcp__hivemind__.*` | Check that `me` matches the cached callsign (§5). | **no** | yes |
-| `PostToolUse` | all | Heartbeat, throttled to one request per `heartbeatMs` (default 15 s), and sent right after a shell command; none while heartbeats are off (§16). It carries the checkout's **divergent files** (§12), which drive lock release, shell-edit detection and push detection. It delivers messages. | when due, or after a shell command | no |
+| `PostToolUse` | all | Heartbeat, throttled to one request per `heartbeatMs` (default 15 s), and sent right after a shell command; none while heartbeats are off (§16), so messages then arrive only through `UserPromptSubmit`, `Stop` and the tools. It carries the checkout's **divergent files** (§12), which drive lock release, shell-edit detection and push detection. It delivers messages. | when due, or after a shell command | no |
 | `Stop` | — | Carries Git state (an unthrottled heartbeat) unless heartbeats are off, so a push made just before stopping releases its locks at once. Mark idle. If **direct** messages are unread and `stop_hook_active` is false, block the stop once, with the messages as the reason. | yes | yes (once) |
 | `SessionEnd` | — | If the reason is an exit (not clear or resume), mark ended and release holdings. Best effort: an 800 ms network timeout, because Codex's docs allow `SessionEnd` hooks at most 3 s `[VERIFY]`. | yes | no |
 
@@ -357,7 +357,7 @@ While the budget guard has heartbeats off (`heartbeatMs: 0`, §16), none of the 
    - `mcp__hivemind__` calls only get the `me` check (§5).
    - `PostToolUse` after a shell tool (`Bash`, `PowerShell`) sets `shellSinceHeartbeat` in the session state.
    - If the last response said `heartbeatMs: 0` (the budget guard, §16), heartbeats are off: `PostToolUse` exits here, and `UserPromptSubmit` and `Stop` send no Git state. Otherwise:
-   - `PostToolUse` exits if the heartbeat isn't due (`now < lastHeartbeat + heartbeatMs`), unless a shell tool just ran: the first `PostToolUse` after a shell command always sends a heartbeat, so pushes and shell edits are seen right away.
+   - `PostToolUse` exits if the heartbeat isn't due (`now < lastHeartbeat + heartbeatMs`), unless a shell tool just ran: the first `PostToolUse` after a shell command always sends a heartbeat, so pushes and shell edits are seen right away. Every heartbeat, forced or not, resets `lastHeartbeat`.
 7. **Path extraction for edits:**
    - Claude `Edit`, `Write` and `MultiEdit`: `tool_input.file_path`. `NotebookEdit`: `tool_input.notebook_path`.
    - Codex `apply_patch`: parse `*** Add File: `, `*** Update File: `, `*** Delete File: ` and `*** Move to: ` lines from `tool_input.command`. Relative paths resolve against `cwd`.
@@ -456,7 +456,7 @@ Held by others: src/auth/ (codex-ana, folder) · infra/wrangler.toml (codex-sam)
 
 Endpoint: `POST https://<server>/mcp`, Streamable HTTP, **stateless, JSON responses only** (no server-sent stream), header `Authorization: Bearer <agent token>`. `GET` returns 405. `[VERIFY]` that both tools accept plain JSON responses. If not, respond with a single-event SSE stream instead (§21).
 
-The server name is `hivemind`, so tools appear as `mcp__hivemind__<name>`. Every tool except `register` requires `me`. Descriptions are written as short instructions, since they are effectively prompts. The `initialize` result carries the §6.5 protocol as `instructions`.
+The server name is `hivemind`, so tools appear as `mcp__hivemind__<name>`. Every tool except `register` requires `me`. Paths are plain repo-relative paths. Tools that take paths (and `task_add`, `register`) also accept an optional `repo`, which defaults to the caller's current repo and may be the repo's display name or root commit; it's needed only by an agent with no repo yet. Exact argument and result types are in `shared/contracts.ts`. Descriptions are written as short instructions, since they are effectively prompts. The `initialize` result carries the §6.5 protocol as `instructions`.
 
 | Tool | Arguments | Result |
 |---|---|---|
@@ -501,11 +501,11 @@ The server name is `hivemind`, so tools appear as `mcp__hivemind__<name>`. Every
 - **Load once.** On first wake, `blockConcurrencyWhile` creates the schema if needed and loads all tables into memory.
 - **Atomic by construction.** Every mutation is a synchronous check against memory followed by a `sql.exec` write in the same turn, with no `await` in between. A Durable Object handles one event at a time, so two claims for the same task, or two edits of the same new file, are decided strictly in order.
 - **No alarms.** States and takeability are computed from timestamps when read (§4). Trimming happens on writes.
-- **Memory-first writes.** `last_event`, activity text and request counters live in memory. They're flushed at most once a minute, piggybacked on a request.
+- **Memory-first writes.** `last_event`, activity text and request counters live in memory. They're flushed at most once a minute, piggybacked on a request. Exception: setting `idle_since` (on `Stop`) and clearing it (on the next event) are written at once, together with `last_event`, so a reload can never show a working agent as idle.
 - **Dashboard broadcast** uses the WebSocket Hibernation API (`ctx.acceptWebSocket`), with ping/pong answered by `setWebSocketAutoResponse` so idle viewers cost nothing. Viewers get a full **snapshot** (a few KB) on connect and on every change, debounced to at most 4 per second, plus small **pulse** events (message sent, edit denied, push) that drive animations.
 - **`wait`** parks a promise per caller, resolved by the first matching event or a 45 s timer. Parked waits end if the Room restarts. The caller simply gets a timeout.
 - **Limits:** 50 agents per room, messages of 2,000 chars, 10 messages per minute per sender, a burst of 20 requests per second per person.
-- **Feature boundaries.** `room.ts` owns storage, the WebSocket plumbing, the `wait` registry, limits and the budget guard. Each feature in `server/src/features/` plugs into the pipeline and talks to other features only through the internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi` with `notify()`, `SnapshotApi`), so slices can be built in parallel (§20).
+- **Feature boundaries.** `room.ts` owns storage, the WebSocket plumbing, the `wait` registry, limits and the budget guard. Each feature in `server/src/features/` plugs into the pipeline and talks to other features only through the internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi` with `notify()`, `PushesApi`, `SnapshotApi`), built by factories that receive a shared `RoomContext`. A feature may also offer `briefingLines()` (`BriefingContributor`), which the Room collects for the briefing, so slices can be built in parallel (§20).
 
 ---
 
@@ -900,8 +900,8 @@ hivemind/
 │   └── evidence/               one verification note per worker task
 ├── shared/                     architect-owned
 │   ├── contracts.ts            wire types (/hook, MCP tool I/O, dashboard snapshot and pulses) and the
-│   │                           internal feature interfaces (LocksApi, TasksApi, MessagesApi, SnapshotApi)
-│   ├── hook-modules.d.ts       interfaces of the hook's modules (claude, codex, git)
+│   │                           internal feature interfaces (LocksApi, TasksApi, MessagesApi, PushesApi, SnapshotApi)
+│   ├── hook-modules.ts         interfaces of the hook's modules (claude, codex, git)
 │   ├── state.ts                agent state and takeability from timestamps (§5), used by server and dashboard
 │   ├── protocol.md             the protocol text in §6.5, the single source
 │   └── fixtures/               sample snapshot; recorded hook payloads (scrubbed)
@@ -927,7 +927,7 @@ hivemind/
 **Tests sit next to the code they test** (`*.test.ts` in `server/` and `dashboard/`, `*.test.mjs` in `cli/`). Owning a file or folder includes its tests.
 
 Stack:
-- **Server and dashboard:** TypeScript, npm workspaces, Vitest, `@cloudflare/vitest-pool-workers`, esbuild, Wrangler.
+- **Server and dashboard:** TypeScript, one root `package.json` (no workspaces), Vitest 4, `@cloudflare/vitest-plugin`, esbuild, Wrangler. `.npmrc` sets `legacy-peer-deps` to work around an npm resolver bug with optional peers.
 - **CLI and hook:** plain ESM JavaScript, so `npx github:…` needs no build step. The CLI's one runtime dependency is `smol-toml`; the hook has none.
 
 ---
@@ -937,7 +937,7 @@ Stack:
 | Layer | What | How |
 |---|---|---|
 | Feature logic | lock rules 1–12, takeability, task gate, duplicates, budget guard, message framing and limits | Vitest unit tests on pure functions |
-| Room | 100 concurrent claims give exactly one winner; release by divergence; shell-edit attribution; takeover; persistence across restart; snapshot ordering | `@cloudflare/vitest-pool-workers` |
+| Room | 100 concurrent claims give exactly one winner; release by divergence; shell-edit attribution; takeover; persistence across restart; snapshot ordering | `@cloudflare/vitest-plugin` |
 | Hook | every event for both tools from **recorded real payloads**, one fixture per event and tool variant; **exact output shape per tool**; `apply_patch` parsing; Windows and POSIX paths; divergent files, comparison points and push detection against scripted temporary Git repos; stale-copy cases including squash merges and unknown commits; the circuit breaker; fail-open when the server is down, slow or returns garbage, or a module fails to load (always exit 0 within the timeout) | Vitest, spawning `hook.mjs` with fixture stdin and `HIVEMIND_HOME` set to a temporary folder |
 | MCP | `initialize`, `tools/list`, `tools/call`, errors, auth | JSON-RPC conformance tests |
 | CLI | `join`, `init` and `update` merge into existing config without clobbering it, and running them twice changes nothing; tokens never in argv or logs; `doctor` diagnoses | Vitest with temporary home and project folders and a stubbed runner for `claude` and `codex` |
@@ -976,7 +976,7 @@ Rules every worker follows are in [`docs/parallel-sessions.md`](docs/parallel-se
 
 - No two workers own the same file. Each brief lists exactly what it owns, including its own `docs/evidence/<task>.md`. Owning a file includes its colocated tests (§18).
 - **Architect-only hotspots:** everything in `shared/` (except `shared/fixtures/hooks/`, which W0 writes), root `package.json` and lockfile, `.github/`, `docs/parallel-sessions.md`, `docs/worker-briefs.md`, and after Wave 1 also `server/src/worker.ts`, `server/src/room.ts`, `server/src/pipeline.ts`, `server/wrangler.toml`, `cli/hook/hook.mjs` and `cli/hook/claude.mjs`. A worker that needs a change there asks for it under **Requests for the architect** in its PR description.
-- **Features meet only through frozen interfaces.** The internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi`, `SnapshotApi`) and the hook module interfaces in `shared/hook-modules.d.ts` are written in Wave 0. Wave 1 provides a working basic implementation behind every one of them, so each Wave 2 slice can be built and tested on its own against the others' basic versions.
+- **Features meet only through frozen interfaces.** The internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi`, `PushesApi`, `SnapshotApi`) and the hook module interfaces in `shared/hook-modules.ts` are written in Wave 0. Wave 1 provides a working basic implementation behind every one of them, so each Wave 2 slice can be built and tested on its own against the others' basic versions.
 - All dependencies each worker needs are installed in Wave 0 (listed in `docs/worker-briefs.md`).
 - **Contract checkpoint:** between waves, the architect folds approved contract requests into `shared/`, then launches the next wave.
 
@@ -986,7 +986,7 @@ Rules every worker follows are in [`docs/parallel-sessions.md`](docs/parallel-se
 
 | Task | Who | Output | Review tier |
 |---|---|---|---|
-| Scaffold and contracts | architect | npm workspaces, tsconfig with `checkJs`, Vitest, `server/wrangler.toml` skeleton, `.gitignore`, CI with gitleaks, everything in `shared/` (contracts, internal and hook-module interfaces, `state.ts`, `protocol.md`, sample snapshot), every dependency and script in `docs/worker-briefs.md`, and a placeholder `dashboard/src` so `npm run build` works before W3 lands. Answers §21 items 13 and 14. | 1 |
+| Scaffold and contracts | architect | one root package, tsconfig with `checkJs`, Vitest, `server/wrangler.toml` skeleton, `.gitignore`, CI with gitleaks, everything in `shared/` (contracts, internal and hook-module interfaces, `state.ts`, `protocol.md`, sample snapshot), every dependency and script in `docs/worker-briefs.md`, and a placeholder `dashboard/src` so `npm run build` works before W3 lands. Answers §21 items 13 and 14. | 1 |
 | W0 spike | worker, Sonnet high | `docs/spike-results.md` with the worker items in §21, evidence and the fallback chosen for each failure; scrubbed fixtures in `shared/fixtures/hooks/`; `docs/manual-checks.md` | 1 |
 | Manual checks | Nico, about an hour, Windows laptop plus a Mac | The manual items in §21, following `docs/manual-checks.md`. The architect records the results in `docs/spike-results.md`. | 0 (architect's doc PR) |
 
@@ -997,7 +997,7 @@ The architect then folds the results into this document and `shared/`, and freez
 | Worker | Owns | Builds | Effort | Tier |
 |---|---|---|---|---|
 | W1 server-core | `server/**` (this wave only) | Every route in §8.1, token verification, the Room (§8.2: storage, memory, pipeline, WebSocket plumbing with viewer auth, the `wait` registry, limits, budget guard, room modes, unlock, per-repo project settings), and basic implementations behind every internal interface: file locks (§9 rules 1–3, 6–8, 11), `notify()` with delivery on heartbeats, a task stub (gate off), a minimal snapshot. The briefing and the `status` tool. A deployable `server/wrangler.toml`. | Sonnet high | 2 |
-| W2 hook-core | `cli/hook/**` (this wave only) | `hook.mjs` and `claude.mjs`: every event in §6.2 for Claude Code, the local `me` check, dynamic module loading, `HIVEMIND_HOME`, settings, the baseline, `shellSinceHeartbeat`, the circuit breaker and outage notice, `hook.log`; basic `git.mjs` (divergent files from `git status` only) and a `codex.mjs` stub, both behind `shared/hook-modules.d.ts` | Sonnet high | 2 |
+| W2 hook-core | `cli/hook/**` (this wave only) | `hook.mjs` and `claude.mjs`: every event in §6.2 for Claude Code, the local `me` check, dynamic module loading, `HIVEMIND_HOME`, settings, the baseline, `shellSinceHeartbeat`, the circuit breaker and outage notice, `hook.log`; basic `git.mjs` (divergent files from `git status` only) and a `codex.mjs` stub, both behind `shared/hook-modules.ts` | Sonnet high | 2 |
 | W3 dashboard | `dashboard/**` (this wave only) | The full view-only dashboard from §14, with its data source isolated in `dashboard/src/live/`, which reads `shared/fixtures/snapshot.json` and a fake pulse stream for now | Sonnet medium | 1 |
 
 Then the architect deploys the skeleton, creates a room for this repo, and **turns Hivemind on for all later work**. Wave 2 workers coordinate through it.

@@ -15,7 +15,7 @@ The Wave 0 scaffold installs these and defines these scripts, so no worker touch
 | Package | Used by |
 |---|---|
 | `typescript`, `vitest`, `@types/node` | everyone |
-| `wrangler`, `@cloudflare/workers-types`, `@cloudflare/vitest-pool-workers` | W1, W4, W5, W7, W8 |
+| `wrangler`, `@cloudflare/workers-types`, `@cloudflare/vitest-plugin` | W1, W4, W5, W7, W8 |
 | `esbuild`, `happy-dom` (DOM for dashboard tests), `@playwright/test` | W3, W7 |
 | `@fontsource-variable/inter`, `@fontsource/geist-mono` (self-hosted fonts) | W3 |
 | `smol-toml` (a runtime dependency of the CLI) | W6 |
@@ -33,17 +33,18 @@ Scripts, defined in Wave 0:
 | `test:hook` | `cli/hook` |
 | `test:cli` | `cli/commands` |
 | `test:dashboard` | `dashboard/src` |
-| `test:e2e` | `test/e2e` |
-| `test:smoke` | `test/smoke` (manual) |
+| `test:e2e` | `test/e2e` (config `test/vitest.config.ts`) |
+| `test:smoke` | `test/smoke` (manual; same config) |
 | `build` | the dashboard into `dashboard/dist` |
-| `dev` | `wrangler dev` plus the dashboard in watch mode |
+| `dev` | build the dashboard, then `wrangler dev`; pass a port with `npm run dev -- --port 8787` |
+| `dev:dashboard` | rebuild on change and serve the dashboard; pass a port with `npm run dev:dashboard -- 5173` |
 | `deploy` | `build`, then `wrangler deploy -c server/wrangler.toml` |
 
 ## Common block (goes into every brief except W0)
 
 ```text
 Repo: https://github.com/ndunl075/hivemind  (main at <main-sha>)
-Stack: server and dashboard in TypeScript (npm workspaces, Vitest, @cloudflare/vitest-pool-workers, esbuild, Wrangler);
+Stack: server and dashboard in TypeScript (one root package.json, Vitest 4, @cloudflare/vitest-plugin, esbuild, Wrangler);
 CLI and hook in plain ESM JavaScript with JSDoc types (checked by tsc), no build step.
 Read first: ARCHITECTURE.md (the design) and docs/parallel-sessions.md (rules for parallel sessions; follow them exactly).
 Work in your own worktree on branch w/<task>, then run `npm ci` there. Auto mode on.
@@ -99,10 +100,12 @@ Task: build the server half of the walking skeleton (ARCHITECTURE.md §20.3 Wave
   WebSocket plumbing (snapshot on connect and on change, debounced, pulses) calling SnapshotApi, the wait registry,
   limits, the budget guard (§16) including its midnight restore, room modes, emergency unlock, and per-repo project
   settings received on /hook (stored in meta as settings:<repo>, read by other features through the interfaces).
-- server/src/pipeline.ts: the hook and tool pipeline with extension points.
+- server/src/pipeline.ts: the hook and tool pipeline with extension points; each feature is built by the
+  FeatureFactory in shared/contracts.ts with one RoomContext.
 - Basic implementations behind every interface in shared/contracts.ts, each in its feature folder:
   - locks: §9 rules 1–3, 6, 7, 8 and 11, plus modes;
   - messages: notify() with delivery on heartbeats;
+  - pushes: record() storing the latest push per file and latest() answering lastPush (no notice text yet);
   - tasks: a stub with the gate off;
   - snapshot: agents, locks and mode only;
   - mcp: the status tool.
@@ -145,9 +148,11 @@ Task: build cli/hook/hook.mjs and cli/hook/claude.mjs per ARCHITECTURE.md §6.2�
   the circuit breaker, the outage notice and hook.log;
 - calls into the git.mjs interface for push detection (sent as git.pushed) and the stale-copy check, which W5
   implements later behind the same interface;
-- GIT_OPTIONAL_LOCKS=0 on every Git call.
+- GIT_OPTIONAL_LOCKS=0 on every Git call;
+- a hook-local copy of the LIMITS values the hook uses (it can't import shared/contracts.ts at runtime), with a
+  test that imports shared/contracts.ts and asserts the copies match.
 Also build basic cli/hook/git.mjs (repo identity; divergent files from `git status` only) and a cli/hook/codex.mjs stub,
-both implementing shared/hook-modules.d.ts.
+both implementing shared/hook-modules.ts.
 You own (this wave only): cli/hook/**, docs/evidence/hook-core.md.
 Stay out of: server/**, dashboard/**, cli/hivemind.mjs, cli/commands/**, shared/**, test/**.
 Done (npm run test:hook, using a fake server on an ephemeral port and HIVEMIND_HOME in a temporary folder):
@@ -227,7 +232,7 @@ Model: Sonnet, high effort (locking).
 Task:
 - cli/hook/git.mjs: §12 completely: repo identity, comparison points, divergent files (500-path cap), push detection,
   blob SHAs, the stale-copy check and its three messages; read-only Git with GIT_OPTIONAL_LOCKS=0. Keep the
-  shared/hook-modules.d.ts interface.
+  shared/hook-modules.ts interface.
 - server/src/features/git/: pushes, push notices to active agents in the repo through MessagesApi.notify(), lastPush
   in /hook responses.
 - server/src/features/locks/: §9 rules 4, 5, 9, 10 and 12 (shell-edit attribution with baseline, conflicts across
@@ -254,7 +259,7 @@ Model: Sonnet, high effort (credentials, config files).
 Task:
 - cli/hook/codex.mjs: Codex payload parsing (apply_patch paths) and output builders with the exact Codex shapes from
   shared/fixtures/hooks/codex/output/* and docs/spike-results.md. Codex ignores a hook whose output has unknown fields, so test exact shapes. Keep the
-  shared/hook-modules.d.ts interface.
+  shared/hook-modules.ts interface.
 - cli/hivemind.mjs and cli/commands/: every command in ARCHITECTURE.md §17: room create/delete, invite, revoke,
   rotate, init, join, doctor (with the per-app self-test prompt), mode, unlock, off/on, update, leave.
   - Merge into existing ~/.claude/settings.json, ~/.codex/hooks.json, ~/.codex/config.toml (with smol-toml),
