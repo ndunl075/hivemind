@@ -1194,7 +1194,7 @@ describe('home resolution', () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({ server: srv.url, room: 'r', person: 'nobody', token: FAKE_AGENT_CRED, repos: [rootSha] }));
     const env = { ...process.env, TEMP: tmp, TMP: tmp, TMPDIR: tmp, HOME: fakeUserHome, USERPROFILE: fakeUserHome };
     delete env.HIVEMIND_HOME;
-    const input = JSON.stringify(payload('SessionStart', { session: `inst-${process.pid}` }));
+    const input = JSON.stringify(payload('SessionStart', { ...laptop({ url: srv.url, config: false }), session: `inst-${process.pid}` }));
     const code = await new Promise((resolve) => {
       const child = spawn(process.execPath, [join(hookDir, 'hook.mjs'), 'claude'], { env, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true });
       child.on('close', resolve);
@@ -1203,5 +1203,59 @@ describe('home resolution', () => {
     });
     expect(code).toBe(0);
     expect(srv.requests.length).toBeGreaterThan(0);
+  });
+});
+
+describe('home resolution precedence', () => {
+  /** Install the hook as <dir>/home/hook/hook.mjs and run it with the given extra env. */
+  async function installed(extraEnv, { withConfig = true, off = false } = {}) {
+    const srv = await fakeServer();
+    const dir = mkdtempSync(join(base, 'inst2-'));
+    const home = join(dir, 'home');
+    const hookDir = join(home, 'hook');
+    const tmp = join(dir, 'tmp');
+    const user = join(dir, 'user');
+    mkdirSync(hookDir, { recursive: true });
+    mkdirSync(tmp);
+    mkdirSync(user);
+    for (const f of HOOK_FILES) copyFileSync(new URL(f, HOOK_DIR), join(hookDir, f));
+    if (withConfig) writeFileSync(join(home, 'config.json'), JSON.stringify({ server: srv.url, room: 'r', person: 'nobody', token: FAKE_AGENT_CRED, repos: [rootSha] }));
+    if (off) writeFileSync(join(home, 'off'), '');
+    const env = { ...process.env, TEMP: tmp, TMP: tmp, TMPDIR: tmp, HOME: user, USERPROFILE: user, ...extraEnv };
+    if (!('HIVEMIND_HOME' in extraEnv)) delete env.HIVEMIND_HOME;
+    const input = JSON.stringify(payload('SessionStart', { ...laptop({ url: srv.url, config: false }), session: `p-${Math.random()}` }));
+    const code = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [join(hookDir, 'hook.mjs'), 'claude'], { env, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true });
+      child.on('close', resolve);
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    });
+    return { code, srv, home };
+  }
+
+  it('HIVEMIND_HOME wins over the installed folder', async () => {
+    const empty = mkdtempSync(join(base, 'emptyhome-'));
+    const { code, srv } = await installed({ HIVEMIND_HOME: empty });
+    expect(code).toBe(0);
+    expect(srv.requests.length).toBe(0);
+  });
+
+  it('a hook folder without config.json beside it falls back to ~/.hivemind (here: nothing configured)', async () => {
+    const { code, srv } = await installed({}, { withConfig: false });
+    expect(code).toBe(0);
+    expect(srv.requests.length).toBe(0);
+  });
+
+  it('the off file in the installed home silences the hook', async () => {
+    const { code, srv } = await installed({}, { off: true });
+    expect(code).toBe(0);
+    expect(srv.requests.length).toBe(0);
+  });
+
+  it('writes state under the installed home', async () => {
+    const { code, srv, home } = await installed({});
+    expect(code).toBe(0);
+    expect(srv.requests.length).toBeGreaterThan(0);
+    expect(existsSync(join(home, 'state'))).toBe(true);
   });
 });

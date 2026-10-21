@@ -473,7 +473,8 @@ function claimOutageNotice(event) {
 
 /**
  * When `join` installed this script as `<home>/hook/hook.mjs` next to `<home>/config.json`, that `<home>` is the
- * Hivemind home, even if HIVEMIND_HOME isn't set in the agent's environment.
+ * Hivemind home, even if HIVEMIND_HOME isn't set in the agent's environment. Node runs the script by its real path,
+ * so a symlinked or junctioned hook folder is detected next to its target (and otherwise falls back to ~/.hivemind).
  * @returns {string | null}
  */
 function installedHome() {
