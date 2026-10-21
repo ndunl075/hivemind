@@ -42,6 +42,8 @@ export interface InternalClaims {
 
 const SNAPSHOT_MIN_GAP_MS = 1000 / LIMITS.snapshotsPerSecond;
 const HOUSEKEEPING_EVERY_MS = 60_000;
+/** The request counter is written to storage once per this many requests (rounded up; ARCHITECTURE.md §16). */
+const BUDGET_PERSIST_EVERY = 25;
 const DEFAULT_MODE: RoomMode = 'enforce';
 
 export class Room extends DurableObject<Env> {
@@ -59,6 +61,8 @@ export class Room extends DurableObject<Env> {
   private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSnapshotAt = 0;
   private lastHousekeeping = 0;
+  /** The counter value stored in meta (>= the in-memory count; see persistBudget). */
+  private budgetReserved = 0;
   private readonly burst = new Map<string, { start: Millis; count: number }>();
   private readonly messageTimes = new Map<string, Millis[]>();
 
@@ -97,6 +101,7 @@ export class Room extends DurableObject<Env> {
 
     const today = utcDate(this.now());
     this.budget = new BudgetCounter(this.now(), Number(this.meta.get(`budget:${today}`) ?? 0), today);
+    this.budgetReserved = this.budget.requests;
     this.dropOldBudgetKeys(`budget:${today}`);
     this.lastHousekeeping = this.now();
     this.eventSeq = Number(sql.exec('SELECT COALESCE(MAX(seq), 0) AS m FROM events').toArray()[0]?.m ?? 0);
@@ -288,14 +293,18 @@ export class Room extends DurableObject<Env> {
   }
 
   /**
-   * Writes the counter on every request (one small in-DO SQLite row), so an eviction can't lose counts. setMeta skips
-   * the write when the value is unchanged. Old days' keys are dropped on rollover and at boot.
+   * Persists the counter in blocks of BUDGET_PERSIST_EVERY: when the count passes the stored value, store it rounded up
+   * to the next multiple. After an eviction the reload can overcount by fewer than N, never undercount, and the counter
+   * costs one row write per N requests. Old days' keys are dropped on UTC rollover.
    */
-  private persistBudget(dropOld: boolean): void {
+  private persistBudget(rolledOver: boolean): void {
     const key = `budget:${this.budget.date}`;
-    this.setMeta(key, String(this.budget.requests));
-    this.budget.dirty = false;
-    if (dropOld) this.dropOldBudgetKeys(key);
+    if (rolledOver) this.budgetReserved = 0;
+    if (this.budget.requests > this.budgetReserved) {
+      this.budgetReserved = Math.ceil(this.budget.requests / BUDGET_PERSIST_EVERY) * BUDGET_PERSIST_EVERY;
+      this.setMeta(key, String(this.budgetReserved));
+    }
+    if (rolledOver) this.dropOldBudgetKeys(key);
   }
 
   private dropOldBudgetKeys(keep: string): void {

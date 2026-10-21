@@ -806,7 +806,7 @@ Cloudflare's Workers Free plan allows about **100,000 Worker requests a day** an
 
 At 16 agents and 3 edits a minute, the same rates come to about 88,000. That's why there's a guard.
 
-**Budget guard** `[DECIDED]`: the Room counts requests per UTC day in memory, flushed to `meta` once a minute, and raises `heartbeatMs` as the count climbs:
+**Budget guard** `[DECIDED]`: the Room counts requests per UTC day in memory, persisted to `meta` once per 25 requests (stored rounded up to the next multiple of 25, so an eviction can overcount by fewer than 25 but never undercounts, and the counter costs about 1 row write per 25 requests), and raises `heartbeatMs` as the count climbs:
 - 30 s at 60% of the cap,
 - 60 s at 80%,
 - at 95%, the server returns `heartbeatMs: 0`, which tells hooks to stop heartbeats, and the room switches itself to `warn` mode, announced to every agent. Without heartbeats, locks can't be released by pushing, so denials would go stale; `warn` turns them into heads-ups. `heartbeatMs: 0` suppresses every heartbeat, including the forced one after a shell command and the Git state on `UserPromptSubmit` and `Stop`; edits, session events and tools are still served. The switch is recorded in `meta` as `mode_by_guard`, holding the mode it replaced. Any mode a teammate sets clears `mode_by_guard`. At the first request after 00:00 UTC, if `mode_by_guard` is still present, that previous mode is restored and normal heartbeats resume.
