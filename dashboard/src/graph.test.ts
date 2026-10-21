@@ -45,11 +45,11 @@ describe('pulse', () => {
     expect(vi.mocked(requestAnimationFrame)).not.toHaveBeenCalled();
   });
 
-  it('draws the person labels in their own layer above the edges', () => {
+  it('draws the person labels in their own layer above the cards', () => {
     media(false);
     const g = setup();
-    const layers = [...g.el.querySelector('svg.edges')!.children].map((c) => c.getAttribute('class'));
-    expect(layers.indexOf('labels')).toBeGreaterThan(layers.indexOf('links'));
+    const stage = [...g.el.querySelector('.stage')!.children].map((c) => c.getAttribute('class'));
+    expect(stage.indexOf('edges edges-top')).toBeGreaterThan(stage.indexOf('nodes'));
     expect(g.el.querySelectorAll('.labels .hull-label')).toHaveLength(3);
   });
 });

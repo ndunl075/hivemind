@@ -7,7 +7,8 @@ import { h, prefersReducedMotion, s, setClass, setText } from '../dom';
 import { truncate } from '../format';
 import {
   bowControl,
-  forceLayout,
+  forceLayoutFit,
+  gridLayout,
   groupOutline,
   pointOnQuad,
   rectEdgePoint,
@@ -34,6 +35,18 @@ export interface GraphView {
   pulse(p: Pulse): void;
   /** Re-run the layout, e.g. after the container changed size. */
   resize(): void;
+}
+
+/** Card sizes by how many agents are drawn: full cards for a few agents, smaller ones for a big team. */
+const TIERS = {
+  full: { w: 236, h: 122, gap: 26 },
+  dense: { w: 204, h: 106, gap: 20 },
+  tight: { w: 176, h: 94, gap: 14 },
+} as const;
+type Tier = keyof typeof TIERS;
+
+function tierFor(count: number): Tier {
+  return count <= 6 ? 'full' : count <= 12 ? 'dense' : 'tight';
 }
 
 const BOW: Record<string, number> = { message: 18, blocked: 44, waiting: -18, nearby: 0 };
@@ -122,10 +135,12 @@ export function createGraph(): GraphView {
       ),
     ),
   );
-  const svg = s('svg', { class: 'edges', 'aria-hidden': 'true', preserveAspectRatio: 'none' }, defs, hulls, links, fx, labels);
+  const svg = s('svg', { class: 'edges', 'aria-hidden': 'true', preserveAspectRatio: 'none' }, defs, hulls, links, fx);
+  // Labels sit above the cards so a card never hides a person, checkout or edge label.
+  const svgTop = s('svg', { class: 'edges edges-top', 'aria-hidden': 'true', preserveAspectRatio: 'none' }, labels);
   const nodesLayer = h('div', { class: 'nodes' });
   const empty = h('p', { class: 'empty-graph' }, 'No agents in this room yet.');
-  const stage = h('div', { class: 'stage' }, svg, nodesLayer, empty);
+  const stage = h('div', { class: 'stage' }, svg, nodesLayer, svgTop, empty);
   const connections = h('ul', { class: 'sr-only', 'aria-label': 'Connections between agents', 'aria-live': 'polite' });
   const el = h('section', { class: 'graph', 'aria-label': 'Agent graph' }, stage, connections);
   let connectionsKey = '';
@@ -137,26 +152,50 @@ export function createGraph(): GraphView {
   let last: ViewModel | null = null;
   let dims = { w: 236, h: 122 };
   let hullPad = 20;
+  let nodeGap = 26;
+  /** Narrow screens use a plain grid; wider ones the force layout. */
+  let grid: { positions: Map<string, Point>; height: number } | null = null;
   let frame = { width: 1000, height: 600 };
   /** Cached container width (kept current by the ResizeObserver) so updates don't force layout. */
   let boxW = 0;
   let measuredKey = '';
+  /** Where the cards sat the last time everyone was shown, so focusing a person and clearing doesn't shuffle the graph. */
+  let remembered = new Map<string, Point>();
+  /** Finished layouts by roster, frame and card size, so returning to a view restores it exactly. */
+  const layouts = new Map<string, { positions: Map<string, Point>; height: number }>();
 
-  function measure(vm: ViewModel): void {
+  function measure(vm: ViewModel, roster: string): void {
     if (boxW === 0) boxW = el.clientWidth || 1000;
-    const key = `${boxW}|${vm.agents.length}`;
+    const count = vm.agents.length;
+    const tier = tierFor(count);
+    const key = `${boxW}|${vm.people.length}|${roster}`;
     if (key === measuredKey) return;
     measuredKey = key;
     const width = boxW;
     const narrow = width < 700;
+    const t = TIERS[tier];
     hullPad = narrow ? 9 : 20;
-    dims = narrow ? { w: Math.min(168, Math.floor((width - 2 * (hullPad + 6) - 16) / 2)), h: 122 } : { w: 236, h: 122 };
+    nodeGap = narrow ? Math.min(t.gap, 14) : t.gap;
+    dims = narrow ? { w: Math.min(t.w, Math.floor((width - 2 * (hullPad + 6) - 16) / 2)), h: t.h } : { w: t.w, h: t.h };
+    setClass(stage, 'tier-dense', tier === 'dense');
+    setClass(stage, 'tier-tight', tier === 'tight');
+    let need = 0;
+    grid = null;
     if (narrow) {
-      const cols = Math.max(1, Math.floor((width - 2 * (hullPad + 6) + 16) / (dims.w + 16)));
-      const rows = Math.max(1, Math.ceil(vm.agents.length / cols));
-      stage.style.height = `${Math.max(380, rows * (dims.h + 56) + 60)}px`;
+      const nodes: LayoutNode[] = vm.agents.map((a) => ({ id: a.callsign, group: a.person, cluster: a.checkout ?? '', w: dims.w, h: dims.h }));
+      grid = gridLayout(nodes, width, { pad: hullPad + 4, gap: 14 });
+      need = Math.max(380, Math.ceil(grid.height));
     } else {
+      // Room for every card plus the gaps and outlines around each person; the page scrolls if it is more than the window.
+      const people = Math.max(1, vm.people.length);
+      const cell = (dims.w + nodeGap + 2 * hullPad) * (dims.h + nodeGap + 2 * hullPad);
+      need = Math.ceil((count * cell * 1.45 + people * 9000) / Math.max(1, width));
+      need = need > 460 ? need : 0;
+    }
+    if (narrow) stage.style.height = `${need}px`;
+    else {
       stage.style.height = '';
+      stage.style.minHeight = need > 0 ? `${need}px` : '';
     }
     frame = { width: stage.clientWidth || width, height: stage.clientHeight || 600 };
   }
@@ -184,19 +223,35 @@ export function createGraph(): GraphView {
     links.replaceChildren();
     labels.replaceChildren();
     const byPerson = new Map<string, { x: number; y: number; w: number; h: number }[]>();
+    const byCluster = new Map<string, { person: string; label: string; rects: { x: number; y: number; w: number; h: number }[] }>();
     for (const a of vm.agents) {
       const p = positions.get(a.callsign);
       if (!p) continue;
+      const rect = { x: p.x, y: p.y, w: dims.w, h: dims.h };
       const list = byPerson.get(a.person) ?? [];
-      list.push({ x: p.x, y: p.y, w: dims.w, h: dims.h });
+      list.push(rect);
       byPerson.set(a.person, list);
+      if (a.checkoutLabel) {
+        const ck = `${a.person}|${a.checkout}`;
+        const c = byCluster.get(ck) ?? { person: a.person, label: a.checkoutLabel, rects: [] };
+        c.rects.push(rect);
+        byCluster.set(ck, c);
+      }
+    }
+    for (const c of byCluster.values()) {
+      const outline = groupOutline(c.rects, 6);
+      if (outline.length < 3) continue;
+      // The checkout label sits under its outline, so it never meets the person's label above.
+      const bottom = outline.reduce((m, p) => (p.y > m.y || (p.y === m.y && p.x < m.x) ? p : m), outline[0]!);
+      hulls.append(s('path', { class: 'cluster', d: roundedPath(outline, 12) }));
+      labels.append(s('text', { class: 'cluster-label', x: bottom.x + 10, y: bottom.y + 11 }, c.label));
     }
     for (const [person, rects] of byPerson) {
       const outline = groupOutline(rects, hullPad);
       if (outline.length < 3) continue;
       const top = outline.reduce((m, p) => (p.y < m.y || (p.y === m.y && p.x < m.x) ? p : m), outline[0]!);
       hulls.append(s('path', { class: 'hull', d: roundedPath(outline, 22) }));
-      labels.append(s('text', { class: 'hull-label', x: top.x + 22, y: top.y + 15 }, person));
+      labels.append(s('text', { class: 'hull-label', x: top.x + 22, y: top.y + Math.min(15, hullPad - 1) }, person));
     }
     const order = ['nearby', 'waiting', 'message', 'blocked'];
     for (const kind of order) {
@@ -210,7 +265,11 @@ export function createGraph(): GraphView {
         links.append(path);
         if (kind === 'blocked' && e.label) {
           const mid = pointOnQuad(g.a, g.c, g.b, 0.5);
-          links.append(s('text', { class: 'edge-label', x: mid.x.toFixed(1), y: (mid.y - 7).toFixed(1), 'text-anchor': 'middle' }, `blocked: ${truncate(e.label, 28)}`));
+          const text = `blocked: ${truncate(e.label, 28)}`;
+          const w = text.length * 6.3 + 10;
+          // A pill behind the text keeps it readable where the edge crosses a card.
+          labels.append(s('rect', { class: 'edge-label-pill', x: (mid.x - w / 2).toFixed(1), y: (mid.y - 19).toFixed(1), width: w.toFixed(1), height: 16, rx: 4 }));
+          labels.append(s('text', { class: 'edge-label', x: mid.x.toFixed(1), y: (mid.y - 7).toFixed(1), 'text-anchor': 'middle' }, text));
         }
       }
     }
@@ -242,7 +301,8 @@ export function createGraph(): GraphView {
 
   function update(vm: ViewModel): void {
     last = vm;
-    measure(vm);
+    const roster = vm.agents.map((a) => `${a.callsign}|${a.person}|${a.checkout ?? ''}`).join(',');
+    measure(vm, roster);
     setClass(empty, 'show', vm.agents.length === 0);
     const described = vm.edges.map(describeEdge);
     const describedKey = described.join('|');
@@ -267,6 +327,7 @@ export function createGraph(): GraphView {
       }
       setText(v.callsign, a.callsign);
       setText(v.sub, [a.person, a.branch].filter(Boolean).join(' · '));
+      v.sub.title = a.checkoutLabel ?? '';
       setText(v.state, a.stateLabel);
       setText(v.locks, a.lockCount > 0 ? `${a.lockCount} ${a.lockCount === 1 ? 'lock' : 'locks'}` : '');
       const flagText = [a.takeable ? 'takeable' : '', a.enforced ? '' : 'not enforced'].filter(Boolean).join(' · ');
@@ -275,19 +336,37 @@ export function createGraph(): GraphView {
       setClass(v.task, 'none', a.taskLabel === null);
       setText(v.activity, a.activityLine);
       v.el.className = `node state-${a.state}${a.enforced ? '' : ' unenforced'}${a.takeable ? ' takeable' : ''}${v.el.classList.contains('pulsed') ? ' pulsed' : ''}`;
-      v.el.setAttribute('aria-label', `${a.callsign}, ${a.person}, ${a.state}, ${a.stateLabel}${a.enforced ? '' : ', not enforced'}`);
+      v.el.setAttribute('aria-label', `${a.callsign}, ${a.person}${a.checkoutLabel ? `, ${a.checkoutLabel}` : ''}, ${a.state}, ${a.stateLabel}${a.enforced ? '' : ', not enforced'}`);
     }
 
-    const key = JSON.stringify([
-      vm.agents.map((a) => [a.callsign, a.person]),
-      layoutLinks(vm.edges).map((l) => [l.a, l.b]),
-      frame,
-      dims,
-    ]);
+    // Message edges come and go every few seconds; they don't re-run the layout (links only matter when it runs).
+    const key = JSON.stringify([roster, frame, dims]);
     if (key !== layoutKey) {
       layoutKey = key;
-      const nodes: LayoutNode[] = vm.agents.map((a) => ({ id: a.callsign, group: a.person, w: dims.w, h: dims.h }));
-      positions = forceLayout(nodes, layoutLinks(vm.edges), frame, { previous: positions, pad: hullPad + 18, gap: dims.w < 200 ? 14 : 26, groupGap: 2 * hullPad + 8 });
+      const nodes: LayoutNode[] = vm.agents.map((a) => ({ id: a.callsign, group: a.person, cluster: a.checkout ?? '', w: dims.w, h: dims.h }));
+      const cached = grid ? undefined : layouts.get(key);
+      if (grid) positions = grid.positions;
+      else if (cached) {
+        // Same roster in the same frame as before (focus then clear): put every card back exactly where it was.
+        positions = new Map(cached.positions);
+        if (cached.height !== frame.height) {
+          frame = { width: frame.width, height: cached.height };
+          stage.style.minHeight = `${frame.height}px`;
+        }
+      } else {
+        const before = key;
+        const fit = forceLayoutFit(nodes, layoutLinks(vm.edges), frame, { previous: remembered, pad: hullPad + 18, gap: nodeGap, groupGap: 2 * hullPad + 8 });
+        positions = fit.positions;
+        if (fit.size.height !== frame.height) {
+          frame = fit.size;
+          stage.style.minHeight = `${frame.height}px`;
+        }
+        if (new Set(vm.agents.map((a) => a.person)).size > 1) remembered = new Map(positions);
+        const entry = { positions: new Map(positions), height: frame.height };
+        layouts.set(before, entry);
+        layouts.set(JSON.stringify([roster, frame, dims]), entry);
+        if (layouts.size > 24) layouts.delete(layouts.keys().next().value!);
+      }
       drawKey = '';
     }
     place();
@@ -295,6 +374,7 @@ export function createGraph(): GraphView {
     if (edgesKey !== drawKey) {
       drawKey = edgesKey;
       svg.setAttribute('viewBox', `0 0 ${frame.width} ${frame.height}`);
+      svgTop.setAttribute('viewBox', `0 0 ${frame.width} ${frame.height}`);
       drawEdges(vm);
     }
   }

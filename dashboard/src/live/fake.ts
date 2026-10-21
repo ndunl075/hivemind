@@ -5,6 +5,7 @@
  */
 import type { ActivityView, EdgeView, Pulse, Snapshot } from '../../../shared/contracts';
 import { deriveState } from '../../../shared/state';
+import { bigTeamSnapshot, TEAM_ACTIVITY_TYPE, TEAM_SCRIPT, TEAM_SCRIPT_TEXT } from './bigTeam';
 import { fixtureSnapshot, shiftSnapshot } from './fixture';
 import type { LiveHandlers, LiveSource, SourceOptions } from './types';
 
@@ -26,17 +27,27 @@ const SCRIPT_TEXT = [
 
 const ACTIVITY_TYPE = ['message', 'lock.denied', 'push', 'message', 'message'];
 
+/** A scripted pulse stream and the activity lines that go with it. */
+export interface Script {
+  pulses: Omit<Pulse, 'at'>[];
+  text: string[];
+  types: string[];
+}
+
+const DEFAULT_SCRIPT: Script = { pulses: SCRIPT, text: SCRIPT_TEXT, types: ACTIVITY_TYPE };
+const TEAM: Script = { pulses: TEAM_SCRIPT, text: TEAM_SCRIPT_TEXT, types: TEAM_ACTIVITY_TYPE };
+
 /** Moves a snapshot forward to `now`: working agents report in, the scripted pulse (if any) lands. */
-export function advance(prev: Snapshot, now: number, step: number | null): Snapshot {
+export function advance(prev: Snapshot, now: number, step: number | null, script: Script = DEFAULT_SCRIPT): Snapshot {
   const agents = prev.agents.map((a, i) =>
     deriveState(a, prev.now).state === 'working' ? { ...a, lastEvent: now - (2 + ((step ?? 0) + i * 3) % 8) * 1000 } : a,
   );
   let edges: EdgeView[] = prev.edges.filter((e) => now - e.at < 3 * 60_000 || e.kind === 'waiting' || e.kind === 'nearby');
   let activity: ActivityView[] = prev.activity;
   if (step !== null) {
-    const p = SCRIPT[step % SCRIPT.length]!;
+    const p = script.pulses[step % script.pulses.length]!;
     const seq = (prev.activity[0]?.seq ?? 0) + 1;
-    activity = [{ seq, ts: now, type: ACTIVITY_TYPE[step % SCRIPT.length]!, actor: p.from, text: SCRIPT_TEXT[step % SCRIPT.length]! }, ...prev.activity].slice(0, 30);
+    activity = [{ seq, ts: now, type: script.types[step % script.pulses.length]!, actor: p.from, text: script.text[step % script.pulses.length]! }, ...prev.activity].slice(0, 30);
     if (p.kind === 'message' || p.kind === 'broadcast') {
       const kind = p.kind;
       edges = [...edges.filter((e) => !(e.kind === kind && e.from === p.from && e.to === p.to)), { kind, from: p.from, ...(p.to ? { to: p.to } : {}), at: now }];
@@ -51,7 +62,9 @@ export function advance(prev: Snapshot, now: number, step: number | null): Snaps
 export function createFakeSource(opts: SourceOptions): LiveSource {
   return {
     start(h: LiveHandlers) {
-      let current = shiftSnapshot(fixtureSnapshot, Date.now());
+      const team = opts.demo === 'team';
+      const script = team ? TEAM : DEFAULT_SCRIPT;
+      let current = team ? bigTeamSnapshot(Date.now()) : shiftSnapshot(fixtureSnapshot, Date.now());
       let step = 0;
       let tick = 0;
       let stopped = false;
@@ -68,9 +81,9 @@ export function createFakeSource(opts: SourceOptions): LiveSource {
         tick++;
         const pulseNow = tick % 5 === 0;
         const now = Date.now();
-        current = advance(current, now, pulseNow ? step : null);
+        current = advance(current, now, pulseNow ? step : null, script);
         if (pulseNow) {
-          const p = SCRIPT[step % SCRIPT.length]!;
+          const p = script.pulses[step % script.pulses.length]!;
           step++;
           h.onPulse({ ...p, at: now } as Pulse);
         }
