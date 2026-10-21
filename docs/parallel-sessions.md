@@ -4,7 +4,7 @@ Rules for every `[worker]` session building Hivemind. Briefs point here instead 
 
 ## 1. Your role
 
-If your brief starts with `[worker]`, you build exactly the task in your brief and stop at an open pull request. You never merge, never push to `main`, and never edit a file your brief doesn't give you.
+If your brief starts with `[worker]`, you build exactly the task in your brief and stop at an open pull request. You never merge pull requests, never push to `main`, and never edit a file your brief doesn't give you. (Merging `main` into your own branch is fine; see §7.)
 
 ## 2. Worktrees
 
@@ -31,7 +31,7 @@ Don't work in the main checkout. When your PR is open, leave the worktree in pla
 On Windows, `node_modules` and worktrees can contain junctions or symlinks that point outside the folder. Before deleting any folder:
 
 1. Prefer `git worktree remove <path>` for worktrees.
-2. Otherwise remove links first, without following them: `cmd /c rmdir <link>` for a junction, `rm <link>` for a symlink.
+2. Otherwise remove links first, without following them: for a junction, `cmd /c rmdir <link>` in PowerShell or cmd, or `cmd //c rmdir <link>` in Git Bash (Git Bash would rewrite a single `/c` into a path); for a symlink, `rm <link>`.
 3. Never run a recursive delete through a junction.
 
 ## 5. Exclusive resources
@@ -41,9 +41,9 @@ Some resources can only be used by one session at a time. Take the lock before u
 | Resource | Lock name | Used by |
 |---|---|---|
 | Real `claude` and `codex` sessions (they spend tokens and can read shared config) | `real-agents` | spike, skeleton manual check, smoke tests |
-| Real user-level config: `~/.claude/settings.json`, `~/.claude.json`, `~/.codex/`, `~/.hivemind/` | `user-config` | any unavoidable write to these. Back the files up first and restore them after. Automated tests use temporary home folders instead. |
+| Real user-level config: `~/.claude/settings.json`, `~/.claude.json`, `~/.codex/`, `~/.hivemind/` | `user-config` | the rare unavoidable side-effect write, such as Codex recording that a throwaway project is trusted. Back the file up first and restore it after. |
 
-**Never change user-level hook or MCP config** to test something. Those changes would affect every Claude Code and Codex session on the machine, including the architect and other workers. Use project-level config in a throwaway folder instead.
+**Never register hooks or MCP servers in user-level config** to test something. Those changes would affect every Claude Code and Codex session on the machine, including the architect and other workers. Instead, use project-level config in a throwaway folder, and point Hivemind at a temporary folder with the `HIVEMIND_HOME` environment variable. Automated tests always use temporary home and project folders.
 
 Ports aren't locked: each brief assigns its own.
 

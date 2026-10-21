@@ -25,8 +25,8 @@ Hivemind works alongside Git and GitHub. It never changes your code.
 | Problem | What Hivemind does |
 |---|---|
 | Two agents build the same thing | Agents claim a task before they start editing. A task has one owner, and obvious duplicates are caught when they're created. |
-| Two agents edit the same file | An agent that edits a file holds it until its changes are pushed. Another agent that tries to edit it is stopped and told who has it and why. Edits made outside the agent's normal edit tools are detected right after and flagged. |
-| Merge conflicts | Besides holding files until they're pushed, Hivemind tells agents when a teammate's agent pushes a file they're about to edit, so they pull first. |
+| Two agents edit the same file | An agent that edits a file holds it until its changes are pushed. Another agent that tries to edit it is stopped (in the default mode) and told who has it and why. Edits made outside the agent's normal edit tools are detected right after and flagged. |
+| Merge conflicts | Fewer of them. Besides holding files until they're pushed, Hivemind tells agents when a teammate's agent pushes a file they're about to edit, so they pull first. Teams that give each agent its own long-lived branch can still hit conflicts when those branches merge. |
 | Agents working blind | Agents get a briefing when they start (who's online, what they're doing, what's free) and can message each other mid-task. |
 
 ## How it works
@@ -35,7 +35,7 @@ Hivemind works alongside Git and GitHub. It never changes your code.
    agents, tasks, which files are held, and messages. It never sees your code:
    only file paths, task text, messages, names and Git metadata such as branch
    names.
-2. **Each laptop is connected once,** with a single setup command:
+2. **Each laptop is set up once per project** with `hivemind join`, plus a one-time hook approval in Codex and a quick self-test in each app. That gives every agent:
    - **Tools** the agent can call, such as message a teammate, claim a task or
      reserve a folder.
    - **Hooks**, checks that Claude Code and Codex run automatically before
@@ -59,10 +59,11 @@ section to your project's `AGENTS.md` and `CLAUDE.md` so agents know the rules.
 
 ## Supported agents
 
-Claude Code and Codex, on Windows and macOS. Both tools' command-line versions
-are the primary target. Their desktop apps and IDE extensions are supported
-wherever their hooks run, which is being verified. A built-in self-test shows
-whether each app you use is covered.
+Claude Code and Codex. Windows and macOS are both targets, and each tool's
+command-line version is the primary one. Desktop apps and IDE extensions count
+as supported once their hooks are verified to run there. A built-in self-test
+shows whether each app you use is covered, and agents in an app without working
+hooks can still use the board and messages, just without enforcement.
 
 ## Security
 
