@@ -223,6 +223,8 @@ describe('duplicates', () => {
     expect(similar.map((s) => s.id)).toEqual([1]);
     expect(similar[0]!.title).toMatch(/^\[DONE/);
     expect(similar[0]!.title).toContain('Add applyDiscount function with SAVE10 code');
+    expect(second.value.note).toContain('Check the similar tasks');
+    expect(first.value.note).toBeUndefined();
 
     const unrelated = await cara.call('task_add', { tasks: [{ title: 'Add sales tax to invoice total()' }] });
     expect((unrelated.value.created[0].similar as { id: number }[]).map((s) => s.id)).toEqual([2]);

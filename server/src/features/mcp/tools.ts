@@ -175,6 +175,9 @@ export const TOOLS: Record<ToolName, ToolDef> = {
       const actor = actorOf(me);
       const out = tasks.add(actor, specs, { force: args.force === true, ...(typeof args.repo === 'string' ? { repo: args.repo } : {}) });
       const result: ToolResults['task_add'] & { note?: string } = { created: out.created, duplicates: out.duplicates };
+      if (out.created.some((c) => c.similar.length > 0)) {
+        result.note = 'Check the similar tasks before starting: one marked DONE means the work may already exist, so drop yours if it covers the same job.';
+      }
       const first = out.created[0];
       if (claim && first) result.claim = tasks.claim(actor, first.id, {});
       else if (claim && out.duplicates[0]) {
