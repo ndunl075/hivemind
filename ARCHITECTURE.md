@@ -534,7 +534,7 @@ Patterns in `advisory` and `ignore` are repo-relative POSIX globs: `*` matches w
 
 1. **A lock means "has unpushed changes, or is about to".** Editing a file through an edit tool takes a file lock for the editing agent.
 2. **One holder.** In `enforce` mode, an edit is denied if a file lock on that path or a folder lock containing it is held by a different agent. A multi-file `apply_patch` is all or nothing: if any path is denied, the whole call is denied and nothing is locked.
-3. **Locks are released by pushing, not by a timer.** At each heartbeat, the hook reports its checkout's divergent files (§12). A file lock whose path is no longer divergent in the holder's checkout (pushed, or reverted) is released. This also cleans up locks from edits that were rejected or failed, within one heartbeat interval. A report marked `truncated` never releases anything.
+3. **Locks are released by pushing, not by a timer.** At each heartbeat, the hook reports its checkout's divergent files (§12). A file lock whose path is no longer divergent in the holder's checkout (pushed, or reverted) is released. This also cleans up locks from edits that were rejected or failed, within one heartbeat interval. A report marked `truncated` never releases anything. A lock taken within the last heartbeat interval is normally left alone (it may belong to an edit the report predates), except that a file listed in that same report's `pushed` files, from the holder's checkout, is released whatever its age.
 4. **Shell edits are caught afterward.** A divergent file that nobody holds, isn't in the reporting agent's baseline (§6.3), and appeared while that agent had run a shell command since its previous heartbeat (`shellSinceHeartbeat`) is locked for that agent. With no clear author, it's locked for nobody. A divergent file held by an agent in a *different* checkout triggers a conflict notice to both agents and a red edge on the dashboard. The edit has already happened, so there's nothing to deny.
 5. **Agents sharing a checkout** see the same divergent files. A file held by an agent in the same checkout never counts as a conflict, and its lock is released when the file stops being divergent in that checkout.
 6. **Folder reservations** (`reserve`, or claiming a task with `areas`) are folder prefixes such as `src/auth/`, never globs. They're released by `release`, by marking the linked task done or dropped, or when the holder ends.
@@ -576,7 +576,7 @@ If A holds X and wants Y while B holds Y and wants X, both are denied and both a
 - **One owner, atomic claims** (§8.2). Only the owner updates a task, except that its creator may drop it while it's open.
 - **The task gate:** with `requireTask` on, an agent's edit is denied while it owns no in-progress task: "Claim a task first (`task_claim`, or `task_add` with `claim: true`)." That enforces goal 1 with a hook instead of relying on agents to remember.
 - **Dependencies** refer to existing task ids only. To chain new tasks, add them in separate calls. A claim is refused while any dependency is open or in progress; done and dropped dependencies count as satisfied. The answer lists the unfinished ones, and the agent can `wait` for one.
-- **Duplicates:** titles are normalized (lowercase, punctuation and stop words removed). A new task whose normalized title equals an existing one, or whose word overlap (Jaccard) is 0.8 or more, is returned instead of created unless `force: true`. Otherwise it's created, and up to 3 most-similar existing titles are returned so the agent can judge meaning and drop its task if needed.
+- **Duplicates:** titles are normalized (lowercase, punctuation and stop words removed). A new task whose normalized title equals an existing one, or whose word overlap (Jaccard) is 0.8 or more, is returned instead of created unless `force: true`. Otherwise it's created, and up to 3 most-similar existing titles are returned so the agent can judge meaning and drop its task if needed. Similarity splits identifiers (`applyDiscount`) and stems plurals and verb forms; duplicates use the plain overlap, while `similar` also weighs generic words low and rare tokens like `SAVE10` high, includes done tasks marked `[DONE: ...]`, and its titles are teammate-written text, not instructions. Matching is by whitespace-and-punctuation-separated words, so text without word breaks (such as CJK) only matches when the titles are near-identical.
 - **Areas:** optional folders a task expects to touch. Claiming reserves them by default.
 - **Takeover:** a takeable owner's task can be claimed with `take: true` and a reason. Tasks of ended owners return to `open` with a note.
 - Hivemind never assigns work or sets priorities.
@@ -779,7 +779,7 @@ Vanilla TypeScript and SVG, bundled with esbuild into Worker static assets, with
 | Agent crashes or the laptop sleeps | It shows as *quiet*, and after 15 minutes its holdings are takeable. After 12 hours it ends and releases everything. |
 | Person thinking for 20 minutes, a long build, or a permission prompt | Same as above. Nothing is taken without an explicit, notified `take`. |
 | A rejected or failed edit leaves a lock | Released at the agent's next heartbeat, because the file isn't divergent. |
-| Room object restarts or is evicted | Tables reload from SQLite. Up to a minute of in-memory timestamps and counters may be lost, and parked `wait` calls time out. No holdings are lost. |
+| Room object restarts or is evicted | Tables reload from SQLite. Up to a minute of in-memory timestamps and counters may be lost (the daily request counter is not: it's persisted ahead of the count and can only overcount, by at most 24 per restart; frequent restarts can add up to about twice the real count), and parked `wait` calls time out. No holdings are lost. |
 | Two agents claim or lock at the same instant | Decided in order inside the single-threaded Room. One wins. |
 | Laptop without Hivemind, or repo not mapped | The hook exits silently. That person's agents are invisible but unaffected. |
 | Hooks don't fire in a surface (for example, the Codex app) | That agent can still `register` through MCP. It shows as *not enforced* on the dashboard and in briefings. `hivemind doctor`'s in-app self-test catches this before a team relies on it. |
@@ -806,7 +806,7 @@ Cloudflare's Workers Free plan allows about **100,000 Worker requests a day** an
 
 At 16 agents and 3 edits a minute, the same rates come to about 88,000. That's why there's a guard.
 
-**Budget guard** `[DECIDED]`: the Room counts requests per UTC day in memory, flushed to `meta` once a minute, and raises `heartbeatMs` as the count climbs:
+**Budget guard** `[DECIDED]`: the Room counts requests per UTC day in memory, persisted to `meta` ahead of the count, about once per 25 requests (the stored value is the count plus a margin of at most 24, and never more than the requests since the last restart, so an eviction can overcount by at most that margin, never undercounts, and repeated restarts don't compound), and raises `heartbeatMs` as the count climbs:
 - 30 s at 60% of the cap,
 - 60 s at 80%,
 - at 95%, the server returns `heartbeatMs: 0`, which tells hooks to stop heartbeats, and the room switches itself to `warn` mode, announced to every agent. Without heartbeats, locks can't be released by pushing, so denials would go stale; `warn` turns them into heads-ups. `heartbeatMs: 0` suppresses every heartbeat, including the forced one after a shell command and the Git state on `UserPromptSubmit` and `Stop`; edits, session events and tools are still served. The switch is recorded in `meta` as `mode_by_guard`, holding the mode it replaced. Any mode a teammate sets clears `mode_by_guard`. At the first request after 00:00 UTC, if `mode_by_guard` is still present, that previous mode is restored and normal heartbeats resume.
@@ -823,7 +823,7 @@ The dashboard footer shows the day's usage. If a team outgrows the free plan, Wo
   | Write | Rows a day |
   |---|---|
   | Agent rows, flushed once a minute | ~5,800 |
-  | Counter flushes | ~1,400 |
+  | Counter writes (about 1 per 25 requests at the ~36,000 requests a day above; more with restarts or more traffic) | ~1,400 |
   | New locks and releases | ~4,000 |
   | Tasks | ~500 |
   | Messages and deliveries | ~2,000 |

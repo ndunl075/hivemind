@@ -75,6 +75,48 @@ describe('edges', () => {
     expect(t.edges.map((e) => e.kind)).toContain('blocked');
     expect(buildViewModel(snap, now + 3 * 60_000).edges.map((e) => e.kind)).not.toContain('blocked');
   });
+  describe('blocked edge (claude-nico-2 denied login.ts held by codex-ana)', () => {
+    const hasBlocked = (s: Snapshot, at = now) => buildViewModel(s, at).edges.some((e) => e.kind === 'blocked');
+    const withLocks = (f: (l: Snapshot['locks']) => Snapshot['locks']): Snapshot => ({ ...snap, locks: f(snap.locks) });
+    const isLogin = (l: Snapshot['locks'][number]) => l.path === 'src/auth/login.ts';
+    const noFolder = (l: Snapshot['locks'][number]) => l.kind !== 'folder';
+    it('is shown while the holder still holds the file', () => {
+      expect(hasBlocked(snap)).toBe(true);
+    });
+    it('goes when the lock is released', () => {
+      expect(hasBlocked(withLocks((l) => l.filter((x) => !isLogin(x) && noFolder(x))))).toBe(false);
+    });
+    it('goes when someone else took the lock', () => {
+      expect(hasBlocked(withLocks((l) => l.filter(noFolder).map((x) => (isLogin(x) ? { ...x, holder: 'codex-sam' } : x))))).toBe(false);
+    });
+    it('goes when the blocked agent now holds the file', () => {
+      expect(hasBlocked(withLocks((l) => l.filter(noFolder).map((x) => (isLogin(x) ? { ...x, holder: 'claude-nico-2' } : x))))).toBe(false);
+    });
+    it('goes when either agent has ended', () => {
+      const end = (who: string): Snapshot => ({ ...snap, agents: snap.agents.map((a) => (a.callsign === who ? { ...a, endedAt: now - 1000 } : a)) });
+      expect(hasBlocked(end('claude-nico-2'))).toBe(false);
+      expect(hasBlocked(end('codex-ana'))).toBe(false);
+    });
+    it('does not come back when the lock was re-taken after the edge', () => {
+      expect(hasBlocked(withLocks((l) => l.filter(noFolder).map((y) => (isLogin(y) ? { ...y, acquiredAt: snap.edges.find((q) => q.kind === 'blocked')!.at + 1000 } : y))))).toBe(false);
+    });
+    it('keeps the edge for a folder denial and for a folder that contains the file', () => {
+      expect(hasBlocked(withLocks((l) => l.filter((y) => !isLogin(y))))).toBe(false); // folder src/auth/ has no matching file lock any more
+      const folder = { ...snap.locks.find((y) => y.kind === 'folder')!, path: 'src/Login.ts/' };
+      expect(hasBlocked(withLocks((l) => [...l.filter((y) => !isLogin(y) && noFolder(y)), folder]))).toBe(true);
+    });
+    it('removes the edge when B only holds an unrelated folder', () => {
+      const folder = { ...snap.locks.find((y) => y.kind === 'folder')!, path: 'infra/' };
+      expect(hasBlocked(withLocks((l) => [...l.filter((y) => !isLogin(y) && noFolder(y)), folder]))).toBe(false);
+    });
+    it('matches names case-insensitively', () => {
+      expect(hasBlocked(withLocks((l) => l.filter(noFolder).map((y) => (isLogin(y) ? { ...y, path: 'SRC/Auth/LOGIN.ts' } : y))))).toBe(true);
+    });
+    it('goes after LIMITS.blockedEdgeMs', () => {
+      expect(hasBlocked(snap, now + LIMITS.blockedEdgeMs - 61_000)).toBe(true);
+      expect(hasBlocked(snap, now + LIMITS.blockedEdgeMs)).toBe(false);
+    });
+  });
   it('drops edges to agents that are gone', () => {
     const lonely = { ...snap, agents: snap.agents.filter((a) => a.callsign !== 'codex-ana') };
     expect(buildViewModel(lonely, now).edges.every((e) => e.from !== 'codex-ana' && e.to !== 'codex-ana')).toBe(true);

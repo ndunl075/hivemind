@@ -436,3 +436,98 @@ describe('rule 4: a checkout-mate that has not reported makes the author ambiguo
     expect(await locks(room)).toEqual([]);
   });
 });
+
+describe('rule 3: a push releases the pushed file even when its lock is young', () => {
+  const pushed = (...paths: string[]) => ({ branch: 'main', sha: 'a1b2c3d', files: paths.map((path) => ({ path, blob: 'b'.repeat(40) })) });
+
+  it('releases a young lock listed in pushed and not divergent, recorded as now', async () => {
+    clock();
+    const room = 'r3-push-young';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    await edit(ana, 'a.txt');
+    at(5_000);
+    await ana.hook({ git: git([], { pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual([]);
+    expect((await edit(ben, 'a.txt')).decision).toBe('allow');
+    const ts = await inRoom(room, (_r, state) => state.storage.sql.exec("SELECT ts FROM events WHERE type = 'lock.released' ORDER BY seq").toArray().map((e) => Number(e.ts)));
+    expect(ts).toEqual([T0 + 5_000]);
+  });
+
+  it('keeps a young lock whose file is not in pushed', async () => {
+    clock();
+    const room = 'r3-push-other';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await edit(ana, 'a.txt');
+    at(5_000);
+    await ana.hook({ git: git([], { pushed: pushed('other.txt') }) });
+    expect(await locks(room)).toEqual(['a.txt:claude-ana']);
+  });
+
+  it('keeps a pushed file that is also reported divergent (defensive: the hook never sends both)', async () => {
+    clock();
+    const room = 'r3-push-redirty';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await edit(ana, 'a.txt');
+    at(5_000);
+    await ana.hook({ git: git(['a.txt'], { pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual(['a.txt:claude-ana']);
+  });
+
+  it('does not release a young lock held in another checkout or another repo', async () => {
+    clock();
+    const room = 'r3-push-scope';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    await edit(ben, 'a.txt');
+    await edit(ana, 'a.txt', { repo: 'other/repo', settings: { requireTask: false } });
+    at(5_000);
+    await ana.hook({ git: git([], { pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual(['a.txt:claude-ana', 'a.txt:claude-ben']);
+  });
+
+  it('matches the pushed path in another case or form', async () => {
+    clock();
+    const room = 'r3-push-case';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await edit(ana, 'a.txt');
+    await edit(ana, 'b.txt');
+    at(5_000);
+    await ana.hook({ git: git([], { pushed: pushed('A.TXT', './b.txt') }) });
+    expect(await locks(room)).toEqual([]);
+  });
+
+  it('releases a young lock held by a checkout-mate (rule 5)', async () => {
+    clock();
+    const room = 'r3-push-mate';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c1' });
+    await edit(ben, 'a.txt');
+    at(5_000);
+    await ana.hook({ git: git([], { pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual([]);
+  });
+
+  it('realistic sequence: edit, a heartbeat listing the file divergent, then the push report 5 s later', async () => {
+    clock();
+    const room = 'r3-push-sequence';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await edit(ana, 'a.txt');
+    at(1_000);
+    await ana.hook({ git: git(['a.txt']) });
+    expect(await locks(room)).toEqual(['a.txt:claude-ana']);
+    at(6_000);
+    await ana.hook({ git: git([], { pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual([]);
+  });
+
+  it('releases nothing from a truncated report', async () => {
+    clock();
+    const room = 'r3-push-truncated';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await edit(ana, 'a.txt');
+    at(5_000);
+    await ana.hook({ git: git([], { truncated: true, pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual(['a.txt:claude-ana']);
+  });
+});

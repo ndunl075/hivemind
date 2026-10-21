@@ -430,17 +430,90 @@ describe('budget guard', () => {
     expect((await hook(a, 'sa', {})).mode).toBe('off');
   });
 
-  it('flushes the counter and reloads it after a restart', async () => {
+  it('never undercounts across an eviction, does not compound over repeated evictions, and resets on a new day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+    const room = 'guard-persist';
+    const a = await agentToken(room, 'ana');
+    await hook(a, 'sa', {});
+    // Start from a clean slate so the numbers below come only from the requests this test makes.
+    type Priv = { budgetReserved: number; budgetSinceBoot: number; meta: Map<string, string> };
+    const reset = () => inRoom(room, (r, state) => {
+      const p = r as unknown as Priv;
+      r.budget.requests = 0; p.budgetReserved = 0; p.budgetSinceBoot = 0;
+      for (const k of [...p.meta.keys()]) if (k.startsWith('budget:')) p.meta.delete(k);
+      state.storage.sql.exec("DELETE FROM meta WHERE key LIKE 'budget:%'").toArray();
+    });
+    const reqs = (): Promise<number> => inRoom(room, (r) => r.budget.requests);
+    await reset();
+    for (let i = 0; i < 7; i++) await hook(a, 'sa', {});
+    expect(await reqs()).toBe(7);
+    await evictDurableObject(roomStub(room)); // no housekeeping interval elapsed: only per-request persistence helps
+    const first = await reqs();
+    expect(first).toBeGreaterThanOrEqual(7);
+    expect(first).toBeLessThan(7 + 7); // overcount is below the requests handled since the last boot
+
+    // "One request, then evict" must not compound: four cycles stay near 4, not 100.
+    await reset();
+    let last = 0;
+    for (let i = 0; i < 4; i++) {
+      await hook(a, 'sa', {});
+      await evictDurableObject(roomStub(room));
+      last = await reqs();
+      expect(last).toBeGreaterThanOrEqual(i + 1);
+    }
+    expect(last).toBeLessThanOrEqual(8);
+
+    // Next UTC day: reset to 1, and the old day's key is gone.
+    vi.setSystemTime(Date.parse('2026-10-22T00:00:05Z'));
+    await hook(a, 'sa', {});
+    expect(await reqs()).toBe(1);
+    await evictDurableObject(roomStub(room));
+    expect(await reqs()).toBeGreaterThanOrEqual(1);
+    expect(await inRoom(room, (r) => [...(r as unknown as Meta).meta.keys()].filter((k) => k.startsWith('budget:')))).toEqual(['budget:2026-10-22']);
+  });
+
+  it('writes the counter about once per 25 requests in a long-running Room', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+    const room = 'guard-writes';
+    const a = await agentToken(room, 'ana');
+    await hook(a, 'sa', {});
+    await inRoom(room, (r, state) => {
+      const p = r as unknown as { budgetReserved: number; budgetSinceBoot: number };
+      r.budget.requests = 0; p.budgetReserved = 0; p.budgetSinceBoot = 0;
+      state.storage.sql.exec("DELETE FROM meta WHERE key LIKE 'budget:%'").toArray();
+      (r as unknown as Meta).meta.delete(`budget:${r.budget.date}`);
+    });
+    const stored = () => inRoom(room, (r, state) => Number(state.storage.sql.exec("SELECT value FROM meta WHERE key LIKE 'budget:%'").toArray()[0]?.value ?? 0));
+    let changes = 0;
+    let prev = 0;
+    const atCount: Array<[number, number]> = [];
+    for (let i = 1; i <= 60; i++) {
+      vi.setSystemTime(T0 + i * 2000); // stay under the burst limit
+      await hook(a, 'sa', {});
+      const v = await stored();
+      expect(v).toBeGreaterThanOrEqual(i); // storage is never behind the count
+      if (v !== prev) { changes += 1; atCount.push([i, v]); prev = v; }
+    }
+    expect(changes).toBeLessThanOrEqual(8);
+    // After a full-size block was written, the next 24 requests cause no further write.
+    const full = atCount.find(([, v], idx) => idx > 0 && v - (atCount[idx]?.[0] ?? 0) === 24);
+    expect(full).toBeTruthy();
+    const [at, v] = full as [number, number];
+    expect(v).toBe(at + 24);
+  });
+
+  it('persists the counter and reloads it (never lower) after a restart', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(T0);
     const room = 'guard-flush';
     const a = await agentToken(room, 'ana');
     await hook(a, 'sa', {});
     await inRoom(room, (r) => { r.budget.requests = 1000; });
-    vi.setSystemTime(T0 + 61_000);
     await hook(a, 'sa', {});
     await evictDurableObject(roomStub(room));
-    expect(await inRoom(room, (r) => r.budget.requests)).toBe(1001);
+    expect(await inRoom(room, (r) => r.budget.requests)).toBeGreaterThanOrEqual(1001);
   });
 });
 
