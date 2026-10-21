@@ -361,7 +361,9 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
         const release: LockRow[] = [];
         // A lock taken after the report was computed (parallel tool calls) must survive it: leave young locks alone.
         const youngAfter = now - LIMITS.heartbeatMs;
-        // Exception: a file this very report says was pushed (and that is not divergent again) is released at any age.
+        // Exception: a file this very report says was pushed is released at any age (the hook never reports a file as both
+        // pushed and divergent). Accepted trade-off: a parallel edit of a just-pushed file made after the report was computed
+        // can lose its lock until that agent's next edit.
         const pushed = new Set<string>();
         for (const f of state.pushed?.files ?? []) {
           const p = normalizePath(f.path);

@@ -464,7 +464,7 @@ describe('rule 3: a push releases the pushed file even when its lock is young', 
     expect(await locks(room)).toEqual(['a.txt:claude-ana']);
   });
 
-  it('keeps a pushed file that is divergent again', async () => {
+  it('keeps a pushed file that is also reported divergent (defensive: the hook never sends both)', async () => {
     clock();
     const room = 'r3-push-redirty';
     const ana = await agent(room, 'ana', { checkout: 'c1' });
@@ -472,6 +472,53 @@ describe('rule 3: a push releases the pushed file even when its lock is young', 
     at(5_000);
     await ana.hook({ git: git(['a.txt'], { pushed: pushed('a.txt') }) });
     expect(await locks(room)).toEqual(['a.txt:claude-ana']);
+  });
+
+  it('does not release a young lock held in another checkout or another repo', async () => {
+    clock();
+    const room = 'r3-push-scope';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    await edit(ben, 'a.txt');
+    await edit(ana, 'a.txt', { repo: 'other/repo', settings: { requireTask: false } });
+    at(5_000);
+    await ana.hook({ git: git([], { pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual(['a.txt:claude-ana', 'a.txt:claude-ben']);
+  });
+
+  it('matches the pushed path in another case or form', async () => {
+    clock();
+    const room = 'r3-push-case';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await edit(ana, 'a.txt');
+    await edit(ana, 'b.txt');
+    at(5_000);
+    await ana.hook({ git: git([], { pushed: pushed('A.TXT', './b.txt') }) });
+    expect(await locks(room)).toEqual([]);
+  });
+
+  it('releases a young lock held by a checkout-mate (rule 5)', async () => {
+    clock();
+    const room = 'r3-push-mate';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c1' });
+    await edit(ben, 'a.txt');
+    at(5_000);
+    await ana.hook({ git: git([], { pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual([]);
+  });
+
+  it('realistic sequence: edit, a heartbeat listing the file divergent, then the push report 5 s later', async () => {
+    clock();
+    const room = 'r3-push-sequence';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await edit(ana, 'a.txt');
+    at(1_000);
+    await ana.hook({ git: git(['a.txt']) });
+    expect(await locks(room)).toEqual(['a.txt:claude-ana']);
+    at(6_000);
+    await ana.hook({ git: git([], { pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual([]);
   });
 
   it('releases nothing from a truncated report', async () => {
