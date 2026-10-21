@@ -344,7 +344,7 @@ describe('dashboard socket', () => {
     expect(snap.locks.map((l: any) => l.path)).toContain('a.txt');
 
     const refused = await new Promise<string>((resolve) => {
-      const ws = new WebSocket(`${SERVER.replace('http', 'ws')}/r/dash/ws`, ['hivemind', 'hm_v.dash.1.not-a-real-signature']);
+      const ws = new WebSocket(`${SERVER.replace('http', 'ws')}/r/dash/ws`, ['hivemind', 'hm_v.test.1.forged-signature-not-real']);
       ws.on('unexpected-response', (_req, res) => resolve(`http ${res.statusCode}`));
       ws.on('open', () => resolve('open'));
       ws.on('error', () => undefined);
