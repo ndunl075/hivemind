@@ -31,7 +31,7 @@ afterAll(() => rmSync(base, { recursive: true, force: true }));
 
 describe('git.mjs', () => {
   it('runs every Git call with GIT_OPTIONAL_LOCKS=0', () => {
-    expect(GIT_ENV_OVERRIDES.GIT_OPTIONAL_LOCKS).toBe('0');
+    expect(GIT_ENV_OVERRIDES).toMatchObject({ GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' });
   });
 
   it('identity: root commit, toplevel, branch, head', async () => {
@@ -111,7 +111,7 @@ describe('git.mjs', () => {
     expect([...first.report.divergent].sort()).toEqual(['a.txt', 'b.txt', 'c.txt', 'dir/x.txt', 'new.txt']);
     expect(first.report.baseline).toEqual(first.report.divergent);
     expect(first.report.pushed).toBeNull();
-    expect(first.report.truncated).toBe(false);
+    expect(first.report.truncated).toBe(true); // no remote: committed work can't be told from pushed work
     expect(first.memory.divergent).toEqual(first.report.divergent);
 
     const next = await state(repo, first.memory);
@@ -119,7 +119,11 @@ describe('git.mjs', () => {
     expect(next.report.divergent).toEqual(first.report.divergent);
   });
 
-  it('staleWarnings is a no-op in the basic module', async () => {
+  it('staleWarnings: nothing to say for no pushes, and never throws outside a repository', async () => {
     expect(await staleWarnings(repo, 'main', [])).toEqual([]);
+    const lonely = join(base, 'not-a-repo');
+    mkdirSync(lonely);
+    const push = { path: 'a.txt', sha: 'abcdef1234', blob: 'b'.repeat(40), by: 'codex-ana', branch: 'main', at: Date.now() };
+    expect(await staleWarnings(lonely, 'main', [push])).toEqual([`codex-ana pushed changes to a.txt 0s ago. Fetch and pull first.`]);
   });
 });
