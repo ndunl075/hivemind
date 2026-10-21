@@ -310,11 +310,11 @@ One command handles every event; the script reads `hook_event_name` from stdin.
 | Event | Matcher | What Hivemind does | Network | Can block? |
 |---|---|---|---|---|
 | `SessionStart` | all | Register the session, assign a callsign, return the **briefing** (§6.6) as `additionalContext`. | yes | no |
-| `UserPromptSubmit` | — | Mark working. Deliver unread messages. Carries Git state. | yes | no |
+| `UserPromptSubmit` | — | Mark working. Deliver unread messages. Carries Git state unless heartbeats are off. | yes | no |
 | `PreToolUse` | edit tools: Claude `Edit\|Write\|MultiEdit\|NotebookEdit`, Codex `apply_patch\|Edit\|Write` | Lock check (§9), the task gate (§10), stale-copy check (§12). | yes | **yes** |
 | `PreToolUse` | `mcp__hivemind__.*` | Check that `me` matches the cached callsign (§5). | **no** | yes |
-| `PostToolUse` | all | Heartbeat, throttled to one request per `heartbeatMs` (default 15 s), and always sent right after a shell command. It carries the checkout's **divergent files** (§12), which drive lock release, shell-edit detection and push detection. It delivers messages. | when due, or after a shell command | no |
-| `Stop` | — | Always carries Git state (an unthrottled heartbeat), so a push made just before stopping releases its locks at once. Mark idle. If **direct** messages are unread and `stop_hook_active` is false, block the stop once, with the messages as the reason. | yes | yes (once) |
+| `PostToolUse` | all | Heartbeat, throttled to one request per `heartbeatMs` (default 15 s), and sent right after a shell command; none while heartbeats are off (§16). It carries the checkout's **divergent files** (§12), which drive lock release, shell-edit detection and push detection. It delivers messages. | when due, or after a shell command | no |
+| `Stop` | — | Carries Git state (an unthrottled heartbeat) unless heartbeats are off, so a push made just before stopping releases its locks at once. Mark idle. If **direct** messages are unread and `stop_hook_active` is false, block the stop once, with the messages as the reason. | yes | yes (once) |
 | `SessionEnd` | — | If the reason is an exit (not clear or resume), mark ended and release holdings. Best effort: an 800 ms network timeout, because Codex's docs allow `SessionEnd` hooks at most 3 s `[VERIFY]`. | yes | no |
 
 Both tools use nearly identical hook contracts: JSON on stdin with `session_id`, `cwd`, `tool_name` and `tool_input`; `hookSpecificOutput.permissionDecision: "deny"` with a reason in `PreToolUse`; `hookSpecificOutput.additionalContext`; and `decision: "block"` on `Stop`. **Output must exactly match each tool's schema.** Codex treats unknown output fields as a failed hook and lets the tool call continue, which would silently turn a deny into an allow. So `hook.mjs` builds output per tool, and tests assert the exact shape for each (§19). Every field is `[VERIFY]` against recorded payloads (§21).
@@ -797,7 +797,7 @@ Cloudflare's Workers Free plan allows about **100,000 Worker requests a day** an
 
 | Source | Rate | Requests a day |
 |---|---|---|
-| Heartbeats (`PostToolUse` throttled to 1 per 15 s, plus forced ones after shell commands) | about 1 per 15 s per working agent | 23,040 |
+| Heartbeats (`PostToolUse` throttled to 1 per 15 s, plus forced ones after shell commands) | about 1 per 15 s per working agent (forced ones replace throttled ones, so the rate barely changes) | 23,040 |
 | Edit checks (`PreToolUse`) | about 1.5 edits a minute per agent | 8,640 |
 | MCP tool calls (the `me` check is local and costs nothing) | about 20 an hour per agent | 1,920 |
 | Session, prompt and stop events | about 15 an hour per agent | about 2,000 (more if agents run very short turns) |
