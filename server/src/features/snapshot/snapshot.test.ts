@@ -109,6 +109,29 @@ describe('snapshot', () => {
     expect(snap.tasks.some((t) => t.id === 1000)).toBe(true);
   });
 
+  it('caps locks at 300', () => {
+    const locks = Array.from({ length: 350 }, (_, i) => ({ repo: REPO, path: `f${i}.ts`, kind: 'file', holder: `h${i}`, checkout: 'c', taskId: null, reason: null, acquiredAt: 0 }));
+    const ctx = { now: () => 1000, mode: () => 'enforce', agents: () => [], sql: { exec: () => ({ toArray: () => [] }) } };
+    const features = { tasks: { list: () => [], inProgressFor: () => null }, locks: { list: () => locks } };
+    const snap = createSnapshot(ctx as never, features as never).build();
+    expect(snap.locks).toHaveLength(300);
+  });
+
+  it('keeps blocked edges with different labels and ignores waiting and nearby kinds from events', () => {
+    const row = (seq: number, edge: unknown) => ({ ts: 900, data: JSON.stringify({ text: 't', edge }) });
+    const rows = [
+      row(4, { kind: 'blocked', from: 'a', to: 'b', label: 'one.ts' }),
+      row(3, { kind: 'blocked', from: 'a', to: 'b', label: 'two.ts' }),
+      row(2, { kind: 'blocked', from: 'a', to: 'b', label: 'one.ts' }),
+      row(1, { kind: 'waiting', from: 'a', to: 'b' }),
+      row(0, { kind: 'nearby', from: 'a', to: 'b' }),
+    ];
+    const ctx = { now: () => 1000, mode: () => 'enforce', agents: () => [], sql: { exec: (q: string) => ({ toArray: () => (q.includes('LIKE') ? rows : []) }) } };
+    const features = { tasks: { list: () => [], inProgressFor: () => null }, locks: { list: () => [] } };
+    const snap = createSnapshot(ctx as never, features as never).build();
+    expect(snap.edges.map((e) => `${e.kind}:${e.label}`)).toEqual(['blocked:one.ts', 'blocked:two.ts']);
+  });
+
   it('caps the activity feed', async () => {
     const room = 'snap-cap';
     const snap = await inRoom(room, (r) => {
