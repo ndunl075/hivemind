@@ -11,3 +11,8 @@ regex = '''hm_[av]\.[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]{8,}'''
 [rules.allowlist]
 description = "Obviously fake test tokens"
 regexes = ['''hm_[av]\.test\.''']
+
+# Global, so it also covers built-in rules. The server refuses to create a room named "test".
+[allowlist]
+description = "Fake test tokens (room name 'test')"
+regexes = ['''hm_[av]\.test\.''']
