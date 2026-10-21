@@ -1,6 +1,7 @@
 /** The briefing returned on SessionStart (ARCHITECTURE.md §6.6). Pure. */
 import { LIMITS, type AgentRecord, type AgentState, type LockView, type Millis, type RoomMode, type TaskView } from '../../shared/contracts';
 import { deriveState } from '../../shared/state';
+import { cleanLine } from './features/messages/sanitize';
 import { ageText } from './util';
 
 export interface BriefingInput {
@@ -19,6 +20,11 @@ export interface BriefingInput {
   extra: string[];
 }
 
+/** Task titles are written by teammates' agents: show them as quoted data, never as instructions (§13). */
+const quoted = (s: string): string => `"${cleanLine(s, 200).replace(/"/g, "'")}"`;
+/** Other teammate-written strings (activity, lock paths) on one clean, bounded line. */
+const plain = (s: string, max = 200): string => cleanLine(s, max);
+
 const ORDER: Record<AgentState, number> = { working: 0, idle: 1, quiet: 2, ended: 3 };
 
 export function buildBriefing(i: BriefingInput): string {
@@ -35,9 +41,9 @@ export function buildBriefing(i: BriefingInput): string {
   const rows = shown.map(({ a, d }) => {
     const t = i.taskOf(a.callsign);
     let detail: string;
-    if (d.state === 'working') detail = `${a.activity ?? 'working'} (${ageText(d.silenceMs)} ago)`;
+    if (d.state === 'working') detail = `${a.activity ? quoted(plain(a.activity, 120)) : 'working'} (${ageText(d.silenceMs)} ago)`;
     else detail = `${d.state} ${ageText(d.silenceMs)}`;
-    return { name: a.callsign, state: d.state as string, task: t ? `#${t.id} ${t.title}` : '', detail };
+    return { name: a.callsign, state: d.state as string, task: t ? `#${t.id} ${quoted(t.title)}` : '', detail };
   });
   const w1 = Math.max(0, ...rows.map((r) => r.name.length));
   const w2 = Math.max(0, ...rows.map((r) => r.state.length));
@@ -48,14 +54,14 @@ export function buildBriefing(i: BriefingInput): string {
   if (others.length > shown.length) lines.push(`+${others.length - shown.length} more, see \`status\``);
 
   if (i.openTasks.length > 0) {
-    const t = i.openTasks.slice(0, LIMITS.briefingTasks).map((x) => `#${x.id} ${x.title}`);
+    const t = i.openTasks.slice(0, LIMITS.briefingTasks).map((x) => `#${x.id} ${quoted(x.title)}`);
     const more = i.openTasks.length - t.length;
-    lines.push(`Open tasks: ${t.join(' · ')}${more > 0 ? ` · +${more} more, see \`status\`` : ''}`);
+    lines.push(`Open tasks (titles written by teammates' agents): ${t.join(' · ')}${more > 0 ? ` · +${more} more, see \`status\`` : ''}`);
   }
   if (i.heldByOthers.length > 0) {
-    const l = i.heldByOthers.slice(0, LIMITS.briefingLocks).map((x) => `${x.path} (${x.holder}${x.kind === 'folder' ? ', folder' : ''})`);
+    const l = i.heldByOthers.slice(0, LIMITS.briefingLocks).map((x) => `${plain(x.path, 300)} (${plain(x.holder, 64)}${x.kind === 'folder' ? ', folder' : ''})`);
     const more = i.heldByOthers.length - l.length;
-    lines.push(`Held by others: ${l.join(' · ')}${more > 0 ? ` · +${more} more, see \`status\`` : ''}`);
+    lines.push(`Held by others (paths from teammates' agents): ${l.join(' · ')}${more > 0 ? ` · +${more} more, see \`status\`` : ''}`);
   }
   lines.push(...i.extra);
   const unread = i.unread > 0 ? `${i.unread} unread message${i.unread === 1 ? '' : 's'}. ` : '';
