@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { GIT_ENV_OVERRIDES, identity, normalize, refs, repoNameOf, staleWarnings, state } from './git.mjs';
 
 let base;
@@ -124,7 +124,29 @@ describe('git.mjs', () => {
     const lonely = join(base, 'not-a-repo');
     mkdirSync(lonely);
     const push = { path: 'a.txt', sha: 'abcdef1234', blob: 'b'.repeat(40), by: 'codex-ana', branch: 'main', at: Date.now() };
-    expect(await staleWarnings(lonely, 'main', [push])).toEqual([`codex-ana pushed changes to a.txt 0s ago. Fetch and pull first.`]);
+    expect(await staleWarnings(lonely, 'main', [push], { budgetMs: 60_000 })).toEqual([`codex-ana pushed changes to a.txt 0s ago. Fetch and pull first.`]);
+  });
+
+  describe('staleWarnings time budget', () => {
+    const push = { path: 'a.txt', sha: 'abcdef1234', blob: 'b'.repeat(40), by: 'codex-ana', branch: 'main', at: Date.now() };
+    const WARNING = expect.stringMatching(/^codex-ana pushed changes to a\.txt \d+s ago\. Fetch and pull first\.$/);
+    // Every Git command takes 1.2 s, longer than the 0.9 s production limit; `merge-base` and `cat-file` (is the commit known?) fail.
+    const slowExec = (args) => new Promise((res, rej) => setTimeout(() => (['cat-file', 'merge-base'].includes(args[0]) ? rej(new Error('unknown commit')) : res('')), 1_200));
+    const saved = process.env.HIVEMIND_GIT_BUDGET_MS;
+    afterEach(() => { if (saved === undefined) delete process.env.HIVEMIND_GIT_BUDGET_MS; else process.env.HIVEMIND_GIT_BUDGET_MS = saved; });
+
+    it('by default a slow Git is cut off after about 0.9 s and the warning is dropped', async () => {
+      delete process.env.HIVEMIND_GIT_BUDGET_MS;
+      expect(await staleWarnings(repo, 'main', [push], { exec: slowExec })).toEqual([]);
+    });
+    it('the budgetMs option lets slow Git finish', async () => {
+      expect(await staleWarnings(repo, 'main', [push], { exec: slowExec, budgetMs: 10_000 })).toEqual([WARNING]);
+    });
+    it('HIVEMIND_GIT_BUDGET_MS does the same, and the option wins over it', async () => {
+      process.env.HIVEMIND_GIT_BUDGET_MS = '10000';
+      expect(await staleWarnings(repo, 'main', [push], { exec: slowExec })).toEqual([WARNING]);
+      expect(await staleWarnings(repo, 'main', [push], { exec: slowExec, budgetMs: 100 })).toEqual([]);
+    });
   });
 });
 
