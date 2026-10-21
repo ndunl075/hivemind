@@ -30,13 +30,17 @@ Scenario: 47-64 s of work (the test body, including the one 15.5 s sleep, about 
 
 | Requests during the scenario | Count |
 |---|---|
-| Hook requests (`POST /hook`) | 185: SessionStart 18, PreToolUse 39, PostToolUse 32 (all carried Git state), UserPromptSubmit 72, Stop 18, SessionEnd 6 |
+| Hook requests (`POST /hook`) | 195: 189 from the real hook (SessionStart 18, PreToolUse 39, PostToolUse 36 (all carried Git state), UserPromptSubmit 72, Stop 18, SessionEnd 6) and 6 raw concurrent PreToolUse requests (the `shared4.ts` race) |
 | MCP calls (`POST /mcp`) | 41: task_claim 24, post 8, task_update 6, inbox 2, task_add 1 |
-| Dashboard sockets, invites, room setup | 14 + 12 + 2 (not agent traffic) |
-| Worker log by route | `/hook` 185, `/mcp` 41: the same as the client-side counts |
-| Room budget counter (server side) | 268; 16 more than the routes listed in the log, from admin and dashboard requests |
+| Dashboard sockets, invites, room setup | 15 + 12 + 2 (not agent traffic) |
+| Worker log by route | `/hook` 195, `/mcp` 41: the same as the client-side counts |
+| Room budget counter (server side) | 271: the 195 hook + 41 MCP requests, 15 dashboard sockets, 12 invites and the room setup, plus about 7 requests I could not attribute to a route (the counter sees every Room request, the log lists only Worker routes) |
 
-Per-event cost: PreToolUse 1 request per edit check (39 of 39), MCP 1 per call, prompt/stop/session events 1 each, heartbeat at most 1 per 15 s (probe above). Not in §16's table: a first edit of a file Git has not reported yet, and every shell command, send an extra heartbeat at once (all 32 PostToolUse requests were such forced ones, or at least carried Git state).
+Per-event cost: PreToolUse 1 request per edit check (39 of 39), MCP 1 per call, prompt/stop/session events 1 each, heartbeat at most 1 per 15 s (probe: 0 requests for 6 events right after a heartbeat, exactly 1 after a real 15.5 s pause).
+
+Forced heartbeats, measured right after a heartbeat (the window closed): a first edit of a path Git has not reported costs 1 request, the same path again 0, every shell command 1 (twice in a row: 1 and 1). The hook sets `lastHeartbeat` on every heartbeat, forced ones included, so a forced beat restarts the 15 s window and displaces about half a throttled beat on average. The extrapolation therefore counts 0.5 request per forced beat.
+
+The extrapolation is an upper bound: it treats every agent as continuously busy for 12 hours. Agents that are idle, waiting or thinking send nothing, so a real day costs less. The per-event costs are measured; the rates (4 heartbeats and 1.5 edits a minute, 20 tool calls and 15 session events an hour, 6 new files and 2 shell commands an hour) are §16's and my assumptions.
 
 ### Extrapolation: this team, 18 agents, 12 working hours, default 15 s heartbeat
 
@@ -46,22 +50,23 @@ Per-event cost: PreToolUse 1 request per edit check (39 of 39), MCP 1 per call, 
 | Edit checks (1.5 a minute) | 1,080 | 19,440 |
 | MCP calls (20 an hour) | 240 | 4,320 |
 | Session, prompt, stop (15 an hour) | 180 | 3,240 |
-| Forced heartbeats (assume 6 new files + 2 shell commands an hour) | 96 | 1,728 |
-| **Total** | | **80,568 (81% of the 100,000 cap)** |
+| Forced heartbeats (assume 6 new files + 2 shell commands an hour, 0.5 request each) | 48 | 864 |
+| **Total** | | **79,704 (80% of the 100,000 cap)** |
 
-With the budget guard (30 s heartbeats from 60,000): about 74,000 (74%).
+With the budget guard (30 s heartbeats from 60,000): about 73,000 (73%).
 
 ## Comparison with ARCHITECTURE.md §16
 
-- §16's table is correct arithmetic (8 agents: 36,000) and scales linearly: 16 agents at 3 edits a minute would be 88,000, consistent with the test's 18 agents at 1.5 a minute giving 80,568.
-- Not contradicted, but one sentence was missing: forced heartbeats are in addition to the throttled ones, not replacing them ("barely changes" holds: about +2%). I added a short measured paragraph to §16 after "That's why there's a guard", stating this and what the 18-agent team costs.
-- Practical reading: a six-person team with all 18 agents working all day at §16's rates fits the free tier (under the 95% `warn` switch) only because of the guard's 30 s step (it starts after about 9 of the 12 hours); at 24 agents the day would reach about 107,000 unguarded. The row-write and Durable Object compute estimates were not measured here.
+- §16's table is correct arithmetic (8 agents: 36,000) and scales linearly: 16 agents at 3 edits a minute would be 88,000, consistent with the test's 18 agents at 1.5 a minute giving 79,704.
+- Not contradicted. The row text said forced heartbeats replace throttled ones; measured, a forced beat restarts the window, so it adds about half a request (up to about +1%). I reworded that row and added a short measured paragraph to §16 after "That's why there's a guard", with the upper-bound caveat and what the 18-agent team costs.
+- Practical reading: a six-person team with all 18 agents working all day at §16's rates fits the free tier (under the 95% `warn` switch) only because of the guard's 30 s step (it starts after about 9 of the 12 hours); at 24 agents the day would reach about 106,000 unguarded. The row-write and Durable Object compute estimates were not measured here.
 
 ## How tested
 
-`npm run test:e2e` (all three suites, 28 tests) and `npm run typecheck` pass locally. `HIVEMIND_GIT_BUDGET_MS` defaults to 15000 inside this test for slow runners. Set `HIVEMIND_E2E_REPORT=<file>` to write the measurements as JSON. `test:smoke` and real agents were not run.
+`npm run test:e2e` (all three suites, 28 tests) and `npm run typecheck` pass locally. `HIVEMIND_GIT_BUDGET_MS` defaults to 15000 inside this test for slow runners. The edit race is run twice: with hook processes, and with six raw concurrent `POST /hook` PreToolUse requests (exactly one allowed). Push notices and messages are scanned over each agent's whole history at the end: exactly once for everyone except the pusher and agents sharing the pusher's checkout, who are told nothing (they share the working tree; measured 0). Set `HIVEMIND_E2E_REPORT=<file>` to write the measurements as JSON. `test:smoke` and real agents were not run.
 
 ## Not done
 
 - Row-write and Durable Object compute figures from §16 are not measured.
 - Two agents sharing one checkout are not tested against each other for the same file (only against other checkouts).
+- The seven Room requests mentioned above are not itemised.

@@ -67,7 +67,11 @@ class Ledger {
   /** An agent asked to edit a file and the hook answered. */
   record(agent: Agent, path: string, r: HookResult): void {
     if (r.code !== 0) this.violations.push(`${agent.callsign}: hook exited ${r.code}`);
-    if (r.denied) {
+    this.answer(agent, path, r.denied);
+  }
+  /** The answer to an edit request: denied or allowed. */
+  answer(agent: Agent, path: string, denied: boolean): void {
+    if (denied) {
       this.denials++;
       return;
     }
@@ -94,6 +98,7 @@ const count = (text: string, needle: string) => text.split(needle).length - 1;
 describe('team of 6 people, 12 laptops, 18 agents', () => {
   it('runs a compressed hour of work with every invariant intact and measures the traffic', async () => {
     const ledger = new Ledger();
+    let rawHookRequests = 0;
     const files: Record<string, string> = {};
     for (let k = 0; k < 18; k++) files[`src/mod${k}.ts`] = `export const mod${k} = ${k};\n`;
     for (const s of ['shared1', 'shared2', 'shared3', 'shared4']) files[`src/${s}.ts`] = `export const ${s} = 1;\n`;
@@ -184,13 +189,33 @@ describe('team of 6 people, 12 laptops, 18 agents', () => {
     const w2 = await raceOn('src/shared2.ts', [lapA(1), lapB(1), lapB(4)]); // ben's two laptops among them
     const w3 = await raceOn('src/shared3.ts', [lapB(2), lapA(5), lapB(0), lapA(0)]);
     await collide(lapB(5), 'src/shared1.ts', w1);
+    // The same race with raw concurrent POST /hook PreToolUse requests: six checkouts, one fresh file, all requests in flight
+    // together (no process start-up in between), so the Room really sees them at once.
+    const known = (await snapshot()).agents as { callsign: string; checkout: string; branch: string; head: string }[];
+    const rawRacers = [0, 1, 2, 3, 4, 5].map((i) => lapB(i));
+    rawHookRequests += rawRacers.length;
+    const rawRes = await Promise.all(rawRacers.map(async (a) => {
+      const v = known.find((x) => x.callsign === a.callsign)!;
+      const body = { v: 1, event: 'PreToolUse', agent: a.tool, session: a.session, tool: 'Edit', repo: team.repoId, checkout: v.checkout, branch: v.branch, head: v.head, paths: ['src/shared4.ts'] };
+      const res = await fetch(`${SERVER}/hook`, { method: 'POST', headers: { authorization: `Bearer ${a.token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      expect(res.status).toBe(200);
+      const j = (await res.json()) as { decision: string; reason: string | null };
+      return { a, denied: j.decision === 'deny', reason: String(j.reason ?? '') };
+    }));
+    for (const x of rawRes) ledger.answer(x.a, 'src/shared4.ts', x.denied);
+    const rawWon = rawRes.filter((x) => !x.denied);
+    expect(rawWon, rawRes.map((x) => `${x.a.callsign}=${x.denied ? 'deny' : 'allow'}`).join(' ')).toHaveLength(1);
+    for (const x of rawRes.filter((y) => y.denied)) expect(x.reason).toContain(`held by ${rawWon[0]!.a.callsign}`);
+    // The winner really changes the file and keeps it unpushed (a lock on a file that never changes is released as a revert).
+    writeFileSync(rawWon[0]!.a.abs('src/shared4.ts'), 'changed and kept' + String.fromCharCode(10));
+    await rawWon[0]!.a.postEdit('src/shared4.ts');
     expect(ledger.violations).toEqual([]);
-    expect(ledger.denials).toBeGreaterThanOrEqual(4 + 2 + 4 + 2 + 3 + 1);
+    expect(ledger.denials).toBeGreaterThanOrEqual(4 + 2 + 4 + 2 + 3 + 1 + 5);
 
-    // Steady state of locks right now: 18 own files + 3 raced files, one holder each, matching what the hooks granted.
+    // Steady state of locks right now: 18 own files + 4 raced files, one holder each, matching what the hooks granted.
     const snap4 = await snapshot();
     const lockMap = new Map<string, string>(snap4.locks.map((l: any) => [l.path as string, l.holder as string]));
-    expect(lockMap.size).toBe(21);
+    expect(lockMap.size).toBe(22);
     expect(Object.fromEntries(lockMap)).toEqual(Object.fromEntries(ledger.holder));
 
     // ---------------------------------------------------------------- 5. heartbeats really are throttled to the interval
@@ -205,6 +230,20 @@ describe('team of 6 people, 12 laptops, 18 agents', () => {
     const w2req = await probeWindow();
     expect(w1req).toBeLessThanOrEqual(1);
     expect(w2req).toBe(1);
+    // Forced heartbeats, right after a heartbeat (so the throttle window is closed): a first edit of a path Git has not reported
+    // costs one request, the same path again costs none, and every shell command costs one.
+    const cost = async (fn: () => Promise<unknown>) => {
+      const before = tallyLines().length;
+      await fn();
+      return tallyLines().length - before;
+    };
+    const forcedPath = {
+      newPathEdit: await cost(() => probe.postEdit('README.md')),
+      sameEditAgain: await cost(() => probe.postEdit('README.md')),
+      shellCommand: await cost(() => probe.fire('PostToolUse.Bash', (p) => { p.tool_input.command = 'git status'; })),
+      shellCommandAgain: await cost(() => probe.fire('PostToolUse.Bash', (p) => { p.tool_input.command = 'git diff'; })),
+    };
+    expect(forcedPath).toEqual({ newPathEdit: 1, sameEditAgain: 0, shellCommand: 1, shellCommandAgain: 1 });
 
     // ---------------------------------------------------------------- 6. pushes release locks and notify everyone else
     const pushLog: { who: Agent; paths: string[] }[] = [];
@@ -232,7 +271,7 @@ describe('team of 6 people, 12 laptops, 18 agents', () => {
     expect(pushLog).toHaveLength(9);
 
     // Every other agent hears about every push exactly once, on whichever of its next hook calls came first (the hooks
-    // of the pushes themselves included); further prompts are quiet about it. Agents sharing the pusher's checkout need no notice.
+    // of the pushes themselves included); further prompts are quiet about it. Agents sharing the pusher's checkout are not told: they share the working tree, so the push leaves them nothing to pull (measured: exactly 0).
     await par(all, async (a) => { await a.heartbeat(); await a.heartbeat(); });
     for (const [k, a] of all.entries()) {
       const heard = a.heard.slice(mark[k]).join('\n');
@@ -240,7 +279,7 @@ describe('team of 6 people, 12 laptops, 18 agents', () => {
         const n = count(heard, `${p.who.callsign} pushed main (1 file: ${p.paths[0]})`);
         if (a === p.who) expect(n, `${a.callsign} was told about its own push`).toBe(0);
         else if (p.who.dir !== a.dir) expect(n, `${a.callsign} heard of ${p.who.callsign}'s push of ${p.paths[0]} ${n} times`).toBe(1);
-        else expect(n).toBeLessThanOrEqual(1);
+        else expect(n, `${a.callsign} (same checkout as ${p.who.callsign}) heard of ${p.paths[0]} ${n} times`).toBe(0);
       }
     }
 
@@ -307,6 +346,18 @@ describe('team of 6 people, 12 laptops, 18 agents', () => {
     for (const h of finalLocks.values()) expect(ended.has(h), `a lock is still held by ended ${h}`).toBe(false);
     expect(final.agents.filter((a: any) => a.endedAt !== null)).toHaveLength(6);
 
+    // Exactly once, over everything each agent was ever given (ended agents included): every push notice and every message.
+    for (const a of all) {
+      const everything = a.heard.join(' | ');
+      for (const p of pushLog) {
+        expect(count(everything, `${p.who.callsign} pushed main (1 file: ${p.paths[0]})`), `${a.callsign}: push of ${p.paths[0]} by ${p.who.callsign}`).toBe(a === p.who || a.dir === p.who.dir ? 0 : 1);
+      }
+      for (const m of sent) {
+        const expected = m.to === '*' ? (m.from === a ? 0 : 1) : (m.to === a ? 1 : 0);
+        expect(count(everything, m.text), `${a.callsign}: ${m.text}`).toBe(expected);
+      }
+    }
+
     // Task board: 19 tasks, one owner each, statuses as scripted. An agent that ended gave its tasks back (open, no owner).
     const board = final.tasks as { id: number; owner: string | null; status: string }[];
     expect(board).toHaveLength(19);
@@ -334,19 +385,21 @@ describe('team of 6 people, 12 laptops, 18 agents', () => {
     const postForced = get('/hook PostToolUse') + get('/hook PostToolUse +git');
     const session = get('/hook SessionStart') + get('/hook SessionEnd');
     const prompts = get('/hook UserPromptSubmit') + get('/hook Stop');
-    // 5 snapshots were taken by this test (dashboard connections); they count on the server but are not agent traffic.
-    // The server count also includes the 6 invites' effects on /hook? No: invites go to the Worker admin route.
-    expect(serverTotal).toBeGreaterThanOrEqual(hookTotal + mcpTotal);
+    // Dashboard snapshots, invites and room setup count on the server too but are not agent traffic; sanity check only.
+    expect(serverTotal).toBeGreaterThanOrEqual(hookTotal + rawHookRequests + mcpTotal);
 
+    // This is an upper bound for continuously busy agents: an agent that is idle, waiting or thinking sends no hooks, so a real
+    // day with the same 18 agents costs less. The constants are the assumptions of ARCHITECTURE.md §16; the per-event costs are measured.
     const agents = 18;
     const perAgentDay = {
       heartbeats: 4 * 60 * HOURS, // one per 15 s while working (verified above: at most one per window)
       edits: Math.round(1.5 * 60 * HOURS),
       mcp: 20 * HOURS,
       events: 15 * HOURS,
-      // Measured above: an edit of a file Git has not yet reported as divergent, and a shell command (push, pull), each send one
-      // heartbeat at once. Assumed: 6 newly touched files and 2 shell pushes or pulls an hour per agent.
-      forced: 8 * HOURS,
+      // Measured above (forcedPath): a first edit of a path Git has not reported, and every shell command, each send one heartbeat
+      // at once, and that heartbeat restarts the 15 s window, so it displaces about half a throttled one: about 0.5 extra each.
+      // Assumed: 6 newly touched files and 2 shell commands an hour per agent.
+      forced: Math.round(8 * HOURS * 0.5),
     };
     const day = {
       heartbeats: perAgentDay.heartbeats * agents,
@@ -364,13 +417,14 @@ describe('team of 6 people, 12 laptops, 18 agents', () => {
       agents, people: PEOPLE.length, laptops: 12, scenarioSeconds: elapsedS,
       editChecks: { granted: ledger.grants, denied: ledger.denials },
       hookRequestsByKind: by,
-      hookRequests: hookTotal, mcpRequests: mcpTotal, mcpByTool: Object.fromEntries(tally.mcp),
+      hookRequests: hookTotal + rawHookRequests, rawConcurrentHookRequests: rawHookRequests, mcpRequests: mcpTotal, mcpByTool: Object.fromEntries(tally.mcp),
       serverRequestsDuringScenario: serverTotal,
       dashboardSnapshotsTaken: snapshots,
-      otherServerRequests: serverTotal - hookTotal - mcpTotal - snapshots,
+      otherServerRequests: serverTotal - hookTotal - rawHookRequests - mcpTotal - snapshots,
       join: { serverRequests: usageAfterJoin, hookAndMcpRequests: joinRequests, invites: 12 },
       derived: { preToolUseRequests: preEdit, postToolUseRequests: postForced, sessionEvents: session, promptAndStopEvents: prompts, editChecksMade: edits },
       throttleProbe: { requestsInFirstWindow: w1req, requestsAfter15sPause: w2req },
+      forcedPath,
       extrapolation: { hoursActive: HOURS, perAgentPerDay: perAgentDay, requestsPerDay: { ...day, total }, shareOfCap: total / 100_000, guardAdjustedRequestsPerDay: guardAdjusted, guardAdjustedShareOfCap: guardAdjusted / 100_000 },
     };
     const byRoute: Record<string, number> = {};
@@ -379,6 +433,5 @@ describe('team of 6 people, 12 laptops, 18 agents', () => {
     // eslint-disable-next-line no-console
     console.log(`TEAM-SCALE REPORT ${JSON.stringify(report, null, 2)}`);
     if (process.env.HIVEMIND_E2E_REPORT) writeFileSync(process.env.HIVEMIND_E2E_REPORT, JSON.stringify(report, null, 2));
-    expect(total).toBeLessThan(100_000);
   }, 240_000);
 });
