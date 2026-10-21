@@ -94,24 +94,17 @@ describe('release by push', () => {
     const nico = await t.agent('nico', 'codex');
 
     expect((await ana.edit('a.txt', 'pushed by ana\n')).denied).toBe(false);
-    const lockedAt = Date.now();
     expect((await nico.preEdit('a.txt')).denied).toBe(true);
 
     // nico waits for the release (the wait tool resolves on the lock being freed, not on a timer).
     const waiting = nico.mcp('wait', { seconds: 40, for: 'release:a.txt' });
 
-    // A heartbeat while the file is dirty is what lets the hook recognise the later push (it remembers the divergent
-    // list from its last Git report; see the evidence file for the edit-then-push-within-15-s gap).
-    await ana.heartbeat();
-
-    // ana publishes. The push is noticed at once, and the other agent is told on its next event.
+    // ana publishes right after her edit. The push is noticed at once, and the other agent is told on its next event.
     await ana.shell('git push', () => ana.commitAndPush('ana changes a.txt'));
     const notice = await nico.heartbeat();
-    expect(notice.context).toMatch(/claude-ana pushed main \(1 file: a\.txt\)\. Pull before editing that file\./);
-    // A lock younger than one heartbeat interval survives a report (rule 3, covered by the server tests); once it is older,
-    // the next report releases it. On a slow machine the push report may already be late enough, so nothing is asserted in between.
-    await sleep(Math.max(0, lockedAt + 16_500 - Date.now()));
-    await ana.heartbeat();
+    expect(notice.context).toContain("claude-ana pushed main (1 file: a.txt). Pull before editing that file.");
+    // A push releases the pushed file's lock at once, even a young one.
+    expect((await nico.preEdit('a.txt')).denied).toBe(false);
 
     const woke = await waiting;
     expect(woke.value.event).toBe('release');

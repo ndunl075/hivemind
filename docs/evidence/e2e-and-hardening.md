@@ -13,13 +13,13 @@ Everything is under `test/`; nothing outside `test/` and this file was changed (
 | `test/smoke/smoke.test.ts`, `test/smoke/project.ts` | The real-agent smoke test and its setup. |
 | `test/vitest.config.ts` | `fileParallelism: false` (the files share port 8788 and the hook has a 1.5 s network budget) and a 120 s hook timeout. |
 
-Run: `npm run build` once (the server serves `dashboard/dist`), then `npm run test:e2e` (about 2 minutes: two server starts and two 16 s waits for the one-heartbeat lock age rule). CI already has `npm run test:e2e` after `npm run build` in the `test` job, so no CI change is needed.
+Run: `npm run build` once (the server serves `dashboard/dist`), then `npm run test:e2e` (about 2 minutes: two server starts and one 16 s wait in the revert test). CI already has `npm run test:e2e` after `npm run build` in the `test` job, so no CI change is needed.
 
 ## Scenarios (all pass locally on Windows)
 
 Coordination (`coordination.test.ts`):
 - **Blocked edit.** Claude holds `a.txt`; a Codex `apply_patch` on it is denied with the section 9 text, in the shape Codex accepts (only `hookSpecificOutput`); the other files stay editable; the holder may edit again; the `status` tool lists who holds what; a reserved folder blocks files inside it and a second reservation is all or nothing; advisory paths (`package.json`) are never denied.
-- **Release by push.** After a push, the other agent's next hook says "claude-ana pushed main (1 file: a.txt). Pull before editing that file."; a lock younger than one heartbeat interval stays until the next report, then a `wait` for `release:a.txt` wakes with `release`; the stale clone gets the "Before you edit" warning; after `git pull` it does not. Release by revert (`git checkout`). All locks go when the agent ends, and a message to it bounces.
+- **Release by push.** After a push, the other agent's next hook says "claude-ana pushed main (1 file: a.txt). Pull before editing that file."; the pushed file's lock is released at once (edit, then commit and push straight away, no heartbeat in between), the other agent's edit is allowed, and a `wait` for `release:a.txt` wakes with `release`; the stale clone gets the "Before you edit" warning; after `git pull` it does not. Release by revert (`git checkout`). All locks go when the agent ends, and a message to it bounces.
 - **Shell edits.** A file changed by a shell command is locked for that agent afterwards (rule 4) and blocks the other agent. Two checkouts that both changed a file get a conflict notice each, and the dashboard snapshot has a `blocked` edge.
 - **Tasks.** The task gate (no `.hivemind/project.json`, so `requireTask` is on): denied without a task, allowed after `task_add` with `claim`. 40 simultaneous claims of one task by 20 people (10 Claude, 10 Codex, registered without hooks) leave exactly one owner and 39 `taken` answers naming that owner.
 - **Messages.** Direct and broadcast messages arrive through the next hook, once; the inbox is empty afterwards; a third agent gets the broadcast but not the direct message; `inbox` works for an agent that missed its hooks; `wait` wakes on a message.
@@ -59,7 +59,7 @@ Deviation to note: the brief says not to change the Codex model. On this machine
 
 ## Findings outside `test/` (issues filed, not fixed)
 
-- #20: a push within one heartbeat interval of the edit is not recognised by the hook, so no push notice and no stale-copy data (the lock is still released). The e2e test inserts one heartbeat between edit and push to get the notice, and says why.
+- #20 (fixed on main by ab137f5, and the push release of young locks by 0885b46): the e2e test no longer needs a workaround heartbeat or a 16 s sleep for the push case; it covers edit, then immediate commit and push.
 - #21: `repoNameOf` shows the path for a Windows local-path origin (display only).
 
 ## Notes and limits
@@ -85,3 +85,7 @@ Changes (smoke was **not** run again, to spare Codex tokens; the smoke changes w
 - `wait-message` no longer sleeps: `wait` returns at once if the message already arrived, so the post can go first.
 - `describe('release by push')` is no longer concurrent. The e2e run is now about 3.5 minutes locally.
 - `.gitleaksignore`: the fingerprint of the old fake viewer token line.
+
+## Follow-up: deterministic push release
+
+`release by push` now runs edit, commit, push with no heartbeat in between and no sleep, and asserts right after the push notice that the other agent's edit is allowed. The revert test keeps its 16 s wait (reverting is not a push). Smoke was not run.
