@@ -34,12 +34,6 @@ async function agent(room: string, person: string, over: Partial<HookRequest> = 
   };
 }
 
-/** The Room is wired to this feature now; check that, so these tests exercise the real pipeline. */
-const install = (room: string) =>
-  inRoom(room, (r) => {
-    expect(typeof r.features.pushes.record).toBe('function');
-    expect(r.features.pushes.latest.toString()).toBe(createPushes((r as unknown as { roomCtx: RoomContext }).roomCtx, r.features).latest.toString());
-  });
 const notices = (room: string, callsign: string) =>
   inRoom(room, (r) => r.features.messages.takeUnread(callsign).filter((m) => m.sender === 'hivemind').map((m) => m.text));
 
@@ -61,7 +55,6 @@ describe('pushNotice', () => {
 describe('push notices', () => {
   it('goes to every other active agent in the repo, and not to the pusher, its checkout-mates or another repo', async () => {
     const room = 'push-notice';
-    await install(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     const bea = await agent(room, 'bea', { checkout: 'c1' }); // shares Ana's working copy
     const ben = await agent(room, 'ben', { checkout: 'c2' });
@@ -85,7 +78,6 @@ describe('push notices', () => {
 
   it('arrives in the other agent\'s next heartbeat, framed as a notice', async () => {
     const room = 'push-notice-hook';
-    await install(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     const ben = await agent(room, 'ben', { checkout: 'c2' });
     await ana.hook({ git: pushed('feature/x', ['a.ts']) });
@@ -95,7 +87,6 @@ describe('push notices', () => {
 
   it('says it once when the hook repeats a report the server already took', async () => {
     const room = 'push-notice-repeat';
-    await install(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     await agent(room, 'ben', { checkout: 'c2' });
     await ana.hook({ git: pushed('main', ['a.ts']) });
@@ -109,7 +100,6 @@ describe('push notices', () => {
 
   it('records a push event for the dashboard, with a pulse', async () => {
     const room = 'push-event';
-    await install(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     await ana.hook({ git: pushed('main', ['a.ts', 'b.ts']) });
     const rows = await inRoom(room, (_r, state) => state.storage.sql.exec("SELECT actor, data FROM events WHERE type = 'push'").toArray());
@@ -125,7 +115,6 @@ describe('lastPush in /hook responses', () => {
   it('returns the latest push of each edited file to other agents, within 24 hours', async () => {
     clock();
     const room = 'lastpush';
-    await install(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     const ben = await agent(room, 'ben', { checkout: 'c2' });
     await ana.hook({ git: pushed('main', ['src/a.ts', 'src/b.ts']) });
@@ -148,7 +137,6 @@ describe('lastPush in /hook responses', () => {
   it('a newer push replaces the older one, and the case of a path does not matter', async () => {
     clock();
     const room = 'lastpush-replace';
-    await install(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     const cat = await agent(room, 'cat', { checkout: 'c3' });
     const ben = await agent(room, 'ben', { checkout: 'c2' });
@@ -163,7 +151,6 @@ describe('lastPush in /hook responses', () => {
   it('survives a Room restart, and expired rows are deleted from storage', async () => {
     clock();
     const room = 'lastpush-persist';
-    await install(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     await agent(room, 'ben', { checkout: 'c2' });
     await ana.hook({ git: pushed('main', ['a.ts']) });
@@ -185,7 +172,6 @@ describe('push records are bounded', () => {
   it('rate-limits notices per agent, but still records every push', async () => {
     clock();
     const room = 'push-rate';
-    await install(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     await agent(room, 'ben', { checkout: 'c2' });
     for (let i = 0; i < 8; i++) {
@@ -203,7 +189,6 @@ describe('push records are bounded', () => {
   it('keeps at most 2000 rows per repo, dropping the oldest', async () => {
     clock();
     const room = 'push-cap';
-    await install(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     for (let b = 0; b < 5; b++) {
       at(b * 1000);
@@ -220,7 +205,6 @@ describe('push records are bounded', () => {
   it('a retried old report never replaces a newer push of the same file', async () => {
     clock();
     const room = 'push-retry';
-    await install(room);
     const ana = await agent(room, 'ana', { checkout: 'c1' });
     const cat = await agent(room, 'cat', { checkout: 'c3' });
     const ben = await agent(room, 'ben', { checkout: 'c2' });

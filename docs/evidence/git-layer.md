@@ -47,7 +47,7 @@ ARCHITECTURE.md §12 completely (`cli/hook/git.mjs`), the push side of the serve
 
 ## Known limits
 
-- **Wiring:** the Room still builds `features.pushes` from the basic `server/src/features/pushes`. Push notices and the repeat guard are live only after the architect repoints `server/src/room.ts` (see the PR description). The push tests install `createPushes` into the Room at runtime to test the real pipeline.
+- **Wiring:** the Room builds `features.pushes` from this feature (architect follow-up PR #17); the basic `features/pushes` is gone, and these tests run on the Room's real wiring.
 - Push detection follows §12 literally. If a branch's configured upstream is a different branch than the one pushed (a branch created from `origin/main` with tracking, pushed with `git push origin HEAD` to `origin/feature`), the comparison point stays `origin/main` and neither a push nor a release is seen. A `stash`, `pull` (touching a file the agent also changed) and `stash pop` between two heartbeats looks like a push of that file.
 - Shell attribution is a heuristic by design: two agents in one checkout whose shell reports straddle a heartbeat can be attributed in report order.
 - `git status --untracked-files=all` on a huge untracked tree is the slowest call; it is bounded by the hook's own time budget.
