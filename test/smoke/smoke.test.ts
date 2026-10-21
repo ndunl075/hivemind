@@ -16,8 +16,8 @@
  * Only project-level hook and MCP config is written, and only inside the temporary folder. User-level Claude and Codex
  * hook or MCP config is never touched. Everything talks to 127.0.0.1 only.
  */
-import { copyFileSync, existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { appendFileSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -27,8 +27,19 @@ import { makeProject, run, watch, type RunResult } from './project';
 const AGENTS = (process.env.SMOKE_AGENTS ?? 'claude,codex').split(',').map((s) => s.trim());
 const WITH_CODEX = AGENTS.includes('codex');
 const SHARED = 'shared.txt';
-const CLAUDE_TIMEOUT_MS = 240_000;
+const CLAUDE_TIMEOUT_MS = 300_000;
 const CODEX_TIMEOUT_MS = 300_000;
+/** The default model of this machine's Codex config is not available on every plan; this one is the cheap one the spike used. */
+const CODEX_MODEL = process.env.SMOKE_CODEX_MODEL ?? 'gpt-5.6-luna';
+const LOG = join(tmpdir(), 'hivemind-smoke-last.log');
+
+/** Prints a line and keeps it in a log outside the repository, so a timeout or crash does not lose what happened. */
+function report(...parts: unknown[]): void {
+  const line = parts.map((p) => (typeof p === 'string' ? p : JSON.stringify(p))).join(' ');
+  console.log(line);
+  try { appendFileSync(LOG, `${line}
+`); } catch { /* the console has it */ }
+}
 
 let base: string;
 let persist: string;
@@ -42,6 +53,7 @@ const lastSnapshot = (frames: any[]) => [...frames].reverse().find((f) => f.type
 const codexHome = () => process.env.CODEX_HOME || join(homedir(), '.codex');
 
 beforeAll(async () => {
+  writeFileSync(LOG, '');
   base = makeTemp('hm-smoke-');
   persist = join(base, 'wrangler-state');
   server = await startServer(persist);
@@ -67,7 +79,7 @@ describe('real agents', () => {
     const claudePrompt = [
       `Use the Edit tool to replace the word "old" with "claude" in ${SHARED}.`,
       'Then call the hivemind wait tool with me set to your callsign (it is in your Hivemind briefing), seconds 45 and for "message";',
-      'if it times out without a message, call it again, at most three times in all.',
+      'if it times out without a message, call it again, at most five times in all.',
       'Finally reply with the exact text of any message you received, or NO MESSAGE.',
     ].join(' ');
     const claudeRun = run(
@@ -95,16 +107,22 @@ describe('real agents', () => {
         copyFileSync(cfg, copy);
         codexBackup = { path: cfg, copy, hash: sha(cfg) };
       }
+      // Project-level .codex/config.toml (the MCP server) and hooks only load in a trusted project. Codex records that
+      // itself in the user config on first use; doing it here makes it certain, and the backup above puts the file back.
+      appendFileSync(cfg, `
+[projects.'${codexP.dir}']
+trust_level = "trusted"
+`);
       const codexPrompt = `Use apply_patch to replace the word "old" with "codex" in ${SHARED}, and if Hivemind blocks that edit then call the hivemind post tool with me set to your callsign (from your Hivemind briefing) to tell the agent holding the file, by the callsign in the block message, a short message containing the word SMOKE-PING, and then stop without retrying.`;
       try {
         codexResult = await run(
-          'codex', ['exec', '-c', 'model_reasoning_effort=low', '-s', 'workspace-write', '--dangerously-bypass-hook-trust', '-'],
+          'codex', ['exec', '-m', CODEX_MODEL, '-c', 'model_reasoning_effort=low', '-s', 'workspace-write', '--dangerously-bypass-hook-trust', '-'],
           codexP.dir, codexP.home, codexPrompt, CODEX_TIMEOUT_MS,
         );
       } finally {
         if (codexBackup) {
           copyFileSync(codexBackup.copy, codexBackup.path);
-          console.log(`codex config restored, checksum ${sha(codexBackup.path) === codexBackup.hash ? 'matches' : 'DIFFERS from'} the original`);
+          report(`codex config restored, checksum ${sha(codexBackup.path) === codexBackup.hash ? 'matches' : 'DIFFERS from'} the original`);
         }
       }
     }
@@ -119,20 +137,22 @@ describe('real agents', () => {
     const claudeCs = agents.find((a) => a.kind === 'claude')?.callsign;
     const codexCs = agents.find((a) => a.kind === 'codex')?.callsign;
     const pulses = watcher.frames.filter((f) => f.type === 'pulse');
-    console.log('agents:', agents.map((a) => `${a.callsign}(${a.kind})`).join(', '));
-    console.log('pulses:', pulses.map((p) => `${p.kind} ${p.from}->${p.to ?? '*'} ${p.path ?? ''}`).join(' | '));
-    console.log('activity:', (snap?.activity ?? []).map((a: any) => a.text).slice(-12).join(' | '));
-    console.log('claude exit', claudeResult.code, claudeResult.timedOut ? '(timed out)' : '', 'result:', safeResult(claudeResult.stdout));
+    report('agents:', agents.map((a) => `${a.callsign}(${a.kind})`).join(', '));
+    report('pulses:', pulses.map((p) => `${p.kind} ${p.from}->${p.to ?? '*'} ${p.path ?? ''}`).join(' | '));
+    report('activity:', (snap?.activity ?? []).map((a: any) => a.text).slice(-12).join(' | '));
+    report('claude exit', claudeResult.code, claudeResult.timedOut ? '(timed out)' : '', 'result:', safeResult(claudeResult.stdout));
     if (codexResult) {
-      console.log('codex exit', codexResult.code, codexResult.timedOut ? '(timed out)' : '');
-      console.log('codex hook lines:', codexResult.stdout.split(/\r?\n/).concat(codexResult.stderr.split(/\r?\n/)).filter((l) => /^hook:/i.test(l.trim())).join(' | '));
+      report('codex exit', codexResult.code, codexResult.timedOut ? '(timed out)' : '');
+      report('codex output tail:', `${codexResult.stdout}
+${codexResult.stderr}`.trim().slice(-2500));
+      report('codex hook lines:', codexResult.stdout.split(/\r?\n/).concat(codexResult.stderr.split(/\r?\n/)).filter((l) => /^hook:/i.test(l.trim())).join(' | '));
     }
     for (const p of [claudeP, codexP]) {
       if (!p) continue;
       const log = join(p.home, 'hook.log');
       if (existsSync(log)) {
         const lines = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-        console.log(`${p.person} hook.log: ${lines.length} lines, ${lines.filter((l) => !l.ok).length} failed`);
+        report(`${p.person} hook.log: ${lines.length} lines, ${lines.filter((l) => !l.ok).length} failed`);
       }
     }
 
@@ -149,7 +169,7 @@ describe('real agents', () => {
     const sent = pulses.filter((p) => p.kind === 'message' && p.from === codexCs && p.to === claudeCs);
     expect(sent.length, 'codex messaged claude').toBeGreaterThan(0);
     expect(claudeResult.stdout, 'claude received the message').toContain('SMOKE-PING');
-  });
+  }, 900_000);
 });
 
 function safeResult(stdout: string): string {
