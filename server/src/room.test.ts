@@ -430,6 +430,29 @@ describe('budget guard', () => {
     expect((await hook(a, 'sa', {})).mode).toBe('off');
   });
 
+  it('keeps every counted request across an eviction, and still resets on a new day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+    const room = 'guard-persist';
+    const a = await agentToken(room, 'ana');
+    for (let i = 0; i < 7; i++) await hook(a, 'sa', {});
+    const counted = await inRoom(room, (r) => r.budget.requests);
+    expect(counted).toBeGreaterThanOrEqual(7);
+    // No housekeeping interval has elapsed, so only per-request persistence can survive this.
+    await evictDurableObject(roomStub(room));
+    expect(await inRoom(room, (r) => r.budget.requests)).toBe(counted);
+    await hook(a, 'sa', {});
+    await evictDurableObject(roomStub(room));
+    expect(await inRoom(room, (r) => r.budget.requests)).toBe(counted + 1);
+    // Next UTC day: reset to 1, and the old day's key is gone.
+    vi.setSystemTime(Date.parse('2026-10-22T00:00:05Z'));
+    await hook(a, 'sa', {});
+    expect(await inRoom(room, (r) => r.budget.requests)).toBe(1);
+    await evictDurableObject(roomStub(room));
+    expect(await inRoom(room, (r) => r.budget.requests)).toBe(1);
+    expect(await inRoom(room, (r) => [...(r as unknown as Meta).meta.keys()].filter((k) => k.startsWith('budget:')))).toEqual(['budget:2026-10-22']);
+  });
+
   it('flushes the counter and reloads it after a restart', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(T0);

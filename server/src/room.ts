@@ -59,7 +59,6 @@ export class Room extends DurableObject<Env> {
   private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSnapshotAt = 0;
   private lastHousekeeping = 0;
-  private lastBudgetFlush = 0;
   private readonly burst = new Map<string, { start: Millis; count: number }>();
   private readonly messageTimes = new Map<string, Millis[]>();
 
@@ -98,7 +97,7 @@ export class Room extends DurableObject<Env> {
 
     const today = utcDate(this.now());
     this.budget = new BudgetCounter(this.now(), Number(this.meta.get(`budget:${today}`) ?? 0), today);
-    this.lastBudgetFlush = this.now();
+    this.dropOldBudgetKeys(`budget:${today}`);
     this.lastHousekeeping = this.now();
     this.eventSeq = Number(sql.exec('SELECT COALESCE(MAX(seq), 0) AS m FROM events').toArray()[0]?.m ?? 0);
 
@@ -275,7 +274,8 @@ export class Room extends DurableObject<Env> {
 
   /** Budget guard (§16): count the request, restore a guard-set mode after midnight, switch to warn at 95%. */
   private onRequest(): void {
-    this.budget.record(this.now());
+    const { rolledOver } = this.budget.record(this.now());
+    this.persistBudget(rolledOver);
     this.restoreModeIfNewDay();
     const today = this.budget.date;
     if (this.budget.level().warn && this.mode() === 'enforce' && this.meta.get('guard_switch_date') !== today) {
@@ -285,6 +285,21 @@ export class Room extends DurableObject<Env> {
       this.emit({ type: 'mode.guard', actor: null, text: 'Daily request budget is almost used: room switched to warn mode' });
       this.announce('Hivemind is close to its daily request budget. Heartbeats are off and the room switched to warn mode: locks are heads-up only until the budget resets at 00:00 UTC.');
     }
+  }
+
+  /**
+   * Writes the counter on every request (one small in-DO SQLite row), so an eviction can't lose counts. setMeta skips
+   * the write when the value is unchanged. Old days' keys are dropped on rollover and at boot.
+   */
+  private persistBudget(dropOld: boolean): void {
+    const key = `budget:${this.budget.date}`;
+    this.setMeta(key, String(this.budget.requests));
+    this.budget.dirty = false;
+    if (dropOld) this.dropOldBudgetKeys(key);
+  }
+
+  private dropOldBudgetKeys(keep: string): void {
+    for (const k of [...this.meta.keys()]) if (k.startsWith('budget:') && k !== keep) this.delMeta(k);
   }
 
   private restoreModeIfNewDay(): void {
@@ -302,13 +317,9 @@ export class Room extends DurableObject<Env> {
   private afterRequest(): void {
     const now = this.now();
     this.agents.flush();
-    if (now - this.lastBudgetFlush >= HOUSEKEEPING_EVERY_MS) {
-      this.lastBudgetFlush = now;
-      this.setMeta(`budget:${this.budget.date}`, String(this.budget.requests));
-      for (const k of [...this.meta.keys()]) if (k.startsWith('budget:') && k !== `budget:${this.budget.date}`) this.delMeta(k);
-    }
     if (now - this.lastHousekeeping >= HOUSEKEEPING_EVERY_MS) {
       this.lastHousekeeping = now;
+      this.dropOldBudgetKeys(`budget:${this.budget.date}`);
       for (const a of this.agents.reap().newlyEnded) this.cleanupEnded(a);
       this.pruneSettings();
     }
