@@ -39,7 +39,7 @@ describe('protocol', () => {
     expect((await post('/mcp', token, { jsonrpc: '2.0', method: 'notifications/initialized' })).status).toBe(202);
   });
 
-  it('GET and DELETE are 405; bad JSON is a parse error; batches answer each request', async () => {
+  it('GET and DELETE are 405; bad JSON is a parse error; batches are rejected', async () => {
     const token = await agentToken('mcp-misc', 'ana');
     expect((await get('/mcp', token)).status).toBe(405);
     const del = await SELF.fetch('https://example.com/mcp', { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
@@ -52,9 +52,8 @@ describe('protocol', () => {
       { jsonrpc: '2.0', method: 'notifications/initialized' },
       { jsonrpc: '2.0', id: 2, method: 'server/discover' },
     ]);
-    const out = (await batch.json()) as { id: number; result?: unknown; error?: { code: number } }[];
-    expect(out.map((o) => o.id)).toEqual([1, 2]);
-    expect(out[1]?.error?.code).toBe(-32601);
+    expect(batch.status).toBe(400);
+    expect(((await batch.json()) as { error: { code: number } }).error.code).toBe(-32600);
   });
 
   it('lists every tool with a description, a title and an input schema that requires me (except register)', async () => {
@@ -301,5 +300,62 @@ describe('tools', () => {
     const a = await join('tool-proto', 'ana');
     expect((await call(a.token, 'constructor', { me: a.cs })).rpcError?.code).toBe(-32602);
     expect((await call(a.token, '__proto__', { me: a.cs })).rpcError?.code).toBe(-32602);
+  });
+});
+
+describe('review fixes', () => {
+  it('rejects the tools of an ended agent before running them, without touching it', async () => {
+    const room = 'ended-me';
+    const ana = await join(room, 'ana');
+    await ana.hook({ event: 'SessionEnd', endReason: 'exit' });
+    const before = await inRoom(room, (r) => r.agents.get(ana.cs)?.lastEvent);
+    await new Promise((r) => setTimeout(r, 20));
+    for (const [name, args] of [['status', {}], ['task_add', { tasks: [{ title: 'Ghost work' }] }], ['post', { to: 'all', text: 'hi' }]] as const) {
+      const r = await ana.call(name, args);
+      expect(r.isError, name).toBe(true);
+      expect(r.value).toContain('has ended');
+    }
+    expect(await inRoom(room, (r) => r.agents.get(ana.cs)?.lastEvent)).toBe(before);
+    expect(await inRoom(room, (r) => r.features.tasks.list())).toEqual([]);
+  });
+
+  it('wait refuses more than 45 seconds with -32602', async () => {
+    const a = await join('wait-max', 'ana');
+    const r = await a.call('wait', { seconds: 46 });
+    expect(r.rpcError?.code).toBe(-32602);
+    expect(r.rpcError?.message).toContain('at most 45');
+    const tools = (await rpc(a.token, 'tools/list')).result.tools as { name: string; inputSchema: { properties: { seconds?: { maximum?: number } } } }[];
+    expect(tools.find((t) => t.name === 'wait')?.inputSchema.properties.seconds?.maximum).toBe(45);
+  });
+
+  it('a batch of waits is refused at once instead of running one after another', async () => {
+    const a = await join('batch-wait', 'ana');
+    const started = Date.now();
+    const res = await post('/mcp', a.token, [1, 2, 3].map((id) => ({
+      jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'wait', arguments: { me: a.cs, seconds: 1 } },
+    })));
+    expect(res.status).toBe(400);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('does not report a message event when no message is left to deliver', async () => {
+    const room = 'wait-empty';
+    const ana = await join(room, 'ana');
+    const waiter = ana.call('wait', { seconds: 5 });
+    await new Promise((r) => setTimeout(r, 50));
+    await inRoom(room, (r) => {
+      r.features.messages.notify(ana.cs, 'gone before the wait returns');
+      r.features.messages.takeUnread(ana.cs); // read elsewhere in the same turn
+    });
+    expect((await waiter).value).toEqual({ event: 'timeout' });
+  });
+
+  it('caps MCP registrations at three unhooked agents per person', async () => {
+    const token = await agentToken('register-cap', 'nico');
+    for (let i = 0; i < 3; i++) expect((await call(token, 'register', { kind: 'claude' })).isError).toBe(false);
+    const fourth = await call(token, 'register', { kind: 'claude' });
+    expect(fourth.isError).toBe(true);
+    expect(fourth.value).toContain('already have 3 agents registered without hooks');
+    expect((await call(await agentToken('register-cap', 'sam'), 'register', { kind: 'claude' })).isError).toBe(false);
   });
 });

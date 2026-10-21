@@ -1,7 +1,7 @@
 /** Helpers for the MCP, tasks and messages tests (Workers pool only; not imported by the Worker). */
 import { SELF } from 'cloudflare:test';
 import type { HookRequest, HookResponse } from '../../../../shared/contracts';
-import { agentToken, hook, post } from '../../test-helpers';
+import { agentToken, gateOff, hook, post } from '../../test-helpers';
 
 export interface ToolOutcome<T = unknown> {
   /** The parsed JSON result, or the error text of an isError result. */
@@ -46,7 +46,7 @@ export interface Joined {
 export async function join(room: string, person: string, over: Partial<HookRequest> = {}): Promise<Joined> {
   const token = await agentToken(room, person);
   const session = `s-${person}`;
-  const res = await hook(token, session, { event: 'SessionStart', ...over });
+  const res = await hook(token, session, { event: 'SessionStart', ...gateOff, ...over });
   const j: Joined = {
     token, cs: res.callsign, session,
     hook: (o = {}) => hook(token, session, { ...over, ...o }),

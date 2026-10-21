@@ -1,7 +1,7 @@
 import { env, listDurableObjectIds, SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import {
-  ADMIN_TOKEN, agentToken, connectViewer, get, hook, inRoom, post, REPO, TOKEN_SECRET, viewerToken,
+  ADMIN_TOKEN, agentToken, connectViewer, gateOff, get, hook, inRoom, post, REPO, TOKEN_SECRET, viewerToken,
 } from './test-helpers';
 import { signAgentToken, verifyAgentToken, verifyViewerToken } from './tokens';
 
@@ -149,7 +149,7 @@ describe('admin routes', () => {
     expect((await admin('POST', '/admin/rooms/lifecycle/invite', { person: 'Bad Person' })).status).toBe(400);
 
     const bob = (await (await admin('POST', '/admin/rooms/lifecycle/invite', { person: 'bob' })).json() as { agentToken: string }).agentToken;
-    await hook(invited.agentToken, 'sa', editPath('f.ts'));
+    await hook(invited.agentToken, 'sa', { ...gateOff, ...editPath('f.ts') });
     expect((await admin('POST', '/admin/rooms/lifecycle/revoke', { person: 'ana' })).status).toBe(200);
     expect((await get('/whoami', invited.agentToken)).status).toBe(401);
     expect((await get('/whoami', bob)).status).toBe(200);

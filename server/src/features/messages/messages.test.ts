@@ -138,13 +138,15 @@ describe('Stop', () => {
     expect((await nico.call('inbox')).value.unread.map((m: { text: string }) => m.text)).toEqual(['Second thought']);
   });
 
-  it('a notice addressed to one agent counts as direct; a broadcast notice does not', async () => {
+  it('notices from hivemind never block, whether addressed to one agent or to all', async () => {
     const room = 'stop-notice';
     const ana = await join(room, 'ana');
     await inRoom(room, (r) => r.features.messages.notify('*', 'Room mode changed'));
     expect((await ana.hook({ event: 'Stop' })).decision).toBe('none');
     await inRoom(room, (r) => r.features.messages.notify(ana.cs, 'Your lock was taken'));
-    expect((await ana.hook({ event: 'Stop' })).decision).toBe('block');
+    expect(await inRoom(room, (r) => r.features.messages.hasUnreadDirect(ana.cs))).toBe(false);
+    expect((await ana.hook({ event: 'Stop' })).decision).toBe('none');
+    expect((await ana.hook({ event: 'PostToolUse' })).context).toContain('> Your lock was taken');
   });
 });
 
@@ -250,5 +252,50 @@ describe('limits', () => {
     expect(counts.oldest).toBe('a101');
     expect(counts.deliveries).toBe(200); // a101..a300 were delivered; a1..a100 went with their messages
     expect(counts.unread).toBe(300);
+  });
+});
+
+describe('retention of unread direct messages', () => {
+  it('trims delivered messages, broadcasts and notices before any unread direct message', async () => {
+    const room = 'retention-order';
+    const ana = await join(room, 'ana');
+    const nico = await join(room, 'nico');
+    const kept = await inRoom(room, (r) => {
+      const m = r.features.messages as FullMessages;
+      m.send(ana.cs, nico.cs, 'unread-first'); // the oldest message, still unread
+      for (let i = 0; i < 300; i++) m.send(ana.cs, '*', `bc${i}`);
+      for (let i = 0; i < 300; i++) m.notify(nico.cs, `notice${i}`);
+      return m.takeUnread(nico.cs, { directOnly: true }).map((x) => x.text);
+    });
+    // 601 messages were trimmed to 500 without losing the unread direct message, and ana got no bounce.
+    expect(kept).toEqual(['unread-first']);
+    expect(String((await ana.hook({ event: 'PostToolUse' })).context)).not.toContain('dropped unread');
+  });
+
+  it('bounces an unread direct message to its sender when retention has to drop it', async () => {
+    const room = 'retention-bounce';
+    const ana = await join(room, 'ana');
+    const nico = await join(room, 'nico');
+    await inRoom(room, (r) => {
+      const m = r.features.messages as FullMessages;
+      for (let i = 1; i <= LIMITS.keepMessages + 1; i++) m.send(ana.cs, nico.cs, `unread ${i}`);
+    });
+    const left = await inRoom(room, (r) => r.features.messages.takeUnread(nico.cs, { directOnly: true }).map((x) => x.text));
+    expect(left).not.toContain('unread 1');
+    expect(left).toContain('unread 2');
+    const notice = (await ana.hook({ event: 'PostToolUse' })).context as string;
+    expect(notice).toContain('Your message to claude-nico was dropped unread');
+    expect(notice).toContain('unread 1');
+  });
+});
+
+describe('text hygiene', () => {
+  it('strips C1 control characters', async () => {
+    const room = 'c1';
+    const ana = await join(room, 'ana');
+    const nico = await join(room, 'nico');
+    const c1 = [0x80, 0x90, 0x9b, 0x9f].map((c) => String.fromCharCode(c)).join('');
+    await ana.call('post', { to: nico.cs, text: `a${c1}b` });
+    expect((await nico.call('inbox')).value.unread[0].text).toBe('ab');
   });
 });

@@ -5,7 +5,7 @@
  *
  * - Direct messages and notices go to one callsign; broadcasts ('*') go to every other agent that was already
  *   running when they were sent (and, for notices, the repo and exclude filters).
- * - Only direct messages can block Stop; that rule is applied by the pipeline through hasUnreadDirect().
+ * - Only direct messages (from an agent) can block Stop, via hasUnreadDirect(); notices from 'hivemind' never do.
  * - A message to an agent that has ended bounces back to the sender as a notice, and so do unread direct messages
  *   of an agent that ends before reading them (forget()).
  * - Everything is framed by format(): attributed, quoted, never an instruction.
@@ -91,19 +91,56 @@ export const createMessages: FeatureFactory<'messages'> = (ctx) => {
     const out: Msg[] = [];
     for (const m of messages) {
       if (seen?.has(m.id)) continue;
-      if (directOnly && m.recipient !== callsign) continue;
+      if (directOnly && (m.recipient !== callsign || m.sender === 'hivemind')) continue;
       if (deliverable(m, callsign, a.startedAt, a.repo)) out.push(m);
     }
     return out;
   };
 
+  /** A direct message from an agent that its recipient has not read: the one kind retention must not drop silently. */
+  const isUnreadDirect = (m: Msg): boolean =>
+    m.recipient !== '*' && m.sender !== 'hivemind' && delivered.get(m.recipient)?.has(m.id) !== true;
+
+  const removeMessages = (list: Msg[]): void => {
+    const gone = new Set(list.map((m) => m.id));
+    for (let i = messages.length - 1; i >= 0; i--) if (gone.has((messages[i] as Msg).id)) messages.splice(i, 1);
+    for (const id of gone) {
+      ctx.sql.exec('DELETE FROM messages WHERE id = ?', id).toArray();
+      ctx.sql.exec('DELETE FROM deliveries WHERE message_id = ?', id).toArray();
+      for (const set of delivered.values()) set.delete(id);
+    }
+  };
+
+  let trimming = false;
+  let holdTrim = false;
+  /**
+   * Retention (§4): at most 500 messages. Oldest first, delivered messages, broadcasts and notices go before anything
+   * else; an unread direct message from an agent is dropped only when nothing else is left, and then it bounces to
+   * its sender as a notice.
+   */
   const trim = (): void => {
-    if (messages.length <= LIMITS.keepMessages) return;
-    const drop = messages.splice(0, messages.length - LIMITS.keepMessages);
-    const lastDropped = drop[drop.length - 1]?.id ?? 0;
-    ctx.sql.exec('DELETE FROM messages WHERE id <= ?', lastDropped).toArray();
-    ctx.sql.exec('DELETE FROM deliveries WHERE message_id <= ?', lastDropped).toArray();
-    for (const set of delivered.values()) for (const m of drop) set.delete(m.id);
+    if (trimming || messages.length <= LIMITS.keepMessages) return;
+    trimming = true;
+    const lost: Msg[] = [];
+    try {
+      let excess = messages.length - LIMITS.keepMessages;
+      // Oldest first within a rank: 0 = delivered, broadcast or read notice; 1 = unread notice to an agent (rarely
+      // matters, but system notices outrank chatter); 2 = unread direct message from an agent (bounced when dropped).
+      const rank = (m: Msg): number => (isUnreadDirect(m) ? 2 : m.sender === 'hivemind' && m.recipient !== '*' && delivered.get(m.recipient)?.has(m.id) !== true ? 1 : 0);
+      const order = messages.map((m) => ({ m, r: rank(m) })).sort((a, b) => a.r - b.r || a.m.id - b.m.id).slice(0, excess).map((x) => x.m);
+      lost.push(...order.filter(isUnreadDirect));
+      removeMessages(order);
+    } finally {
+      trimming = false;
+    }
+    holdTrim = true;
+    for (const m of lost) {
+      if (!isActive(m.sender)) continue;
+      // Stored without trimming, so the notice cannot push another unread message out in turn.
+      notify(m.sender, `Your message to ${m.recipient} was dropped unread: the room keeps only the last ${LIMITS.keepMessages} messages. Send it again if it still matters.
+Your message: ${snippet(m.text, 200)}`);
+    }
+    holdTrim = false;
   };
 
   const view = ({ id, sender, recipient, text, createdAt }: Msg): MessageView => ({ id, sender, recipient, text, createdAt });
@@ -116,7 +153,7 @@ export const createMessages: FeatureFactory<'messages'> = (ctx) => {
     ctx.sql.exec('INSERT INTO messages (id, sender, recipient, text, created_at, exclude, repo) VALUES (?,?,?,?,?,?,?)',
       msg.id, msg.sender, msg.recipient, msg.text, msg.createdAt,
       msg.skip.size > 0 ? JSON.stringify([...msg.skip]) : null, msg.repo).toArray();
-    trim();
+    if (!holdTrim) trim();
     return msg;
   };
 

@@ -63,6 +63,9 @@ export interface TaskOps {
 
 export type FullTasks = TasksApi & TaskOps & BriefingContributor;
 
+/** Task text written by another agent, shown as quoted data. */
+const quoted = (s: string): string => `"${s.replace(/"/g, "'")}"`;
+
 const GATE_TEXT = 'Claim a task first (`task_claim`, or `task_add` with `claim: true`).';
 
 const clone = (t: TaskView): TaskView => ({ ...t, dependsOn: [...t.dependsOn], areas: t.areas.map((a) => ({ ...a })) });
@@ -102,6 +105,9 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
     tasks.set(t.id, t);
     nextId = Math.max(nextId, t.id + 1);
   }
+  // Ids never repeat, even after the highest task was pruned: the next id is kept in meta (added to the §4 keys).
+  const storedNext = Number(ctx.sql.exec("SELECT value FROM meta WHERE key = 'next_task_id'").toArray()[0]?.value ?? 0);
+  if (Number.isInteger(storedNext)) nextId = Math.max(nextId, storedNext);
 
   const save = (t: TaskView): void => {
     tasks.set(t.id, t);
@@ -197,7 +203,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
       if (!settings.requireTask) return { allow: true };
       for (const t of tasks.values()) if (t.status === 'in_progress' && t.owner === actor.callsign) return { allow: true };
       const open = [...tasks.values()].filter((t) => t.status === 'open').slice(0, 3);
-      const hint = open.length > 0 ? ` Open tasks: ${open.map((t) => `#${t.id} ${t.title}`).join(' · ')}.` : '';
+      const hint = open.length > 0 ? ` Open tasks (titles written by teammates' agents): ${open.map((t) => `#${t.id} ${quoted(t.title)}`).join(' · ')}.` : '';
       return { allow: false, reason: `${GATE_TEXT}${hint}` };
     },
 
@@ -228,6 +234,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
       }
       // Validate everything first, so a bad entry creates nothing.
       const repo: RepoId | null = ctx.resolveRepo(actor, options.repo);
+      if (options.repo && repo === null) throw new TaskError(`Unknown repo "${options.repo}". Use the repo's name or root commit.`);
       const clean = specs.map((s, i) => {
         const where = specs.length > 1 ? ` (task ${i + 1})` : '';
         const title = cleanLine(s.title, MAX_TITLE);
@@ -241,11 +248,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
           if (folder === null) throw new TaskError(`Invalid area "${raw}"${where}: use a repo-relative folder such as src/auth/.`);
           if (!folders.some((f) => f.toLowerCase() === folder.toLowerCase())) folders.push(folder);
         }
-        if (folders.length > 0 && repo === null) {
-          throw new TaskError(options.repo
-            ? `Unknown repo "${options.repo}". Use the repo's name or root commit.`
-            : 'Say which repo the areas are in: pass `repo` (its name or root commit).');
-        }
+        if (folders.length > 0 && repo === null) throw new TaskError('Say which repo the areas are in: pass `repo` (its name or root commit).');
         const deps: number[] = [];
         const rawDeps = s.dependsOn ?? [];
         if (rawDeps.length > MAX_DEPENDENCIES) throw new TaskError(`At most ${MAX_DEPENDENCIES} dependencies per task${where}.`);
@@ -263,7 +266,9 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
       for (const c of clean) {
         const norm = normalizeTitle(c.title);
         const live = [...tasks.values()].filter(isOpenOrActive);
-        const dup = live.find((t) => normalizeTitle(t.title) === norm || jaccard(t.title, c.title) >= LIMITS.duplicateJaccard);
+        // Word overlap only against live tasks; an equal title also matches a done task (its status shows in `existing`).
+        const dup = live.find((t) => normalizeTitle(t.title) === norm || jaccard(t.title, c.title) >= LIMITS.duplicateJaccard)
+          ?? [...tasks.values()].find((t) => t.status === 'done' && normalizeTitle(t.title) === norm);
         if (dup && !options.force) {
           out.duplicates.push({ title: c.title, existing: clone(dup) });
           continue;
@@ -286,6 +291,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
           type: 'task.added', actor: actor.callsign, text: `${actor.callsign} added #${t.id} ${t.title}`, data: { id: t.id },
         });
       }
+      ctx.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('next_task_id', ?)", String(nextId)).toArray();
       prune();
       return out;
     },
@@ -307,7 +313,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
         features.locks.releaseForTask(id); // the previous owner's folder reservations for this task
         features.messages.notify(
           owner,
-          `${actor.callsign} took over your task #${id} "${t.title}" (reason: ${reason}). Its folder reservations were released. Stop working on it, and pull before touching related files.`,
+          `${actor.callsign} took over your task #${id} ${quoted(t.title)} (their reason, as written by their agent: ${quoted(reason)}). Its folder reservations were released. Stop working on it, and pull before touching related files.`,
         );
       } else {
         const unfinished = unfinishedDeps(t);
@@ -357,7 +363,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
 
     briefingLines(actor: Actor): string[] {
       const mine = inProgressFor(actor.callsign);
-      return mine ? [`Your task: #${mine.id} ${mine.title}`] : [];
+      return mine ? [`Your task: #${mine.id} ${quoted(mine.title)}`] : [];
     },
   };
   return api;

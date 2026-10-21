@@ -24,7 +24,7 @@
 
 ## Checks run
 - `npm run typecheck`: pass.
-- `npm test`: shared 6, Workers 124, dashboard 87, all pass. `npm run test:workers`: 124 pass (was 62 before this change).
+- `npm test`: shared 6, Workers 138, dashboard 87, all pass (`npm run test:workers` was 62 before this change).
 
 ## Brief criteria and the tests that cover them
 - 100 concurrent claims leave one owner: `tasks.test.ts` "100 concurrent claims" (50 agents, two claims each, over HTTP; exactly one owner, every other answer is `taken`).
@@ -39,7 +39,20 @@
 - Also covered: areas reserved and freed, takeover with moved reservations and notice, ended owners (explicit end and 12 h silence), restart persistence of tasks, quote-breaking message text, retention to 500 messages with deliveries.
 
 ## Changes outside my folders (for the architect to confirm)
-- `server/src/test-helpers.ts`: `hookBody` now sends `settings: { requireTask: false }` by default. With the real gate on (default `requireTask: true`), the Wave 1 tests in `room.test.ts` and `worker.test.ts` that edit without a task asserted the placeholder "gate off" behaviour and failed (15 tests). Tests of the gate pass `settings: { requireTask: true }`. Other Wave 2 branches that add edit-based tests will hit the same default and can rely on this helper.
+- `server/src/test-helpers.ts`: `hookBody` sends no settings by default (the real default `requireTask: true` applies); a new explicit `gateOff` (`settings: { requireTask: false }`) is spread into the first hook call of the Wave 1 tests that edit without a task (`room.test.ts`, `worker.test.ts`, `review.test.ts`). A test with no settings field asserts the default denies.
+- `room.test.ts`: the Wave 1 assertion that a notice blocks Stop was changed to the architect's decision (notices from hivemind never block Stop).
+
+## Review round (Tier 2 of PR #11)
+1. A `me` whose derived state is ended gets an isError result before any tool runs and is not touched.
+2. Only messages from agents block Stop; `hasUnreadDirect` and `takeUnread({ directOnly })` ignore notices.
+3. Retention drops delivered messages, broadcasts and read notices first, then unread notices, and an unread direct message last, bouncing it to its sender as a notice (stored without trimming, so it cannot cascade).
+4. Task titles, takeover reasons and the briefing line are framed as quoted data from teammates' agents. The pipeline's briefing and the locks denial text still print task titles unquoted: see the PR's requests for the architect.
+5. `wait.seconds` has `maximum: 45` in the schema; more is -32602.
+6. JSON-RPC batches are rejected (400, -32600).
+7. An equal normalized title also matches a done task (returned as a duplicate with its status); overlap is compared with live tasks only.
+8. Explicit `gateOff`, see above.
+
+Nits: a skipped `claim: true` on a duplicate says so in a `note`; the next task id is kept in the `meta` table (`next_task_id`); an unknown `repo` is an error for `task_add` even without areas; `register` is capped at 3 unhooked agents per person; C1 controls (U+0080 to U+009F) are stripped; a wake that finds no message to deliver reports `timeout`, never an empty `message`.
 
 ## Not done here (belongs to other features)
 - The §11 notice "a lock you waited for was released" needs the lock denial path to remember who was blocked; it is not part of `LocksApi`/`MessagesApi` as frozen. `wait` with `release:<path>` covers the case where the agent is actually waiting.

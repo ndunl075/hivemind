@@ -10,6 +10,7 @@
  * (the §21 fallback) is a change in one place.
  */
 import type { AgentRecord, ToolName } from '../../../../shared/contracts';
+import { deriveState } from '../../../../shared/state';
 import protocol from '../../../../shared/protocol.md';
 import { type RoomServices } from '../../services';
 import { errorResponse, json } from '../../util';
@@ -63,6 +64,9 @@ async function callTool(svc: RoomServices, person: string, id: JsonRpcId, params
     agent = svc.agents.get(me);
     if (!agent || agent.person !== person) {
       return { jsonrpc: '2.0', id, result: textResult(`"${me}" is not your callsign. Use the one in your Hivemind briefing.`, true) };
+    }
+    if (deriveState(agent, svc.ctx.now()).state === 'ended') {
+      return { jsonrpc: '2.0', id, result: textResult(`${me} has ended (its session is over or silent for 12 hours), so it cannot use Hivemind tools. Its next hook event revives it; otherwise start a new session.`, true) };
     }
   }
   const problem = validateSchema(tool.inputSchema, args, 'arguments');
@@ -138,14 +142,8 @@ export async function handleMcp(svc: RoomServices, person: string, request: Requ
   } catch {
     return json(rpcError(null, -32700, 'Parse error'), 400);
   }
-  if (Array.isArray(body)) {
-    const out: unknown[] = [];
-    for (const m of body) {
-      const r = isRequest(m) ? await safeDispatch(svc, person, m) : (m && typeof m === 'object' && 'result' in m ? null : rpcError(null, -32600, 'Invalid Request'));
-      if (r !== null) out.push(r);
-    }
-    return writeMcpResponse(out.length > 0 ? out : null);
-  }
+  // Batches were removed from MCP in 2025-06-18, and a batch could park several waits one after another.
+  if (Array.isArray(body)) return json(rpcError(null, -32600, 'Batch requests are not supported: send one request per POST.'), 400);
   if (!isRequest(body)) return json(rpcError(null, -32600, 'Invalid Request'), 400);
   return writeMcpResponse(await safeDispatch(svc, person, body));
 }

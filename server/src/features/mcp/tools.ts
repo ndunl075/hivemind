@@ -15,6 +15,9 @@ import type { FullMessages } from '../messages';
 import type { FullTasks } from '../tasks';
 import { RpcError, ToolError, type ToolContext, type ToolDef } from './types';
 
+/** MCP-registered agents are not enforced, so one person may not create many of them. */
+const MAX_UNHOOKED_PER_PERSON = 3;
+
 const tasksOf = (svc: RoomServices): FullTasks => svc.features.tasks as FullTasks;
 const messagesOf = (svc: RoomServices): FullMessages => svc.features.messages as FullMessages;
 
@@ -118,7 +121,9 @@ function waitTool(tc: ToolContext, args: Record<string, unknown>): Promise<ToolR
 
   return svc.wait(me.callsign, keys, seconds).then((r) => {
     if (r.event === 'timeout') return { event: 'timeout' as const };
-    return r.event === 'message' ? withMessages() : { event: r.event };
+    if (r.event !== 'message') return { event: r.event };
+    const delivered = withMessages();
+    return delivered.messages && delivered.messages.length > 0 ? delivered : { event: 'timeout' as const };
   });
 }
 
@@ -169,9 +174,12 @@ export const TOOLS: Record<ToolName, ToolDef> = {
       if (claim && specs.length !== 1) throw new ToolError('claim: true works with a single task. Add one task with claim, or add several and `task_claim` one.');
       const actor = actorOf(me);
       const out = tasks.add(actor, specs, { force: args.force === true, ...(typeof args.repo === 'string' ? { repo: args.repo } : {}) });
-      const result: ToolResults['task_add'] = { created: out.created, duplicates: out.duplicates };
+      const result: ToolResults['task_add'] & { note?: string } = { created: out.created, duplicates: out.duplicates };
       const first = out.created[0];
       if (claim && first) result.claim = tasks.claim(actor, first.id, {});
+      else if (claim && out.duplicates[0]) {
+        result.note = `claim skipped: the task duplicates #${out.duplicates[0].existing.id} (${out.duplicates[0].existing.status}). Use task_claim on that one, or repeat with force: true to create yours.`;
+      }
       tc.svc.changed();
       return result;
     },
@@ -370,7 +378,7 @@ export const TOOLS: Record<ToolName, ToolDef> = {
       type: 'object',
       properties: {
         me: meSchema,
-        seconds: { type: 'number', minimum: 0, description: `How long to wait, at most ${LIMITS.waitMaxSeconds}.` },
+        seconds: { type: 'number', minimum: 0, maximum: LIMITS.waitMaxSeconds, description: `How long to wait, at most ${LIMITS.waitMaxSeconds}.` },
         for: { type: 'string', description: '"message", "release:<path>" or "task:<id>".' },
       },
       required: ['me', 'seconds'],
@@ -406,6 +414,10 @@ export const TOOLS: Record<ToolName, ToolDef> = {
         if (repos.size === 1) repo = [...repos][0] as string;
       }
       const known = svc.ctx.agents().find((a) => a.repo === repo && a.repoName);
+      const mine = svc.ctx.agents().filter((a) => a.person === person && !a.hooked && a.session === null && deriveState(a, svc.ctx.now()).state !== 'ended');
+      if (mine.length >= MAX_UNHOOKED_PER_PERSON) {
+        throw new ToolError(`You already have ${mine.length} agents registered without hooks (${mine.map((a) => a.callsign).join(', ')}). Reuse one of those callsigns.`);
+      }
       let agent: AgentRecord;
       try {
         agent = svc.agents.register({ kind, person, session: null, hooked: false, repo, repoName: known?.repoName ?? null });

@@ -7,7 +7,7 @@
 import { cleanText } from '../../util';
 
 // eslint-disable-next-line no-misleading-character-class
-const INVISIBLE = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u00ad]/g;
+const INVISIBLE = /[\u0080-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u00ad]/g;
 const LINE_BREAKS = /\r\n|\r|\u2028|\u2029|\u0085|\u000b|\u000c/g;
 
 /** Multi-line text: line breaks folded to '\n', control and invisible characters removed, capped. */
