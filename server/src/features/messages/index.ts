@@ -138,9 +138,8 @@ export const createMessages: FeatureFactory<'messages'> = (ctx) => {
       ctx.sql.exec('DELETE FROM messages WHERE recipient = ?', callsign).toArray();
     },
 
-    // Extra, used by the status tool: how many messages are waiting, without delivering them.
     unreadCount(callsign: Callsign): number {
       return unreadFor(callsign, false).length;
     },
-  } as ReturnType<FeatureFactory<'messages'>>;
+  } satisfies ReturnType<FeatureFactory<'messages'>>;
 };

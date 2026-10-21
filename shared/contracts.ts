@@ -246,7 +246,7 @@ export type UnlockRequest =
 
 export interface UnlockResponse {
   released: LockView[];
-  /** Present when unlocking a file also dropped a covering folder reservation. */
+  /** Present when the unlock also dropped other locks than the one named (a covering or nested folder or file lock). */
   note?: string;
 }
 
@@ -597,9 +597,9 @@ export interface MessagesApi {
   hasUnreadDirect(callsign: Callsign): boolean;
   /** Formats messages for injection into an agent's context (§11). */
   format(messages: MessageView[], now: Millis): string;
-  /** Unread count without delivering (for status). */
+  /** Unread direct and broadcast messages (including notices) for a callsign, without delivering them; 0 if unknown. */
   unreadCount(callsign: Callsign): number;
-  /** Drop direct messages and delivery state for an ended agent before its callsign is reused (§5). */
+  /** Drop an agent's direct messages and delivery state: when it's deleted, and before its callsign is reused (§4, §5). */
   forget(callsign: Callsign): void;
 }
 

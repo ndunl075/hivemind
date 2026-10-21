@@ -55,7 +55,6 @@ function statusTool(tc: ToolContext): ToolResults['status'] {
     .filter((x) => x.d.state !== 'ended')
     .map((x) => ({ ...view(x.a), state: x.d.state, takeable: x.d.takeable }));
   const locks = features.locks.list();
-  const counter = features.messages as { unreadCount?: (cs: Callsign) => number };
   return {
     you: view(me),
     mode: ctx.mode(),
@@ -63,7 +62,7 @@ function statusTool(tc: ToolContext): ToolResults['status'] {
     tasks: tasks.list().filter((t) => t.status === 'open' || t.status === 'in_progress'),
     heldByOthers: locks.filter((l) => l.holder !== me.callsign),
     yours: locks.filter((l) => l.holder === me.callsign),
-    unread: counter.unreadCount ? counter.unreadCount(me.callsign) : features.messages.hasUnreadDirect(me.callsign) ? 1 : 0,
+    unread: features.messages.unreadCount(me.callsign),
   };
 }
 

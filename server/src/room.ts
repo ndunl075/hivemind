@@ -443,7 +443,7 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  private unlock(person: string, b: Partial<UnlockRequest> & { path?: unknown; agent?: unknown }): UnlockResponse & { note?: string } {
+  private unlock(person: string, b: Partial<UnlockRequest> & { path?: unknown; agent?: unknown }): UnlockResponse {
     const hasPath = b.path !== undefined;
     const hasAgent = b.agent !== undefined;
     if (hasPath === hasAgent) throw new HttpError(400, 'give exactly one of path or agent');
