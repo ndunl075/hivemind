@@ -22,7 +22,6 @@ export function guardLevel(requests: number, cap: number = LIMITS.dailyRequestCa
 export class BudgetCounter {
   date: string;
   requests: number;
-  dirty = false;
 
   constructor(now: number, requests = 0, date?: string) {
     this.date = date ?? utcDate(now);
@@ -39,7 +38,6 @@ export class BudgetCounter {
       rolledOver = true;
     }
     this.requests += 1;
-    this.dirty = true;
     return { rolledOver };
   }
 
