@@ -42,7 +42,7 @@ export interface InternalClaims {
 
 const SNAPSHOT_MIN_GAP_MS = 1000 / LIMITS.snapshotsPerSecond;
 const HOUSEKEEPING_EVERY_MS = 60_000;
-/** The request counter is written to storage once per this many requests (rounded up; ARCHITECTURE.md §16). */
+/** The request counter is written to storage at most once per this many requests, ahead of the count (ARCHITECTURE.md §16). */
 const BUDGET_PERSIST_EVERY = 25;
 const DEFAULT_MODE: RoomMode = 'enforce';
 
@@ -63,6 +63,8 @@ export class Room extends DurableObject<Env> {
   private lastHousekeeping = 0;
   /** The counter value stored in meta (>= the in-memory count; see persistBudget). */
   private budgetReserved = 0;
+  /** Requests counted since this boot; sizes the persisted margin. */
+  private budgetSinceBoot = 0;
   private readonly burst = new Map<string, { start: Millis; count: number }>();
   private readonly messageTimes = new Map<string, Millis[]>();
 
@@ -102,6 +104,7 @@ export class Room extends DurableObject<Env> {
     const today = utcDate(this.now());
     this.budget = new BudgetCounter(this.now(), Number(this.meta.get(`budget:${today}`) ?? 0), today);
     this.budgetReserved = this.budget.requests;
+    this.budgetSinceBoot = 0;
     this.dropOldBudgetKeys(`budget:${today}`);
     this.lastHousekeeping = this.now();
     this.eventSeq = Number(sql.exec('SELECT COALESCE(MAX(seq), 0) AS m FROM events').toArray()[0]?.m ?? 0);
@@ -293,16 +296,20 @@ export class Room extends DurableObject<Env> {
   }
 
   /**
-   * Persists the counter in blocks of BUDGET_PERSIST_EVERY: when the count passes the stored value, store it rounded up
-   * to the next multiple. After an eviction the reload can overcount by fewer than N, never undercount, and the counter
-   * costs one row write per N requests. Old days' keys are dropped on UTC rollover.
+   * Persists the counter ahead of the in-memory count: when the count passes the stored value, store count plus a margin
+   * of min(BUDGET_PERSIST_EVERY, requests since boot). After an eviction the reload can overcount by at most the requests
+   * handled since the last boot (and never more than BUDGET_PERSIST_EVERY - 1), so repeated evictions don't compound,
+   * and a long-running Room writes the counter about once per BUDGET_PERSIST_EVERY requests. Never undercounts.
+   * Old days' keys are dropped on UTC rollover.
    */
   private persistBudget(rolledOver: boolean): void {
     const key = `budget:${this.budget.date}`;
+    this.budgetSinceBoot += 1;
     if (rolledOver) this.budgetReserved = 0;
     if (this.budget.requests > this.budgetReserved) {
-      this.budgetReserved = Math.ceil(this.budget.requests / BUDGET_PERSIST_EVERY) * BUDGET_PERSIST_EVERY;
-      this.setMeta(key, String(this.budgetReserved));
+      const reserve = this.budget.requests + Math.min(BUDGET_PERSIST_EVERY, Math.max(1, this.budgetSinceBoot)) - 1;
+      this.setMeta(key, String(reserve));
+      this.budgetReserved = reserve; // only after the write succeeded
     }
     if (rolledOver) this.dropOldBudgetKeys(key);
   }

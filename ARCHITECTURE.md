@@ -779,7 +779,7 @@ Vanilla TypeScript and SVG, bundled with esbuild into Worker static assets, with
 | Agent crashes or the laptop sleeps | It shows as *quiet*, and after 15 minutes its holdings are takeable. After 12 hours it ends and releases everything. |
 | Person thinking for 20 minutes, a long build, or a permission prompt | Same as above. Nothing is taken without an explicit, notified `take`. |
 | A rejected or failed edit leaves a lock | Released at the agent's next heartbeat, because the file isn't divergent. |
-| Room object restarts or is evicted | Tables reload from SQLite. Up to a minute of in-memory timestamps and counters may be lost, and parked `wait` calls time out. No holdings are lost. |
+| Room object restarts or is evicted | Tables reload from SQLite. Up to a minute of in-memory timestamps and counters may be lost (the daily request counter is not: it's persisted ahead of the count and can only overcount, by at most 24), and parked `wait` calls time out. No holdings are lost. |
 | Two agents claim or lock at the same instant | Decided in order inside the single-threaded Room. One wins. |
 | Laptop without Hivemind, or repo not mapped | The hook exits silently. That person's agents are invisible but unaffected. |
 | Hooks don't fire in a surface (for example, the Codex app) | That agent can still `register` through MCP. It shows as *not enforced* on the dashboard and in briefings. `hivemind doctor`'s in-app self-test catches this before a team relies on it. |
@@ -806,7 +806,7 @@ Cloudflare's Workers Free plan allows about **100,000 Worker requests a day** an
 
 At 16 agents and 3 edits a minute, the same rates come to about 88,000. That's why there's a guard.
 
-**Budget guard** `[DECIDED]`: the Room counts requests per UTC day in memory, persisted to `meta` once per 25 requests (stored rounded up to the next multiple of 25, so an eviction can overcount by fewer than 25 but never undercounts, and the counter costs about 1 row write per 25 requests), and raises `heartbeatMs` as the count climbs:
+**Budget guard** `[DECIDED]`: the Room counts requests per UTC day in memory, persisted to `meta` ahead of the count, about once per 25 requests (the stored value is the count plus a margin of at most 24, and never more than the requests since the last restart, so an eviction can overcount by at most that margin, never undercounts, and repeated restarts don't compound), and raises `heartbeatMs` as the count climbs:
 - 30 s at 60% of the cap,
 - 60 s at 80%,
 - at 95%, the server returns `heartbeatMs: 0`, which tells hooks to stop heartbeats, and the room switches itself to `warn` mode, announced to every agent. Without heartbeats, locks can't be released by pushing, so denials would go stale; `warn` turns them into heads-ups. `heartbeatMs: 0` suppresses every heartbeat, including the forced one after a shell command and the Git state on `UserPromptSubmit` and `Stop`; edits, session events and tools are still served. The switch is recorded in `meta` as `mode_by_guard`, holding the mode it replaced. Any mode a teammate sets clears `mode_by_guard`. At the first request after 00:00 UTC, if `mode_by_guard` is still present, that previous mode is restored and normal heartbeats resume.
@@ -823,7 +823,7 @@ The dashboard footer shows the day's usage. If a team outgrows the free plan, Wo
   | Write | Rows a day |
   |---|---|
   | Agent rows, flushed once a minute | ~5,800 |
-  | Counter flushes | ~1,400 |
+  | Counter writes (about 1 per 25 requests at the ~36,000 requests a day above; more with restarts or more traffic) | ~1,400 |
   | New locks and releases | ~4,000 |
   | Tasks | ~500 |
   | Messages and deliveries | ~2,000 |
