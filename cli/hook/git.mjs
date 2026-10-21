@@ -74,7 +74,32 @@ export async function identity(cwd) {
 }
 
 /**
- * Resolve symlinks of the nearest existing ancestor (the file itself may not exist yet).
+ * Only branch and head, for the periodic refresh (identity does four more Git calls).
+ * @param {string} root
+ * @returns {Promise<{ branch: string | null; head: string | null }>}
+ */
+export async function refs(root) {
+  const [branch, head] = await Promise.all([
+    orNull(git(['symbolic-ref', '--short', '-q', 'HEAD'], root)),
+    orNull(git(['rev-parse', '--short', 'HEAD'], root)),
+  ]);
+  return { branch, head };
+}
+
+/**
+ * Windows extended-length prefixes: `\\?\C:\x` becomes `C:\x`, `\\?\UNC\h\s` becomes `\\h\s`.
+ * @param {string} p
+ * @returns {string}
+ */
+function stripExtended(p) {
+  if (/^\\\\[?.]\\UNC\\/i.test(p)) return `\\\\${p.slice(8)}`;
+  if (/^\\\\[?.]\\/.test(p)) return p.slice(4);
+  return p;
+}
+
+/**
+ * The path with symlinks resolved and the on-disk letter case, for the nearest existing ancestor
+ * (the file itself may not exist yet). Falls back to the input.
  * @param {string} p
  * @returns {string}
  */
@@ -84,7 +109,7 @@ function real(p) {
   const tail = [];
   for (;;) {
     try {
-      return resolve(realpathSync.native(cur), ...tail);
+      return resolve(stripExtended(realpathSync.native(cur)), ...tail);
     } catch {
       const up = dirname(cur);
       if (up === cur) return p;
@@ -97,14 +122,14 @@ function real(p) {
 /**
  * @param {string} root
  * @param {string} abs
- * @returns {string | null} repo-relative POSIX path, or null when outside the checkout, at the root, or under .git/
+ * @returns {string | null} repo-relative POSIX path, or null when outside the checkout, at the root, or inside any `.git`
  */
 function relInside(root, abs) {
   const rel = relative(root, abs);
   if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
-  const posix = rel.split(sep).join('/');
-  if (posix === '.git' || posix.startsWith('.git/')) return null;
-  return posix;
+  const segments = rel.split(sep);
+  if (segments.some((s) => s.toLowerCase() === '.git')) return null;
+  return segments.join('/');
 }
 
 /**
@@ -116,10 +141,13 @@ function relInside(root, abs) {
 export function normalize(root, cwd, paths) {
   /** @type {string[]} */
   const out = [];
+  const realRoot = real(stripExtended(root));
+  const realCwd = real(stripExtended(cwd));
   for (const p of paths) {
     if (typeof p !== 'string' || p === '') continue;
-    const abs = resolve(cwd, p);
-    const rel = relInside(root, abs) ?? relInside(real(root), real(abs));
+    const clean = stripExtended(p);
+    // On-disk case and resolved links first; the literal path is the fallback.
+    const rel = relInside(realRoot, real(resolve(realCwd, clean))) ?? relInside(resolve(root), resolve(cwd, clean));
     if (rel && !out.includes(rel)) out.push(rel);
   }
   return out;
@@ -167,4 +195,4 @@ export async function staleWarnings(_root, _branch, _lastPush) {
   return [];
 }
 
-export default { identity, normalize, state, staleWarnings };
+export default { identity, refs, normalize, state, staleWarnings };

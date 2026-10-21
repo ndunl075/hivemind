@@ -22,7 +22,7 @@ function isObj(v) {
 /**
  * Subagent events (agent_id present) are treated as the parent session's: session_id is used as is.
  * @param {unknown} raw
- * @returns {ParsedHookInput}
+ * @returns {ParsedHookInput & { source: string | null }}
  */
 export function parse(raw) {
   if (!isObj(raw)) throw new Error('hook payload is not an object');
@@ -45,6 +45,8 @@ export function parse(raw) {
     isHivemindTool,
     stopActive: raw.stop_hook_active === true,
     endReason: typeof raw.reason === 'string' ? raw.reason : null,
+    /** SessionStart only: startup, resume, clear or compact. */
+    source: typeof raw.source === 'string' ? raw.source : null,
   };
 }
 

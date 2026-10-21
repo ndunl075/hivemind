@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { GIT_ENV_OVERRIDES, identity, normalize, staleWarnings, state } from './git.mjs';
+import { GIT_ENV_OVERRIDES, identity, normalize, refs, staleWarnings, state } from './git.mjs';
 
 let base;
 let repo;
@@ -68,6 +68,35 @@ describe('git.mjs', () => {
     const link = join(base, 'link-to-proj');
     symlinkSync(repo, link, 'junction');
     expect(normalize(repo, link, ['brand-new/file.ts', join(link, 'other.ts')])).toEqual(['brand-new/file.ts', 'other.ts']);
+  });
+
+  it('normalize: drops .git at any depth and in any letter case', () => {
+    expect(normalize(repo, repo, ['.GIT/config', 'sub/.Git/HEAD', 'vendor/pkg/.git/index', join(repo, 'x', '.gIt', 'y'), 'sub/.github/ci.yml']))
+      .toEqual(['sub/.github/ci.yml']);
+  });
+
+  it('normalize: forward slashes in absolute paths', () => {
+    const fwd = `${repo.split('\\').join('/')}/sub/f.ts`;
+    expect(normalize(repo, repo, [fwd])).toEqual(['sub/f.ts']);
+  });
+
+  it.runIf(process.platform === 'win32')('normalize: mixed-case drive and path use the on-disk case', () => {
+    const lowerDrive = repo[0].toLowerCase() + repo.slice(1);
+    expect(normalize(repo, lowerDrive, [join(lowerDrive, 'a.txt')])).toEqual(['a.txt']);
+    expect(normalize(repo, repo, [join(repo.toUpperCase(), 'A.TXT')])).toEqual(['a.txt']);
+    expect(normalize(repo.toUpperCase(), repo.toLowerCase(), ['sub/new.ts'])).toEqual(['sub/new.ts']);
+    expect(normalize(repo, repo, [join(repo, '.GIT', 'config')])).toEqual([]);
+  });
+
+  it.runIf(process.platform === 'win32')('normalize: extended-length \\\\?\\ paths', () => {
+    expect(normalize(repo, repo, [`\\\\?\\${join(repo, 'a.txt')}`, `\\\\?\\${join(repo, 'sub', 'n.ts')}`])).toEqual(['a.txt', 'sub/n.ts']);
+    expect(normalize(`\\\\?\\${repo}`, repo, ['a.txt'])).toEqual(['a.txt']);
+  });
+
+  it('refs: branch and head only', async () => {
+    const r = await refs(repo);
+    expect(r.branch).toBe('main');
+    expect(r.head).toBe(rootSha.slice(0, 7));
   });
 
   it('state: divergent files from git status; baseline only without previous', async () => {

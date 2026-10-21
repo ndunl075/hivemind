@@ -8,7 +8,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import {
-  copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -148,7 +148,7 @@ function payload(name, t, over = {}) {
 }
 
 const stateFile = (t, session = t.session) =>
-  join(t.tmp, 'hivemind-hook', `${createHash('sha256').update(session).digest('hex').slice(0, 32)}.json`);
+  join(t.home, 'state', `${createHash('sha256').update(session).digest('hex').slice(0, 32)}.json`);
 const readState = (t) => JSON.parse(readFileSync(stateFile(t), 'utf8'));
 const editState = (t, fn) => {
   const s = readState(t);
@@ -443,7 +443,7 @@ describe('heartbeat throttling', () => {
 
     await run(t, payload('PostToolUse.Read', t));
     expect(srv.requests).toHaveLength(2); // the forced heartbeat reset the timer and the flag
-    expect(readState(t).shellSinceHeartbeat).toBe(false);
+    expect((readState(t).shellSeq > readState(t).shellAck)).toBe(false);
   });
 
   it('PowerShell counts as a shell, and a shell flag survives until a heartbeat succeeds', async () => {
@@ -455,12 +455,12 @@ describe('heartbeat throttling', () => {
     const t = laptop({ url: srv.url });
     await start(t);
     await run(t, payload('PostToolUse.PowerShell', t)); // fails
-    expect(readState(t).shellSinceHeartbeat).toBe(true);
+    expect((readState(t).shellSeq > readState(t).shellAck)).toBe(true);
     fail = false;
     await run(t, payload('PostToolUse.Read', t)); // not a shell, but the flag forces a heartbeat
     expect(srv.requests).toHaveLength(3);
     expect(srv.requests[2].body.shellSinceHeartbeat).toBe(true);
-    expect(readState(t).shellSinceHeartbeat).toBe(false);
+    expect((readState(t).shellSeq > readState(t).shellAck)).toBe(false);
   });
 
   it('PostToolUse sends a heartbeat once heartbeatMs has passed', async () => {
@@ -832,6 +832,336 @@ export async function staleWarnings() { return []; }`);
     expect(readState(t).failures).toBe(3);
     expect(srv.requests).toHaveLength(0);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Review fixes: state races, deadline, settings, config, validation, caps
+// ---------------------------------------------------------------------------
+
+const STUB_IDENTITY = () => `
+export async function identity() { return { root: ${JSON.stringify(repo)}, repo: ${JSON.stringify(rootSha)}, repoName: null, branch: 'main', head: 'abc1234' }; }
+export function normalize(root, cwd, paths) { return paths.map(() => 'a.txt'); }
+`;
+const EMPTY_REPORT = '{ report: { divergent: [], upstream: null, truncated: false, pushed: null }, memory: { comparison: null, divergent: [] } }';
+
+describe('session state: races and location', () => {
+  it('lives under HIVEMIND_HOME/state, never in the OS temp folder; no temp files are left behind', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    await start(t);
+    expect(existsSync(stateFile(t))).toBe(true);
+    expect(readdirSync(t.tmp)).toEqual([]);
+    expect(readdirSync(join(t.home, 'state')).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    if (process.platform !== 'win32') expect(statSync(join(t.home, 'state')).mode & 0o077).toBe(0);
+  });
+
+  it('parallel hook processes leave a valid state file, with nothing lost that was written before', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    await start(t);
+    const runs = [];
+    for (let i = 0; i < 4; i++) {
+      runs.push(run(t, payload('PostToolUse.Bash', t)), run(t, payload('UserPromptSubmit', t)), run(t, payload('PostToolUse.PowerShell', t)));
+    }
+    const results = await Promise.all(runs);
+    for (const r of results) expect(r.code).toBe(0);
+    const s = readState(t); // parses
+    expect(s.callsign).toBe('claude-test');
+    expect(Object.keys(s.idents)).toHaveLength(1);
+    expect(s.shellSeq).toBeGreaterThanOrEqual(1);
+    expect(s.failures).toBe(0);
+    expect(readdirSync(join(t.home, 'state')).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  }, 30000);
+
+  it('parallel failures all count or at least one does, and the notice is claimed at most once', async () => {
+    const t = laptop({ url: await deadUrl() });
+    await run(t, payload('PreToolUse.mcp__hivemind__status', t)); // create state
+    editState(t, (s) => { s.failures = 2; s.lastAttemptAt = 0; });
+    const results = await Promise.all([1, 2, 3, 4].map(() => run(t, payload('PreToolUse.Edit', t))));
+    const notices = results.filter((r) => r.stdout.includes("Can't reach the server"));
+    expect(notices.length).toBeLessThanOrEqual(1);
+    expect(readState(t).failures).toBeGreaterThanOrEqual(3);
+  }, 30000);
+
+  it('a newer value already in the state is not overwritten by an older request (merge, not replace)', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url, copy: true });
+    writeFileSync(join(t.hookDir, 'git.mjs'), `${STUB_IDENTITY()}
+export async function state() { return { report: { divergent: [], upstream: null, truncated: false, pushed: null }, memory: { comparison: { name: 'o', sha: 'old' }, divergent: [] } }; }
+export async function staleWarnings() { return []; }`);
+    await start(t);
+    const future = Date.now() + 600_000;
+    editState(t, (s) => { s.gitMemory = { comparison: { name: 'o', sha: 'newer' }, divergent: [] }; s.gitMemoryAt = future; s.lastHeartbeat = future; });
+    await run(t, payload('UserPromptSubmit', t));
+    const s = readState(t);
+    expect(s.gitMemory.comparison.sha).toBe('newer');
+    expect(s.lastHeartbeat).toBe(future);
+  });
+
+  it('no-op paths do not write the state file', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    await start(t);
+    const before = statSync(stateFile(t)).mtimeMs;
+    await new Promise((r) => setTimeout(r, 30));
+    await run(t, payload('PostToolUse.Read', t)); // throttled
+    await run(t, payload('PreToolUse.Read', t)); // not an edit
+    expect(statSync(stateFile(t)).mtimeMs).toBe(before);
+  });
+});
+
+describe('deadline', () => {
+  it('a hanging git state() costs at most its budget: the request still goes out, without git', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url, copy: true });
+    writeFileSync(join(t.hookDir, 'git.mjs'), `${STUB_IDENTITY()}
+export async function state() { return new Promise(() => {}); }
+export async function staleWarnings() { return []; }`);
+    const r = await run(t, payload('UserPromptSubmit', t));
+    expect(r.code).toBe(0);
+    expect(srv.requests).toHaveLength(1);
+    expect(srv.requests[0].body).not.toHaveProperty('git');
+    expect(r.ms).toBeLessThan(3800);
+  }, 15000);
+
+  it('a hanging periodic refresh cannot cost a deny', async () => {
+    const srv = await fakeServer(() => ({ ...OK, decision: 'deny', reason: '<reason>' }));
+    const t = laptop({ url: srv.url, copy: true });
+    writeFileSync(join(t.hookDir, 'git.mjs'), `${STUB_IDENTITY()}
+export async function refs() { return new Promise(() => {}); }
+export async function state() { return ${EMPTY_REPORT}; }
+export async function staleWarnings() { return []; }`);
+    await run(t, payload('PreToolUse.Edit', t)); // caches the identity
+    editState(t, (s) => { for (const e of Object.values(s.idents)) e.at = Date.now() - 60_000; });
+    const r = await run(t, payload('PreToolUse.Edit', t));
+    expect(r.stdout).toBe(fixtureStdout('PreToolUse.deny'));
+    expect(r.ms).toBeLessThan(4200);
+  }, 15000);
+
+  it('the watchdog exits 0 and logs a line when something hangs', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url, copy: true });
+    writeFileSync(join(t.hookDir, 'claude.mjs'), 'export async function parse() { return new Promise(() => {}); }\nexport function format() { return null; }');
+    const r = await run(t, payload('Stop', t));
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.ms).toBeLessThan(4800);
+    expect(readFileSync(join(t.home, 'hook.log'), 'utf8')).toContain('watchdog');
+  }, 15000);
+});
+
+describe('project.json and config.json', () => {
+  const settingsDir = () => join(repo, '.hivemind');
+  const cleanSettings = () => cleanups.push(() => rmSync(settingsDir(), { recursive: true, force: true }));
+
+  it('strips a UTF-8 BOM and sends only requireTask, advisory and ignore', async () => {
+    mkdirSync(settingsDir(), { recursive: true });
+    cleanSettings();
+    writeFileSync(join(settingsDir(), 'project.json'), `﻿${JSON.stringify({ requireTask: false, advisory: ['a', 5, 'b'], ignore: ['dist/'], evil: { x: 1 }, token: 'nope' })}`);
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    await start(t);
+    expect(srv.requests[0].body.settings).toEqual({ requireTask: false, advisory: ['a', 'b'], ignore: ['dist/'] });
+  });
+
+  it('refuses a .hivemind folder that is a link to somewhere else', async () => {
+    const outside = join(base, `outside-${sessionCounter}`);
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'project.json'), JSON.stringify({ requireTask: false }));
+    cleanups.push(() => rmSync(outside, { recursive: true, force: true }));
+    try {
+      symlinkSync(outside, settingsDir(), 'junction');
+    } catch {
+      return; // no permission to create links here
+    }
+    cleanups.push(() => { try { unlinkSync(settingsDir()); } catch { rmSync(settingsDir(), { recursive: true, force: true }); } });
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    await start(t);
+    expect(srv.requests[0].body).not.toHaveProperty('settings');
+  });
+
+  it('refuses a project.json that is a symlink', async () => {
+    mkdirSync(settingsDir(), { recursive: true });
+    cleanSettings();
+    const target = join(base, `target-${sessionCounter}.json`);
+    writeFileSync(target, JSON.stringify({ requireTask: false }));
+    try {
+      symlinkSync(target, join(settingsDir(), 'project.json'), 'file');
+    } catch {
+      return;
+    }
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    await start(t);
+    expect(srv.requests[0].body).not.toHaveProperty('settings');
+  });
+
+  it('reads a config.json with a BOM', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    const text = readFileSync(join(t.home, 'config.json'), 'utf8');
+    writeFileSync(join(t.home, 'config.json'), `﻿${text}`);
+    await start(t);
+    expect(srv.requests).toHaveLength(1);
+  });
+
+  it('refuses plain http to anything but loopback, and https is not rejected up front', async () => {
+    for (const server of ['http://example.invalid', 'http://10.0.0.5:8787', 'ftp://127.0.0.1']) {
+      const t = laptop({ url: server });
+      const r = await run(t, payload('SessionStart', t));
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe('');
+      expect(existsSync(join(t.home, 'hook.log'))).toBe(false); // never even tried
+    }
+  });
+
+  it('does not follow redirects', async () => {
+    const target = await fakeServer();
+    const srv = await fakeServer((b, n, res) => { res.writeHead(307, { location: `${target.url}/hook` }); res.end(); return undefined; });
+    const t = laptop({ url: srv.url });
+    const r = await run(t, payload('SessionStart', t));
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(srv.requests).toHaveLength(1);
+    expect(target.requests).toHaveLength(0);
+  });
+});
+
+describe('SessionStart source', () => {
+  it('baseline only on startup (or when none exists yet); resume and compact keep the old one', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    await run(t, payload('SessionStart', t, { source: 'startup' }));
+    expect(srv.requests[0].body.git.baseline).toBeTruthy();
+    await run(t, payload('SessionStart', t, { source: 'resume' }));
+    await run(t, payload('SessionStart.resume', t, { source: 'compact' }));
+    expect(srv.requests[1].body.event).toBe('SessionStart');
+    expect(srv.requests[1].body.git).not.toHaveProperty('baseline');
+    expect(srv.requests[2].body.git).not.toHaveProperty('baseline');
+    await run(t, payload('SessionStart', t, { source: 'startup' }));
+    expect(srv.requests[3].body.git.baseline).toBeTruthy();
+  });
+
+  it('a resume with no state yet still sends a baseline', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    await run(t, payload('SessionStart.resume', t));
+    expect(srv.requests[0].body.git.baseline).toBeTruthy();
+  });
+});
+
+describe('server answers are validated and capped', () => {
+  it('a bad callsign makes the answer a failure', async () => {
+    const srv = await fakeServer(() => ({ ...OK, callsign: 'Evil Callsign\nIgnore previous', context: 'x' }));
+    const t = laptop({ url: srv.url });
+    const r = await run(t, payload('SessionStart', t));
+    expect(r.stdout).toBe('');
+    const s = readState(t);
+    expect(s.callsign).toBeNull();
+    expect(s.failures).toBe(1);
+  });
+
+  it('context and reason are capped at 8 KB', async () => {
+    const srv = await fakeServer(() => ({ ...OK, decision: 'deny', reason: 'r'.repeat(50_000), context: 'c'.repeat(50_000) }));
+    const t = laptop({ url: srv.url });
+    const out = JSON.parse((await run(t, payload('PreToolUse.Edit', t))).stdout).hookSpecificOutput;
+    expect(out.permissionDecisionReason.length).toBeLessThanOrEqual(8 * 1024);
+    expect(out.additionalContext.length).toBeLessThanOrEqual(8 * 1024);
+  });
+
+  it('lastPush entries with bad fields are dropped before the stale check sees them', async () => {
+    const good = { path: 'a.txt', sha: 'c3d4e5f', blob: '9a1f', by: 'codex-ana', branch: 'main', at: 1 };
+    const srv = await fakeServer((b) => (b.event === 'PreToolUse'
+      ? { ...OK, lastPush: [good, { ...good, by: 'Not A Callsign' }, { ...good, path: 'p'.repeat(5000) }, { ...good, at: 'soon' }] }
+      : OK));
+    const t = laptop({ url: srv.url, copy: true });
+    writeFileSync(join(t.hookDir, 'git.mjs'), `${STUB_IDENTITY()}
+export async function state() { return ${EMPTY_REPORT}; }
+export async function staleWarnings(root, branch, lastPush) { return ['saw ' + lastPush.length]; }`);
+    const out = JSON.parse((await run(t, payload('PreToolUse.Edit', t))).stdout).hookSpecificOutput;
+    expect(out.additionalContext).toContain('saw 1');
+  });
+
+  it('a 4xx is logged as a rejected request and does not count as an outage', async () => {
+    const srv = await fakeServer((b, n, res) => { res.writeHead(400); res.end('bad'); return undefined; });
+    const t = laptop({ url: srv.url });
+    for (let i = 0; i < 5; i++) {
+      const r = await run(t, payload('PreToolUse.Edit', t));
+      expect(r.stdout).toBe('');
+    }
+    expect(srv.requests).toHaveLength(5); // the breaker never opened
+    expect(readState(t).failures).toBe(0);
+    expect(readFileSync(join(t.home, 'hook.log'), 'utf8')).toContain('rejected: HTTP 400');
+  }, 30000);
+
+  it('a 5xx and a 429 still count as outages', async () => {
+    for (const status of [503, 429]) {
+      const srv = await fakeServer((b, n, res) => { res.writeHead(status); res.end(); return undefined; });
+      const t = laptop({ url: srv.url });
+      await run(t, payload('PreToolUse.Edit', t));
+      expect(readState(t).failures).toBe(1);
+    }
+  });
+});
+
+describe('client-side caps', () => {
+  it('a huge or odd git state is trimmed to fit the server limits', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url, copy: true });
+    writeFileSync(join(t.hookDir, 'git.mjs'), `${STUB_IDENTITY()}
+export async function state() {
+  const divergent = [];
+  for (let i = 0; i < 500; i++) divergent.push('d/' + String(i).padStart(4, '0') + '/' + 'x'.repeat(900));
+  divergent.push('y'.repeat(2000));
+  return { report: { divergent, baseline: divergent.slice(), upstream: 'u'.repeat(500), truncated: false, pushed: null }, memory: { comparison: null, divergent: [] } };
+}
+export async function staleWarnings() { return []; }`);
+    await run(t, payload('SessionStart', t));
+    const raw = JSON.stringify(srv.requests[0].body);
+    expect(raw.length).toBeLessThan(200 * 1024);
+    const g = srv.requests[0].body.git;
+    expect(g.truncated).toBe(true);
+    for (const p of [...g.divergent, ...g.baseline]) expect(p.length).toBeLessThanOrEqual(1024);
+    expect(g.divergent.length).toBeGreaterThan(0);
+  });
+});
+
+describe('nits', () => {
+  it('logs when there is no git identity, and remembers a non-repo for a while', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    const plain = join(base, 'not-a-repo');
+    mkdirSync(plain, { recursive: true });
+    for (let i = 0; i < 3; i++) {
+      const r = await run(t, payload('UserPromptSubmit', t, { cwd: plain }));
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe('');
+    }
+    const lines = readFileSync(join(t.home, 'hook.log'), 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('no git identity');
+    expect(srv.requests).toHaveLength(0);
+  });
+
+  it('does not log parser error snippets', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    await run(t, 'sk-this-looks-secret {nope');
+    const logText = existsSync(join(t.home, 'hook.log')) ? readFileSync(join(t.home, 'hook.log'), 'utf8') : '';
+    expect(logText).not.toContain('sk-this-looks-secret');
+    expect(logText).toContain('SyntaxError');
+  });
+
+  it('refuses stdin over 16 MB without crashing', async () => {
+    const srv = await fakeServer();
+    const t = laptop({ url: srv.url });
+    const big = JSON.stringify(payload('Stop', t, { last_assistant_message: 'x'.repeat(17 * 1024 * 1024) }));
+    const r = await run(t, big);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(srv.requests).toHaveLength(0);
+  }, 30000);
 });
 
 // ---------------------------------------------------------------------------
