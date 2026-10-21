@@ -1,0 +1,11 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.timeout",
+  "verdict": "rejected",
+  "effect": "Hook killed at its timeout (5 s); hook \"Failed\"; the tool runs.",
+  "exitCode": 0,
+  "stdout": null,
+  "stderr": null,
+  "note": "hook slept longer than its timeout"
+}

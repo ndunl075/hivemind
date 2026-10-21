@@ -1,0 +1,17 @@
+{
+  "tool": "claude",
+  "event": "PreToolUse",
+  "case": "PreToolUse.deny-with-context",
+  "verdict": "accepted",
+  "effect": "Blocked; both the reason and the additionalContext reach the model.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "deny",
+      "permissionDecisionReason": "<reason>",
+      "additionalContext": "<context>"
+    }
+  },
+  "stderr": null
+}

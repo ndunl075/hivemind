@@ -1,0 +1,10 @@
+{
+  "session_id": "<session-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "<project-dir>",
+  "scratchpad_dir": "<scratchpad-dir>",
+  "prompt_id": "<prompt-id>",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "<prompt>"
+}

@@ -1,0 +1,15 @@
+{
+  "tool": "codex",
+  "event": "PostToolUse",
+  "case": "PostToolUse.additionalContext",
+  "verdict": "accepted",
+  "effect": "Context reaches the model.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "PostToolUse",
+      "additionalContext": "<context>"
+    }
+  },
+  "stderr": null
+}

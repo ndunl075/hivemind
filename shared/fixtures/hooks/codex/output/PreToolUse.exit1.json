@@ -1,0 +1,10 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.exit1",
+  "verdict": "rejected",
+  "effect": "Hook \"Failed\"; the tool runs.",
+  "exitCode": 1,
+  "stdout": null,
+  "stderr": "<error>"
+}

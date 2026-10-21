@@ -1,0 +1,16 @@
+{
+  "tool": "codex",
+  "event": "PostToolUse",
+  "case": "PostToolUse.unknown-inner-field",
+  "verdict": "rejected",
+  "effect": "Hook \"Failed\": the additionalContext is NOT delivered.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "PostToolUse",
+      "additionalContext": "<context>",
+      "bogus": 1
+    }
+  },
+  "stderr": null
+}

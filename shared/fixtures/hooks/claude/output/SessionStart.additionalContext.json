@@ -1,0 +1,15 @@
+{
+  "tool": "claude",
+  "event": "SessionStart",
+  "case": "SessionStart.additionalContext",
+  "verdict": "accepted",
+  "effect": "Text reaches the model as session context.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "SessionStart",
+      "additionalContext": "<briefing>"
+    }
+  },
+  "stderr": null
+}

@@ -1,0 +1,17 @@
+{
+  "tool": "codex",
+  "event": "PostToolUse",
+  "case": "PostToolUse.block-with-context",
+  "verdict": "accepted",
+  "effect": "The tool result is REPLACED by the reason (\"Blocked\") and the context also reaches the model. The tool already ran.",
+  "exitCode": 0,
+  "stdout": {
+    "decision": "block",
+    "reason": "<reason>",
+    "hookSpecificOutput": {
+      "hookEventName": "PostToolUse",
+      "additionalContext": "<context>"
+    }
+  },
+  "stderr": null
+}

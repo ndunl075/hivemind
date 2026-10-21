@@ -1,0 +1,13 @@
+{
+  "tool": "codex",
+  "event": "Stop",
+  "case": "Stop.block",
+  "verdict": "accepted",
+  "effect": "The stop is blocked once and the reason is fed back as a continuation; the next Stop arrives with stop_hook_active true.",
+  "exitCode": 0,
+  "stdout": {
+    "decision": "block",
+    "reason": "<direct-message>"
+  },
+  "stderr": null
+}

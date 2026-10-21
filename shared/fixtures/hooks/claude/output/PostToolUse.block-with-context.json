@@ -1,0 +1,17 @@
+{
+  "tool": "claude",
+  "event": "PostToolUse",
+  "case": "PostToolUse.block-with-context",
+  "verdict": "accepted",
+  "effect": "Both the reason and the context reach the model; the tool result is still shown (the tool already ran).",
+  "exitCode": 0,
+  "stdout": {
+    "decision": "block",
+    "reason": "<reason>",
+    "hookSpecificOutput": {
+      "hookEventName": "PostToolUse",
+      "additionalContext": "<context>"
+    }
+  },
+  "stderr": null
+}

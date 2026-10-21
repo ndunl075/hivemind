@@ -1,0 +1,10 @@
+{
+  "tool": "claude",
+  "event": "PreToolUse",
+  "case": "PreToolUse.exit2",
+  "verdict": "accepted",
+  "effect": "Exit code 2 blocks the tool; stderr is shown to the model.",
+  "exitCode": 2,
+  "stdout": null,
+  "stderr": "<reason>"
+}

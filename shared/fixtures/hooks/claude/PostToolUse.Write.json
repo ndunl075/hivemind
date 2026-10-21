@@ -1,0 +1,24 @@
+{
+  "session_id": "<session-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "<project-dir>",
+  "scratchpad_dir": "<scratchpad-dir>",
+  "prompt_id": "<prompt-id>",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "<project-dir>\\c.txt",
+    "content": "<content>"
+  },
+  "tool_response": {
+    "type": "create",
+    "filePath": "<project-dir>\\c.txt",
+    "content": "<content>",
+    "structuredPatch": [],
+    "originalFile": null,
+    "userModified": false
+  },
+  "tool_use_id": "<tool-use-id>",
+  "duration_ms": 15
+}

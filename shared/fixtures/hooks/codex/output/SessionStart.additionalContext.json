@@ -1,0 +1,15 @@
+{
+  "tool": "codex",
+  "event": "SessionStart",
+  "case": "SessionStart.additionalContext",
+  "verdict": "accepted",
+  "effect": "Text reaches the model as developer context.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "SessionStart",
+      "additionalContext": "<briefing>"
+    }
+  },
+  "stderr": null
+}

@@ -1,0 +1,17 @@
+{
+  "tool": "claude",
+  "event": "PostToolUse",
+  "case": "PostToolUse.unknown-inner-field",
+  "verdict": "accepted",
+  "effect": "Unknown field ignored; systemMessage and additionalContext accepted.",
+  "exitCode": 0,
+  "stdout": {
+    "systemMessage": "<message>",
+    "hookSpecificOutput": {
+      "hookEventName": "PostToolUse",
+      "additionalContext": "<context>",
+      "bogus": 1
+    }
+  },
+  "stderr": null
+}

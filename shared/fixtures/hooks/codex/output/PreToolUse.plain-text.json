@@ -1,0 +1,10 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.plain-text",
+  "verdict": "rejected",
+  "effect": "Plain text on stdout is ignored on PreToolUse; the tool runs.",
+  "exitCode": 0,
+  "stdout": "<text>",
+  "stderr": null
+}

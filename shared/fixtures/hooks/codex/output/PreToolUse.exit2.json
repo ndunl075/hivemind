@@ -1,0 +1,10 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.exit2",
+  "verdict": "accepted",
+  "effect": "Exit code 2 blocks the tool and stderr becomes the reason. On Windows this works only when the PowerShell command ends with \"; exit $LASTEXITCODE\" (see exit2-without-propagation).",
+  "exitCode": 2,
+  "stdout": null,
+  "stderr": "<reason>"
+}

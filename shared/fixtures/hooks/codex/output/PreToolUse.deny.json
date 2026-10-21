@@ -1,0 +1,16 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.deny",
+  "verdict": "accepted",
+  "effect": "Tool call is blocked (\"Blocked\"); the reason is shown to the model. Works for apply_patch and Bash in every sandbox and approval mode tried.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "deny",
+      "permissionDecisionReason": "<reason>"
+    }
+  },
+  "stderr": null
+}

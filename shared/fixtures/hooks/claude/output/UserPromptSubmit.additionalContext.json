@@ -1,0 +1,15 @@
+{
+  "tool": "claude",
+  "event": "UserPromptSubmit",
+  "case": "UserPromptSubmit.additionalContext",
+  "verdict": "accepted",
+  "effect": "Text reaches the model with the prompt.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "UserPromptSubmit",
+      "additionalContext": "<unread-messages>"
+    }
+  },
+  "stderr": null
+}

@@ -1,0 +1,17 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.deny-with-systemMessage",
+  "verdict": "accepted",
+  "effect": "Blocked; systemMessage is accepted next to the decision.",
+  "exitCode": 0,
+  "stdout": {
+    "systemMessage": "<message>",
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "deny",
+      "permissionDecisionReason": "<reason>"
+    }
+  },
+  "stderr": null
+}

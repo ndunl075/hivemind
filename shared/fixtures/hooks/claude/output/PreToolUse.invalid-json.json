@@ -1,0 +1,10 @@
+{
+  "tool": "claude",
+  "event": "PreToolUse",
+  "case": "PreToolUse.invalid-json",
+  "verdict": "rejected",
+  "effect": "Output that does not start with { is treated as plain text and has no effect; the tool runs.",
+  "exitCode": 0,
+  "stdout": "not json {",
+  "stderr": null
+}

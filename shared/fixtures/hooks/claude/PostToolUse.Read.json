@@ -1,0 +1,25 @@
+{
+  "session_id": "<session-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "<project-dir>",
+  "scratchpad_dir": "<scratchpad-dir>",
+  "prompt_id": "<prompt-id>",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "<project-dir>\\a.txt"
+  },
+  "tool_response": {
+    "type": "text",
+    "file": {
+      "filePath": "<project-dir>\\a.txt",
+      "content": "<content>",
+      "numLines": 2,
+      "startLine": 1,
+      "totalLines": 2
+    }
+  },
+  "tool_use_id": "<tool-use-id>",
+  "duration_ms": 4
+}

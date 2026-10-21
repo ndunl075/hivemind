@@ -1,0 +1,10 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.invalid-json",
+  "verdict": "rejected",
+  "effect": "Malformed JSON is ignored (hook \"Completed\"); the tool runs.",
+  "exitCode": 0,
+  "stdout": "not json {",
+  "stderr": null
+}

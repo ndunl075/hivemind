@@ -1,0 +1,17 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.deny-with-context",
+  "verdict": "accepted",
+  "effect": "Blocked, and the additionalContext also reaches the model.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "deny",
+      "permissionDecisionReason": "<reason>",
+      "additionalContext": "<context>"
+    }
+  },
+  "stderr": null
+}

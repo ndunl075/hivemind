@@ -1,0 +1,15 @@
+{
+  "tool": "claude",
+  "event": "PostToolUse",
+  "case": "PostToolUse.additionalContext",
+  "verdict": "accepted",
+  "effect": "Context reaches the model after the tool result.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "PostToolUse",
+      "additionalContext": "<context>"
+    }
+  },
+  "stderr": null
+}

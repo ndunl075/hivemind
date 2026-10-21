@@ -1,0 +1,23 @@
+{
+  "session_id": "<session-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "<project-dir>",
+  "scratchpad_dir": "<scratchpad-dir>",
+  "prompt_id": "<prompt-id>",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "ToolSearch",
+  "tool_input": {
+    "query": "select:mcp__hivemind__status",
+    "max_results": 1
+  },
+  "tool_response": {
+    "matches": [
+      "mcp__hivemind__status"
+    ],
+    "query": "select:mcp__hivemind__status",
+    "total_deferred_tools": 22
+  },
+  "tool_use_id": "<tool-use-id>",
+  "duration_ms": 1
+}

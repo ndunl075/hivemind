@@ -1,0 +1,17 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.deny-with-unknown-inner-field",
+  "verdict": "rejected",
+  "effect": "Hook marked \"Failed\" and the tool RUNS: an unknown field inside hookSpecificOutput turns a deny into an allow.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "deny",
+      "permissionDecisionReason": "<reason>",
+      "bogus": 1
+    }
+  },
+  "stderr": null
+}

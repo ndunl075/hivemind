@@ -1,0 +1,15 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.additionalContext",
+  "verdict": "accepted",
+  "effect": "Tool runs; the context reaches the model.",
+  "exitCode": 0,
+  "stdout": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "additionalContext": "<context>"
+    }
+  },
+  "stderr": null
+}
