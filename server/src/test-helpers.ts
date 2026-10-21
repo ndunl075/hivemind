@@ -30,7 +30,10 @@ export function get(path: string, token: string): Promise<Response> {
 
 export function hookBody(session: string, over: Partial<HookRequest> = {}): HookRequest {
   return {
-    v: 1, event: 'PostToolUse', agent: 'claude', session, repo: REPO, checkout: 'checkout-1', branch: 'main', head: 'abc1234', ...over,
+    // The task gate (§10) is on by default; most tests are about something else, so they switch it off. A test of the
+    // gate passes settings: { requireTask: true } (or a claimed task).
+    v: 1, event: 'PostToolUse', agent: 'claude', session, repo: REPO, checkout: 'checkout-1', branch: 'main', head: 'abc1234',
+    settings: { requireTask: false }, ...over,
   };
 }
 
