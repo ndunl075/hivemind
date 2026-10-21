@@ -53,7 +53,7 @@ It is **agent-only** `[DECIDED]`. People keep prompting Claude Code and Codex in
 4. Agents can message each other while they work.
 5. People can see everything live at a glance.
 6. Works with Claude Code and Codex on Windows and macOS. Every surface (CLI, IDE extension, desktop app) is a target, but each must pass the Wave 0 checks (§21) before it counts as supported.
-7. Free to run during a hackathon.
+7. Free to run for a small team (Cloudflare's free tier).
 
 ### Principles `[DECIDED]`
 
@@ -137,7 +137,7 @@ sequenceDiagram
 
 | Concept | Meaning |
 |---|---|
-| **Room** | One coordination space, usually one per team per hackathon. It can cover several repos (for example `frontend` and `backend`). |
+| **Room** | One coordination space, usually one per team or project. It can cover several repos (for example `frontend` and `backend`). |
 | **Person** | A teammate. Each person gets their own token (§5). |
 | **Agent** | One Claude Code or Codex session (one conversation), with a callsign (§5). A person can run several agents. |
 | **Repo** | Identified by its root commit SHA, so every clone, fork, branch and worktree of the same project is the same repo (§12). |
@@ -300,7 +300,7 @@ Why it's laid out this way:
 - **Repos are mapped to the room by root commit.** `join` runs inside the project and records its root commit. On a laptop where the current repo isn't mapped, the hook exits immediately and does nothing.
 - **Tokens never appear in command lines, shell history or project files.** Claude Code gets the token through `headersHelper` (partly confirmed; user scope is manual check M2 in `docs/manual-checks.md`). Codex gets a static header in its user-level config; the spike confirmed Codex accepts a static `Authorization` in `http_headers`. If not, fall back to `bearer_token_env_var` with a user-level environment variable, and document how to set it so the Codex app can see it on each OS.
 - **Hivemind's tools don't prompt.** Without the Claude allow rule and the Codex approval mode, every `status` or `post` would wait for a person to click approve. The spike confirmed the `mcp__hivemind` allow rule via `--settings`; the user-level setting is checked in M2.
-- **One room per laptop at a time** `[DECIDED]`. Fine for a hackathon.
+- **One room per laptop at a time** `[DECIDED]`. Enough for one team working on one project at a time; more rooms per laptop is an open item (§21).
 - **The Hivemind home** is, in order: `$HIVEMIND_HOME`; otherwise the folder the hook is installed in (`<home>` when it runs as `<home>/hook/hook.mjs` next to `<home>/config.json`); otherwise `~/.hivemind`. The CLI resolves it the same way (`$HIVEMIND_HOME`, else the home recorded at `join`, else `~/.hivemind`), so `off`, `on` and `leave` act on the same folder the hook reads. Tests and smoke runs point it at a temporary folder, together with project-level hook registration in a throwaway project, so they never touch a real laptop's setup.
 
 ### 6.2 Hook events
@@ -441,7 +441,7 @@ Other AI agents are working in this repo right now. Hivemind keeps you out of ea
 Returned on `SessionStart`, at most about 400 tokens. Lists are capped (other agents 8, working ones first; open tasks 5; locks 8) with a "+N more, see `status`" line.
 
 ```text
-[Hivemind] You are claude-nico. Room "hackathon", mode: enforce. 4 other agents.
+[Hivemind] You are claude-nico. Room "my-team", mode: enforce. 4 other agents.
 - codex-ana     working  #4 Login page        editing src/auth/login.ts (12s ago)
 - claude-nico-2 idle     #7 Seed data         idle 3m
 - codex-sam     quiet    #9 Deploy config     quiet 14m
@@ -704,7 +704,7 @@ A view-only live page per room at `/r/<room>`. There are no inputs apart from a 
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ [logo] Hivemind · hackathon   ● Live  mode: enforce  5 agents · 3 tasks · 6 locks │
+│ [logo] Hivemind · my-team     ● Live  mode: enforce  5 agents · 3 tasks · 6 locks │
 ├────────────────────────────────────────────────┬───────────────────────────┤
 │                                                │ Tasks                     │
 │          The hive (live agent graph)           │  Open 3 · In progress 3   │
@@ -785,7 +785,7 @@ Vanilla TypeScript and SVG, bundled with esbuild into Worker static assets, with
 | Hooks don't fire in a surface (for example, the Codex app) | That agent can still `register` through MCP. It shows as *not enforced* on the dashboard and in briefings. `hivemind doctor`'s in-app self-test catches this before the event. |
 | Codex hooks not approved after `join` or `update` | Same as above until the person approves them with `/hooks`. |
 | Hook bug throws, a module fails to load, or `node` is missing | Modules load inside the top-level `try` (§6.3), so the catch exits 0 and logs a line. `join` records an absolute `node` path; if that file moves anyway, the tool reports a non-blocking hook error and `hivemind doctor` flags it. |
-| Enforcement itself is wrong, mid-crunch | `hivemind mode warn` or `off` for the room, `hivemind unlock <path>`, or `~/.hivemind/off` on one laptop. |
+| Enforcement itself is wrong, at a bad moment | `hivemind mode warn` or `off` for the room, `hivemind unlock <path>`, or `~/.hivemind/off` on one laptop. |
 | Clock differences between laptops | All times come from the server. |
 
 ---
@@ -817,7 +817,7 @@ The dashboard footer shows the day's usage. If a team outgrows the free plan, Wo
 
 - **Static assets** don't count as Worker requests, since the dashboard route is a static single-page-app fallback. `[VERIFY]`
 - **WebSockets:** traffic is server-to-client apart from the upgrade request.
-- **Compute:** without alarms, the Room is active only while requests arrive. A full day of non-stop activity would be 86,400 s × 128 MB = 10,800 GB-s (83% of the allowance). A hackathon with quiet hours stays well below that, but the margin is thin. If compute runs out, coordination fails open like any other outage.
+- **Compute:** without alarms, the Room is active only while requests arrive. A full day of non-stop activity would be 86,400 s × 128 MB = 10,800 GB-s (83% of the allowance). A team with quiet hours stays well below that, but the margin is thin. If compute runs out, coordination fails open like any other outage.
 - **Row writes:**
 
   | Write | Rows a day |
@@ -842,8 +842,8 @@ Commands come from this repo's CLI, which is plain JavaScript with no build step
 **Once per team (one person, the admin):**
 
 1. Deploy: `npm run deploy` (wraps `wrangler deploy`; needs a free Cloudflare account and `wrangler login`). Then set the secrets with `npx wrangler secret put ADMIN_TOKEN` and `npx wrangler secret put TOKEN_SECRET`.
-2. `hivemind room create hackathon` prints the dashboard link (with the viewer token), once.
-3. `hivemind invite hackathon <person>` for each teammate prints that person's agent token, once. Send each one privately.
+2. `hivemind room create my-team` prints the dashboard link (with the viewer token), once.
+3. `hivemind invite my-team <person>` for each teammate prints that person's agent token, once. Send each one privately.
 
 Admin commands ask for the admin secret with hidden input, or read `HIVEMIND_ADMIN_TOKEN` from the environment.
 
@@ -869,7 +869,7 @@ Admin commands ask for the admin secret with hidden input, or read `HIVEMIND_ADM
 
    It then prints a **self-test prompt** to paste into each app you use (Claude Code app, Codex app, IDEs). The agent's answer proves that hooks fired and MCP works *in that surface*. That's the only way to catch a surface where hooks don't run.
 
-**During the event:**
+**While working:**
 
 | Command | Does |
 |---|---|
@@ -877,12 +877,12 @@ Admin commands ask for the admin secret with hidden input, or read `HIVEMIND_ADM
 | `hivemind unlock <path>` or `hivemind unlock --agent <callsign>` | Emergency release; announced to every agent. |
 | `hivemind off` / `hivemind on` | Pause or resume Hivemind on this laptop only. |
 | `hivemind update` | Refresh the hook folder and registrations. Codex users approve the hooks again. |
-| `hivemind revoke hackathon <person>` | Admin: revoke one person's token. |
-| `hivemind rotate hackathon --agents` or `--viewer` | Admin: invalidate all agent tokens (everyone is invited and runs `join` again) or only the dashboard link, in which case the new link is printed once. |
+| `hivemind revoke my-team <person>` | Admin: revoke one person's token. |
+| `hivemind rotate my-team --agents` or `--viewer` | Admin: invalidate all agent tokens (everyone is invited and runs `join` again) or only the dashboard link, in which case the new link is printed once. |
 
-**After the hackathon:** `hivemind leave` removes this laptop's config and registrations. `hivemind room delete hackathon` deletes the room's data.
+**When you're done with a room:** `hivemind leave` removes this laptop's config and registrations. `hivemind room delete my-team` deletes the room's data.
 
-**Rehearse onboarding the day before the event** (§20.5). Restarts, Codex approvals and the per-app self-test take longer than they look.
+**Rehearse onboarding before a team first relies on it** (§20.5). Restarts, Codex approvals and the per-app self-test take longer than they look.
 
 ---
 
@@ -1038,9 +1038,9 @@ Findings are verified before acting on them, and fixed in one batched round. Re-
 
 After each wave lands, CI runs on `main`, since parallel PRs were never tested together. The architect archives finished worker sessions.
 
-### 20.5 Before the event
+### 20.5 Before first real use
 
-- **Feature freeze** at least one day before.
+- **Feature freeze** at least a day before a team first relies on it.
 - **Onboarding rehearsal:** every teammate runs `join`, approves Codex hooks, and passes the per-app self-test (§17).
 - Keep about a quarter of the remaining time as buffer.
 
@@ -1114,7 +1114,7 @@ Items 11–17 are Nico's manual checks, written up step by step in `docs/manual-
 | Locks last until pushed | Unpushed changes are what cause conflicts across laptops; this also cleans up phantom locks and catches shell edits. | Fixed 10-minute expiry |
 | Push detection by comparison point, not by watching `git push` | Works for every way of pushing, and a revert or reset is never mistaken for a push. | Watching shell commands; "upstream moved" alone |
 | Silence makes holdings takeable, never taken | Long builds and thinking people look the same as crashes. | Auto-release after 15 minutes |
-| Room modes, emergency unlock, local kill switch | Enforcement can be wrong at 3 am; there must be a fast way out. | No overrides |
+| Room modes, emergency unlock, local kill switch | Enforcement can be wrong at the worst moment; there must be a fast way out. | No overrides |
 | Circuit breaker in the hook | Bad Wi-Fi mustn't add 1.5 s to every edit. | Waiting on every call |
 | Task gate on first edit | Enforces "claim before you work" with a hook. | Relying on the protocol text |
 | Per-person signed tokens, checked in the Worker, with separate agent and viewer generations | No stored tokens; bad requests never wake a Room; per-person revocation; no cross-person impersonation; a leaked dashboard link doesn't cost everyone their setup. | One shared token; stored hashes checked in the Room |
