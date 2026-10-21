@@ -436,3 +436,51 @@ describe('rule 4: a checkout-mate that has not reported makes the author ambiguo
     expect(await locks(room)).toEqual([]);
   });
 });
+
+describe('rule 3: a push releases the pushed file even when its lock is young', () => {
+  const pushed = (...paths: string[]) => ({ branch: 'main', sha: 'a1b2c3d', files: paths.map((path) => ({ path, blob: 'b'.repeat(40) })) });
+
+  it('releases a young lock listed in pushed and not divergent, recorded as now', async () => {
+    clock();
+    const room = 'r3-push-young';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    await edit(ana, 'a.txt');
+    at(5_000);
+    await ana.hook({ git: git([], { pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual([]);
+    expect((await edit(ben, 'a.txt')).decision).toBe('allow');
+    const ts = await inRoom(room, (_r, state) => state.storage.sql.exec("SELECT ts FROM events WHERE type = 'lock.released' ORDER BY seq").toArray().map((e) => Number(e.ts)));
+    expect(ts).toEqual([T0 + 5_000]);
+  });
+
+  it('keeps a young lock whose file is not in pushed', async () => {
+    clock();
+    const room = 'r3-push-other';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await edit(ana, 'a.txt');
+    at(5_000);
+    await ana.hook({ git: git([], { pushed: pushed('other.txt') }) });
+    expect(await locks(room)).toEqual(['a.txt:claude-ana']);
+  });
+
+  it('keeps a pushed file that is divergent again', async () => {
+    clock();
+    const room = 'r3-push-redirty';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await edit(ana, 'a.txt');
+    at(5_000);
+    await ana.hook({ git: git(['a.txt'], { pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual(['a.txt:claude-ana']);
+  });
+
+  it('releases nothing from a truncated report', async () => {
+    clock();
+    const room = 'r3-push-truncated';
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await edit(ana, 'a.txt');
+    at(5_000);
+    await ana.hook({ git: git([], { truncated: true, pushed: pushed('a.txt') }) });
+    expect(await locks(room)).toEqual(['a.txt:claude-ana']);
+  });
+});
