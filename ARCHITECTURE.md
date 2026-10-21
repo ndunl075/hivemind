@@ -53,7 +53,7 @@ It is **agent-only** `[DECIDED]`. People keep prompting Claude Code and Codex in
 4. Agents can message each other while they work.
 5. People can see everything live at a glance.
 6. Works with Claude Code and Codex on Windows and macOS. Every surface (CLI, IDE extension, desktop app) is a target, but each must pass the Wave 0 checks (§21) before it counts as supported.
-7. Free to run for a small team (Cloudflare's free tier).
+7. Free to run on Cloudflare's free tier.
 
 ### Principles `[DECIDED]`
 
@@ -782,7 +782,7 @@ Vanilla TypeScript and SVG, bundled with esbuild into Worker static assets, with
 | Room object restarts or is evicted | Tables reload from SQLite. Up to a minute of in-memory timestamps and counters may be lost, and parked `wait` calls time out. No holdings are lost. |
 | Two agents claim or lock at the same instant | Decided in order inside the single-threaded Room. One wins. |
 | Laptop without Hivemind, or repo not mapped | The hook exits silently. That person's agents are invisible but unaffected. |
-| Hooks don't fire in a surface (for example, the Codex app) | That agent can still `register` through MCP. It shows as *not enforced* on the dashboard and in briefings. `hivemind doctor`'s in-app self-test catches this before the event. |
+| Hooks don't fire in a surface (for example, the Codex app) | That agent can still `register` through MCP. It shows as *not enforced* on the dashboard and in briefings. `hivemind doctor`'s in-app self-test catches this before a team relies on it. |
 | Codex hooks not approved after `join` or `update` | Same as above until the person approves them with `/hooks`. |
 | Hook bug throws, a module fails to load, or `node` is missing | Modules load inside the top-level `try` (§6.3), so the catch exits 0 and logs a line. `join` records an absolute `node` path; if that file moves anyway, the tool reports a non-blocking hook error and `hivemind doctor` flags it. |
 | Enforcement itself is wrong, at a bad moment | `hivemind mode warn` or `off` for the room, `hivemind unlock <path>`, or `~/.hivemind/off` on one laptop. |
@@ -792,7 +792,7 @@ Vanilla TypeScript and SVG, bundled with esbuild into Worker static assets, with
 
 ## 16. Free-tier budget
 
-Cloudflare's Workers Free plan allows about **100,000 Worker requests a day** and **100,000 Durable Object requests a day**, about 13,000 GB-s of Durable Object compute a day, about 5 million SQLite rows read and 100,000 rows written a day. Each Worker request may use at most 10 ms of CPU on the free plan, which is plenty for verifying a token and forwarding; Durable Objects have their own, larger per-request CPU limit. Limits reset at 00:00 UTC. `[VERIFY]` the current numbers before the event.
+Cloudflare's Workers Free plan allows about **100,000 Worker requests a day** and **100,000 Durable Object requests a day**, about 13,000 GB-s of Durable Object compute a day, about 5 million SQLite rows read and 100,000 rows written a day. Each Worker request may use at most 10 ms of CPU on the free plan, which is plenty for verifying a token and forwarding; Durable Objects have their own, larger per-request CPU limit. Limits reset at 00:00 UTC. `[VERIFY]` the current numbers before relying on them.
 
 ### Requests, 8 agents over 12 active hours
 
