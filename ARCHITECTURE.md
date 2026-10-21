@@ -1113,3 +1113,5 @@ Each item is answered in `docs/spike-results.md` with evidence and the tool vers
 | Skeleton first, then vertical slices behind frozen interfaces | Integration happens on day one, slices don't wait on each other, and dogfooding starts early. | Layered waves with integration last |
 | No human controls in normal use | People talk to their own agents in their own apps. | Dashboard chat and controls |
 | Manual deploys | No Cloudflare token stored in GitHub. | Deploying from CI |
+| Budget guard counts per room, and only requests that reach a room | A room can't see account-wide totals on the free plan; one room per team is the expected setup. Requests rejected in the Worker still count toward Cloudflare's cap but are cheap and rare. | An account-wide counter (needs another paid or rate-limited store) |
+| A revoked person is re-invited only after rotating agent tokens | Revocation is a per-generation flag, which keeps tokens stateless. Re-inviting one person mid-event is rare. | Per-person generations |

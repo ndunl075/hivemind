@@ -246,6 +246,8 @@ export type UnlockRequest =
 
 export interface UnlockResponse {
   released: LockView[];
+  /** Present when unlocking a file also dropped a covering folder reservation. */
+  note?: string;
 }
 
 export interface AdminCreateRoomRequest {
@@ -595,6 +597,10 @@ export interface MessagesApi {
   hasUnreadDirect(callsign: Callsign): boolean;
   /** Formats messages for injection into an agent's context (§11). */
   format(messages: MessageView[], now: Millis): string;
+  /** Unread count without delivering (for status). */
+  unreadCount(callsign: Callsign): number;
+  /** Drop direct messages and delivery state for an ended agent before its callsign is reused (§5). */
+  forget(callsign: Callsign): void;
 }
 
 export interface SnapshotApi {
