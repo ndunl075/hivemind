@@ -675,7 +675,7 @@ The residual risk is accepted for a team of people who trust each other's agents
 
 ### Supply chain
 
-Code that runs on teammates' laptops comes only from the Hivemind CLI package, never from project repos (§6.1). Every PR to this repo gets the independent review in §20.4 before it merges, and `cli/**` changes are Tier 2. Teammates run a pinned release (`npx github:ndunl075/hivemind#<tag>`), not whatever is on `main`. CI runs a secret scanner (gitleaks) on every push. GitHub push protection should be on, but it doesn't know `hm_` tokens, so the scanner config adds a pattern for them, with an allowlist for the fake test-token prefixes `hm_a.test.` and `hm_v.test.`.
+Code that runs on teammates' laptops comes only from the Hivemind CLI package, never from project repos (§6.1). Every PR to this repo gets the independent review in §20.4 before it merges, and `cli/**` changes are Tier 2. Teammates run a pinned release (`npx github:ndunl075/hivemind#<tag>`), not whatever is on `main`. CI runs a secret scanner (gitleaks) on every push. GitHub push protection should be on, but it doesn't know `hm_` tokens, so the scanner config adds a pattern for them, with a global allowlist (covering every rule) for the fake test-token prefixes `hm_a.test.` and `hm_v.test.`. The server refuses to create a room named `test`, so no real token can match it.
 
 ### Transport and limits
 
