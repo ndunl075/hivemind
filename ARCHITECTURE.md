@@ -317,7 +317,7 @@ One command handles every event; the script reads `hook_event_name` from stdin.
 | `Stop` | — | Carries Git state (an unthrottled heartbeat) unless heartbeats are off, so a push made just before stopping releases its locks at once. Mark idle. If **direct** messages are unread and `stop_hook_active` is false, block the stop once, with the messages as the reason. | yes | yes (once) |
 | `SessionEnd` | — | If the reason is an exit (not clear or resume), mark ended and release holdings. Best effort: an 800 ms network timeout, because Codex's docs allow `SessionEnd` hooks at most 3 s `[VERIFY]`. | yes | no |
 
-Both tools use nearly identical hook contracts: JSON on stdin with `session_id`, `cwd`, `tool_name` and `tool_input`; `hookSpecificOutput.permissionDecision: "deny"` with a reason in `PreToolUse`; `hookSpecificOutput.additionalContext`; and `decision: "block"` on `Stop`. **Output must exactly match each tool's schema.** Codex treats unknown output fields as a failed hook and lets the tool call continue, which would silently turn a deny into an allow. So `hook.mjs` builds output per tool, and tests assert the exact shape for each (§19). Every field is `[VERIFY]` against recorded payloads (§21).
+Recorded payloads and accepted output shapes for every event are in `shared/fixtures/hooks/`, and the findings are in `docs/spike-results.md`. Both tools use nearly identical hook contracts: JSON on stdin with `session_id`, `cwd`, `tool_name` and `tool_input`; `hookSpecificOutput.permissionDecision: "deny"` with a reason in `PreToolUse`; `hookSpecificOutput.additionalContext`; and `decision: "block"` on `Stop`. **Output must exactly match each tool's schema.** Codex treats unknown output fields as a failed hook and lets the tool call continue, which would silently turn a deny into an allow. So `hook.mjs` builds output per tool, and tests assert the exact shape for each (§19). Every field is `[VERIFY]` against recorded payloads (§21).
 
 **Claude Code registration** (merged into `~/.claude/settings.json`; paths are absolute and filled in by `join`):
 
@@ -338,7 +338,7 @@ Both tools use nearly identical hook contracts: JSON on stdin with `session_id`,
 
 The `command` plus `args` form is expected to run without a shell, so it behaves the same under Git Bash and PowerShell on Windows `[VERIFY]` (§21 item 5).
 
-**Codex registration** (merged into `~/.codex/hooks.json`): the same events and matchers, with `PreToolUse` matching `apply_patch|Edit|Write|mcp__hivemind__.*`. Each handler has a `command` (POSIX quoting of the absolute node and script paths) and a `commandWindows` (Windows quoting), and `timeout` 5, or 3 for `SessionEnd`. `[VERIFY]` which shell Codex uses on each OS. After `join`, each Codex user approves the new hooks once with `/hooks`. Since the definitions never change, that approval holds until `hivemind update` changes them.
+**Codex registration** (merged into `~/.codex/hooks.json`): the same events and matchers, with `PreToolUse` matching `apply_patch|Edit|Write|mcp__hivemind__.*`. Each handler has a `command` (POSIX quoting of the absolute node and script paths) and a `commandWindows`, and `timeout` 5, or 3 for `SessionEnd`. The spike confirmed that on Windows Codex runs `commandWindows` through Windows PowerShell 5.1, so it must use the call operator: `& "<node>" "<hook.mjs>" codex; exit $LASTEXITCODE`. PowerShell startup costs about 1.1 s per Codex hook on Windows, so Codex's `PostToolUse` matcher is kept narrow there (§21 item 10). After `join`, each Codex user approves the new hooks once with `/hooks`. Since the definitions never change, that approval holds until `hivemind update` changes them.
 
 While the budget guard has heartbeats off (`heartbeatMs: 0`, §16), none of the Git state above is sent, so pushes don't release locks and shell edits aren't detected; the room is in `warn` mode for exactly that reason.
 
@@ -469,7 +469,7 @@ The server name is `hivemind`, so tools appear as `mcp__hivemind__<name>`. Every
 | `take` | `me`, `path`, `reason` | Takes a file or folder lock from a takeable holder (§5) and notifies them. |
 | `post` | `me`, `to` (callsign or `"all"`), `text` (≤ 2,000 chars) | Message id. Messages to an ended agent bounce back. |
 | `inbox` | `me`, `recent?` | Unread messages (marked delivered). `recent: true` also returns the last 20, delivered or not. |
-| `wait` | `me`, `seconds` (≤ 45), `for?` (`"message"`, `"release:<path>"` or `"task:<id>"`) | Returns on the first matching event, or on timeout. 45 s stays under Codex's documented default 60 s tool timeout `[VERIFY]`. |
+| `wait` | `me`, `seconds` (≤ 45), `for?` (`"message"`, `"release:<path>"` or `"task:<id>"`) | Returns on the first matching event, or on timeout. The spike found no default tool timeout in Codex 0.159.3, so `join` sets `tool_timeout_sec = 60` for the Hivemind server explicitly. |
 | `register` | `kind`, `note?` | **Only for agents that received no Hivemind briefing.** Returns a callsign marked *not enforced* (§5). |
 
 ---
@@ -1058,6 +1058,23 @@ The hook, lock, briefing and fail-open path is never cut. Otherwise, cut in this
 ## 21. Verification list and fallbacks
 
 Each item is answered in `docs/spike-results.md` with evidence and the tool versions used.
+
+**Spike outcomes (2026-10-21, Claude Code 2.1.287, Codex 0.159.3, Windows):**
+
+| # | Outcome |
+|---|---|
+| 1 | Confirmed: both tools accept a stateless JSON-only MCP server. |
+| 2 | Confirmed for non-interactive runs; interactive-only events are in the manual checks. |
+| 3 | Confirmed; Codex ignores a hook whose `PreToolUse` or `PostToolUse` output has an unknown field, so Codex output is built from a fixed list of fields per event. |
+| 4 | Confirmed: Codex fires `PreToolUse` for `apply_patch`, and a deny blocks in every mode tried. |
+| 5 | Confirmed on Windows: Claude's `command` + `args` runs without a shell. |
+| 6 | Confirmed: Codex runs `commandWindows` through PowerShell; use the call operator form in §6.2. |
+| 7 | Partly refuted: a static `Authorization` header and `approve` work, but there's no 60 s default tool timeout; set `tool_timeout_sec = 60`. |
+| 8 | Partly confirmed: `headersHelper` and the allow rule work via `--mcp-config`/`--settings`; project scope needs workspace trust; user scope is manual check M2. |
+| 9 | Partly confirmed: Codex `SessionEnd` is cut at about 3 s including PowerShell startup; subagent lifecycle events carry the parent's `session_id` plus an `agent_id`. |
+| 10 | Claude hook processes take about 40 ms; Codex hooks on Windows add about 1.1 s of PowerShell startup each. |
+
+Items 11–17 are Nico's manual checks, written up step by step in `docs/manual-checks.md`.
 
 | # | Check | Who | If it fails |
 |---|---|---|---|
