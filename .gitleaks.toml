@@ -11,3 +11,8 @@ regex = '''hm_[av]\.[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]{8,}'''
 [rules.allowlist]
 description = "Obviously fake test tokens"
 regexes = ['''hm_[av]\.test\.''']
+
+# Applies to every rule, including the built-in generic-api-key rule: obviously fake test tokens only.
+[allowlist]
+description = "Fake test tokens from docs/parallel-sessions.md"
+regexes = ['''hm_[av]\.test\.''']
