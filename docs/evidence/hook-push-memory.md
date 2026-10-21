@@ -35,3 +35,18 @@ The file's per-test timeout was already 90 s and it has no fixed sleeps. The rac
 `state()`: on a loaded runner a test not about the budget could run out of it, get the truncated status-only fallback and
 see `pushed: null` (issue #27; seen in CI as "a deleted file that was pushed carries the empty blob"). The test file now calls
 `state()` through a wrapper with a 60 s `budgetMs`; the budget tests still pass their own `budgetMs`. No assertion changed.
+
+## Review round 2
+
+- The reflog narrowing is opt-in: it applies only when every HEAD movement since the previous report is a recognised
+  non-commit action (`pull ...: Fast-forward`, `reset:`, `checkout:`, `rebase`/`pull --rebase` start, finish, abort,
+  `rebase: fast-forward`). A commit, an empty or unknown message (plumbing `commit-tree` + `update-ref`), a local
+  `merge <branch>: Fast-forward` (work made in another worktree), a missing or short reflog, or a failed
+  `before...previous.head` diff all keep the old behaviour (every previously divergent file eligible).
+- A plain `git fetch && git rebase origin/main` with no commits of our own is no longer a false push.
+- Request volume: each edited path forces a heartbeat once until a Git report mentions it (`forced`, capped at 50, kept in
+  session state, dropped for paths that appear in the remembered or new divergent set, reset on a fresh start). Three Writes to a
+  gitignored file send one forced heartbeat.
+- Tests: seven reflog cases in `git.world.test.mjs` (ff pull, plain rebase, pull --rebase, commit after heartbeat,
+  plumbing commit, other-worktree ff merge, missing reflog) and the gitignored-file test in `hook.push.test.mjs`.
+- Not done: running the reflog read in parallel with the merge-base check (optional).

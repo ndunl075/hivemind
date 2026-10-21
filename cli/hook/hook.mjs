@@ -34,6 +34,7 @@
  *   shellAck: number;
  *   gitMemory: GitMemory | null;
  *   gitMemoryAt: number;
+ *   forced?: string[];
  *   baselineAt: number;
  *   settingsHash: string | null;
  *   failures: number;
@@ -578,7 +579,7 @@ async function run() {
   const freshStart = isStart && (input.source === 'startup' || input.source == null || state.baselineAt === 0);
   if (freshStart) {
     updateState((s) => {
-      s.lastHeartbeat = 0; s.gitMemory = null; s.gitMemoryAt = 0; s.baselineAt = 0; s.settingsHash = null; s.heartbeatMs = null;
+      s.lastHeartbeat = 0; s.gitMemory = null; s.gitMemoryAt = 0; s.forced = []; s.baselineAt = 0; s.settingsHash = null; s.heartbeatMs = null;
       s.shellAck = s.shellSeq;
     });
     pruneStates();
@@ -587,21 +588,24 @@ async function run() {
     if (event === 'PostToolUse' && input.isShell) updateState((s) => { s.shellSeq += 1; });
     state = loadState(statePath) ?? state;
   }
+  /** @type {string[]} */
+  let forcedNow = [];
   if (event === 'PostToolUse') {
     if (state.heartbeatMs === 0) return done(null);
     const interval = state.heartbeatMs ?? limits.heartbeatMs;
     // An edit of a file Git has not yet reported as divergent is not throttled: the heartbeat records it, so the
     // remembered set stays Git-confirmed and a push right after the edit is recognised (§12, issue #20).
-    let newEdit = false;
+    // Each path forces at most once until it shows up in a Git report (gitignored output never does), so edits that
+    // never become divergent don't cost a request each.
     try {
       if (input.editPaths.length > 0 && state.gitMemory) {
-        const known = new Set(state.gitMemory.divergent);
-        newEdit = gitMod.normalize(ident.root, input.cwd, input.editPaths).some((p) => !known.has(p));
+        const known = new Set([...state.gitMemory.divergent, ...(state.forced ?? [])]);
+        forcedNow = gitMod.normalize(ident.root, input.cwd, input.editPaths).filter((p) => !known.has(p));
       }
     } catch (e) {
       log(false, e); // not a network failure: no breaker count
     }
-    if (!newEdit && state.shellSeq <= state.shellAck && now < state.lastHeartbeat + interval) return done(null);
+    if (forcedNow.length === 0 && state.shellSeq <= state.shellAck && now < state.lastHeartbeat + interval) return done(null);
   }
 
   // Circuit breaker: skip the network while it is open.
@@ -699,7 +703,12 @@ async function run() {
     if (sentGit) {
       s.lastHeartbeat = Math.max(s.lastHeartbeat, Date.now());
       s.shellAck = Math.max(s.shellAck, sentSeq);
-      if (newMemory && memoryAt > s.gitMemoryAt) { s.gitMemory = newMemory; s.gitMemoryAt = memoryAt; }
+      if (newMemory && memoryAt > s.gitMemoryAt) {
+        const seenBefore = new Set([...(s.gitMemory?.divergent ?? []), ...newMemory.divergent]);
+        s.gitMemory = newMemory; s.gitMemoryAt = memoryAt;
+        // Paths Git has reported are tracked by the memory again; the rest stay marked so they don't force again.
+        s.forced = [...(s.forced ?? []).filter((p) => !seenBefore.has(p)), ...forcedNow.filter((p) => !seenBefore.has(p))].slice(-50);
+      }
       if (sendBaseline) s.baselineAt = Date.now();
     }
     if (hash) s.settingsHash = hash;

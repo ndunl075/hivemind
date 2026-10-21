@@ -139,6 +139,23 @@ describe('issue #20: edit and push inside one heartbeat interval', () => {
     expect(srv.requests).toHaveLength(2);
   });
 
+  it('edits of a gitignored file force one heartbeat, not one per edit', async () => {
+    const srv = await fakeServer();
+    const w = world();
+    writeFileSync(join(w.agent, '.gitignore'), 'out/\n');
+    git(['add', '-A'], w.agent);
+    git(['commit', '-q', '-m', 'ignore out'], w.agent);
+    const send = agentSession(w, srv.url);
+    await send('SessionStart', { source: 'startup' });
+    mkdirSync(join(w.agent, 'out'));
+    const file = join(w.agent, 'out', 'build.log');
+    for (const text of ['1', '2', '3']) {
+      writeFileSync(file, text);
+      await send('PostToolUse', { tool_name: 'Write', tool_input: { file_path: file } });
+    }
+    expect(srv.requests).toHaveLength(2); // SessionStart, then one forced heartbeat
+  });
+
   it('an edit outside the checkout or under .git sends nothing', async () => {
     const srv = await fakeServer();
     const w = world();
