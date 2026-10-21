@@ -35,6 +35,7 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
     saveToken(deps.room, token);
     token_ = token;
     awaitingToken = false;
+    conn = 'connecting';
     since = clock();
     prompt.hide();
     startSource();
@@ -105,7 +106,7 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
         // Deferred so it also works when a source reports the failure synchronously inside start().
         queueMicrotask(() => {
           if (!current()) return;
-          generation += 1;
+          generation += 1; // retire the failing source first, so its own late callbacks are ignored
           stopSource?.();
           stopSource = null;
           if (deps.sourceNeedsToken) forgetToken(deps.room);

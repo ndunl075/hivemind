@@ -164,15 +164,29 @@ describe('auth failure from the live source', () => {
         return () => { stopped += 1; };
       },
     };
+    vi.useFakeTimers();
     let now = fixtureSnapshot.now;
     app = mountApp(root, { createSource: () => source, sourceNeedsToken: true, room: 'demo', token: 'hm_v.test.1.AAAA', demo: null, clock: () => now });
     await Promise.resolve();
     expect(stopped).toBe(1);
     expect(root.querySelector('[inert]')).not.toBeNull();
     now += 60_000;
+    vi.advanceTimersByTime(1000);
+    expect(root.textContent).not.toContain('Connecting to the room');
+    expect(root.textContent).not.toContain('Reconnecting');
     app.stop();
     app = null;
     expect(stopped).toBe(1);
+  });
+
+  it('shows no connecting banner while the initial token prompt is open', () => {
+    vi.useFakeTimers();
+    let now = fixtureSnapshot.now;
+    const source: LiveSource = { start() { return () => {}; } };
+    app = mountApp(root, { createSource: () => source, sourceNeedsToken: true, room: 'demo', token: null, demo: null, clock: () => now });
+    now += 60_000;
+    vi.advanceTimersByTime(1000);
+    expect(root.querySelector('[inert]')).not.toBeNull();
     expect(root.textContent).not.toContain('Connecting to the room');
   });
 });
