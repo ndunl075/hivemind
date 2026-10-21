@@ -1,6 +1,13 @@
 /** The denial message of ARCHITECTURE.md §9. Pure. */
 import type { AgentState, LockConflict, Millis, RepoPath } from '../../../../shared/contracts';
 import { ageText } from '../../util';
+import { cleanLine } from '../messages/sanitize';
+import { pathInQuotes, pathText } from './framing';
+
+/** Task titles are written by teammates' agents: show them as quoted data, never as instructions (§13). */
+const quoted = (s: string): string => `"${cleanLine(s, 200).replace(/"/g, "'")}"`;
+/** Paths come from teammates' agents too: one clean, bounded line, quoted when they are not plain. */
+const plain = (s: string, max = 300): string => pathText(s, max);
 
 export interface DenialInput {
   /** Requested paths of the edit, to name the file that was blocked. */
@@ -29,13 +36,14 @@ function stateWord(state: AgentState): string {
 export function denialText(input: DenialInput): string {
   const [first, ...rest] = input.conflicts;
   if (!first) return '[Hivemind] Edit blocked.';
-  const blocked = blockedPathFor(first, input.paths);
-  const what = first.kind === 'folder' && blocked.toLowerCase() !== first.path.toLowerCase()
-    ? `${blocked} is in ${first.path}, a folder held by ${first.holder}`
+  const blocked = plain(blockedPathFor(first, input.paths));
+  const firstPath = plain(first.path);
+  const what = first.kind === 'folder' && blocked.toLowerCase() !== firstPath.toLowerCase()
+    ? `${blocked} is in ${firstPath}, a folder held by ${first.holder}`
     : `${blocked} is held by ${first.holder}`;
   const parts: string[] = [];
   const title = first.taskId !== null ? input.taskTitles.get(first.taskId) : undefined;
-  if (first.taskId !== null) parts.push(title ? `task #${first.taskId} "${title}"` : `task #${first.taskId}`);
+  if (first.taskId !== null) parts.push(title ? `task #${first.taskId} ${quoted(title)}` : `task #${first.taskId}`);
   parts.push(first.kind === 'folder' ? 'folder reserved' : 'unpushed changes');
   parts.push(`${first.holder} is ${stateWord(first.holderState)}`);
 
@@ -48,13 +56,13 @@ export function denialText(input: DenialInput): string {
   ];
   if (first.takeable) {
     const silence = input.silenceMs.get(first.holder) ?? 0;
-    const target = first.kind === 'folder' ? `this folder (${first.path})` : 'this file';
+    const target = first.kind === 'folder' ? `this folder (${firstPath})` : 'this file';
     lines.push(`${first.holder} has been ${stateWord(first.holderState)} ${ageText(silence)}. You may \`take\` ${target} with a reason.`);
   } else {
-    lines.push(`- \`wait\` with for: "release:${first.path}".`);
+    lines.push(`- \`wait\` with for: "release:${pathInQuotes(first.path, 300)}".`);
   }
   if (rest.length > 0) {
-    const others = rest.map((c) => `${blockedPathFor(c, input.paths)} (held by ${c.holder})`);
+    const others = rest.map((c) => `${plain(blockedPathFor(c, input.paths))} (held by ${c.holder})`);
     lines.push(`Also blocked: ${others.join(', ')}. Nothing was changed or locked.`);
   }
   return lines.join('\n');
