@@ -1,0 +1,11 @@
+{
+  "tool": "codex",
+  "event": "SessionStart",
+  "case": "SessionStart.additionalContext",
+  "verdict": "accepted",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
+  "effect": "Text reaches the model as developer context.",
+  "exitCode": 0,
+  "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"<briefing>\"}}",
+  "stderr": null
+}

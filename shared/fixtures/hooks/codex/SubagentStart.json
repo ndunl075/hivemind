@@ -1,0 +1,11 @@
+{
+  "session_id": "<session-id>",
+  "turn_id": "<turn-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "C:\\proj",
+  "hook_event_name": "SubagentStart",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "agent_id": "<agent-id>",
+  "agent_type": "default"
+}

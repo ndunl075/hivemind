@@ -1,0 +1,11 @@
+{
+  "tool": "codex",
+  "event": "Stop",
+  "case": "Stop.block",
+  "verdict": "accepted",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
+  "effect": "The stop is blocked once and the reason is fed back as a continuation; the next Stop arrives with stop_hook_active true.",
+  "exitCode": 0,
+  "stdout": "{\"decision\":\"block\",\"reason\":\"<direct-message>\"}",
+  "stderr": null
+}

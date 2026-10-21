@@ -1,0 +1,12 @@
+{
+  "tool": "claude",
+  "event": "PreToolUse",
+  "case": "PreToolUse.timeout",
+  "verdict": "rejected",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
+  "effect": "Hook killed at its configured timeout (5 s); the tool runs.",
+  "exitCode": null,
+  "stdout": null,
+  "stderr": null,
+  "note": "hook slept longer than its timeout"
+}

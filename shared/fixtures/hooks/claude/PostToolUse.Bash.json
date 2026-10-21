@@ -1,0 +1,23 @@
+{
+  "session_id": "<session-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "C:\\proj",
+  "scratchpad_dir": "<scratchpad-dir>",
+  "prompt_id": "<prompt-id>",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo hi",
+    "description": "Echo hi to stdout"
+  },
+  "tool_response": {
+    "stdout": "<stdout>",
+    "stderr": "<stderr>",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "<tool-use-id>",
+  "duration_ms": 858
+}

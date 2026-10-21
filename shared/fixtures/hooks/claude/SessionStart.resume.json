@@ -1,0 +1,12 @@
+{
+  "session_id": "<session-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "C:\\proj",
+  "scratchpad_dir": "<scratchpad-dir>",
+  "hook_event_name": "SessionStart",
+  "source": "resume",
+  "seconds_since_last_response": 12,
+  "context_tokens": 34007,
+  "prompt_cache_likely_expired": false,
+  "estimated_cache_write_usd": 0.068
+}

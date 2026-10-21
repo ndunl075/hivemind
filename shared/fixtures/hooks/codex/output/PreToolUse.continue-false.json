@@ -1,0 +1,11 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.continue-false",
+  "verdict": "rejected",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
+  "effect": "continue / stopReason are not supported on PreToolUse: hook \"Failed\", tool runs.",
+  "exitCode": 0,
+  "stdout": "{\"continue\":false,\"stopReason\":\"<reason>\"}",
+  "stderr": null
+}

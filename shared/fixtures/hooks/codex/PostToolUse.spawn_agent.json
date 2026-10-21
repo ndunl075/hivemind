@@ -1,0 +1,15 @@
+{
+  "session_id": "<session-id>",
+  "turn_id": "<turn-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "C:\\proj",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "spawn_agent",
+  "tool_input": {
+    "message": "<message>"
+  },
+  "tool_response": "{\"agent_id\":\"<agent-id>\",\"nickname\":\"Mendel\"}",
+  "tool_use_id": "<tool-use-id>"
+}
