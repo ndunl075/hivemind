@@ -20,7 +20,7 @@ import {
 import { deriveState } from '../../../../shared/state';
 import { canonicalPath } from '../../util';
 import { cleanBlock, cleanLine } from '../messages/sanitize';
-import { jaccard, normalizeTitle } from './similarity';
+import { jaccard, normalizeTitle, similarity } from './similarity';
 
 /** A refusal the caller should read: unknown task, not the owner, bad input. The MCP layer shows it as a tool error. */
 export class TaskError extends Error {}
@@ -35,6 +35,8 @@ const MAX_LIVE_TASKS = 300;
 const KEEP_CLOSED = 200;
 /** Titles below this overlap are not worth showing as "similar". */
 const SIMILAR_FLOOR = 0.2;
+/** Prefix on a finished task in `similar`: its work already exists, so the agent should check it first. */
+const DONE_MARK = '[DONE: work already exists, check it before starting]';
 
 export interface ClaimOutcome {
   result: 'ok';
@@ -275,11 +277,11 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
         }
         const similar = [...tasks.values()]
           .filter((t) => t.status !== 'dropped')
-          .map((t) => ({ t, score: jaccard(t.title, c.title) }))
+          .map((t) => ({ t, score: similarity(t.title, c.title) }))
           .filter((x) => x.score >= SIMILAR_FLOOR)
           .sort((a, b) => b.score - a.score || b.t.id - a.t.id)
           .slice(0, LIMITS.similarTasksShown)
-          .map((x) => ({ id: x.t.id, title: x.t.title }));
+          .map((x) => ({ id: x.t.id, title: x.t.status === 'done' ? `${DONE_MARK} ${x.t.title}` : x.t.title }));
         const t: TaskView = {
           id: nextId++, title: c.title, description: c.description, status: 'open', owner: null, createdBy: actor.callsign,
           dependsOn: c.deps, areas: repo === null ? [] : c.folders.map((folder) => ({ repo, folder })), note: null,
