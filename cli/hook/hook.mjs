@@ -603,7 +603,7 @@ async function run() {
   const config = rooms.find((r) => r.repos.includes(repo));
   if (!config) return noRoom();
   // The session's saved callsign, heartbeat timing and Git memory belong to one room: moving to a repo of another room starts them afresh.
-  const roomKey = sha(`${config.server}\n${config.room}`).slice(0, 16);
+  const roomKey = sha(`${config.room}|${config.token}`).slice(0, 16);
   ctx.roomKey = roomKey;
   if (state.roomKey && state.roomKey !== roomKey) {
     updateState((s) => { Object.assign(s, freshState(), { idents: s.idents, roomKey }); });
