@@ -87,7 +87,7 @@ describe('blocked edit', () => {
   });
 });
 
-describe.concurrent('release by push', () => {
+describe('release by push', () => {
   it('releases the lock when the file is pushed, tells the other agent, and warns about a stale copy', async () => {
     const t = await team('push');
     const ana = await t.agent('ana', 'claude');
@@ -263,7 +263,8 @@ describe('messages', () => {
     const ana = await t.agent('ana');
     const nico = await t.agent('nico', 'codex');
     const waiting = nico.mcp('wait', { seconds: 30, for: 'message' });
-    await sleep(500);
+    // If the post lands before the wait is parked, `wait` returns at once because the message is already there; if
+    // after, it wakes. Either way the event is 'message', so no fixed sleep is needed.
     await ana.mcp('post', { to: nico.callsign, text: 'ping' });
     const woke = await waiting;
     expect(woke.value.event).toBe('message');

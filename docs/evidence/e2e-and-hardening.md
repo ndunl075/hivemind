@@ -71,3 +71,17 @@ Deviation to note: the brief says not to change the Codex model. On this machine
 ## Requests for the architect
 
 None. CI already runs `npm run test:e2e` after `npm run build`. If e2e is slow on CI runners, `timeout-minutes: 20` on the `test` job still leaves room (about 2 minutes locally).
+
+## Fix round after review
+
+Smoke is manual by design and is not in CI. Real `claude` and `codex` sessions write their own state outside the test's control: transcripts and statistics under `~/.claude`, `~/.claude.json` and `~/.codex/sessions`; Codex also needs the throwaway project trusted in `~/.codex/config.toml`.
+
+Changes (smoke was **not** run again, to spare Codex tokens; the smoke changes were checked by reading and by a throwaway unit test of `trustProject` that was run and deleted; the e2e changes were run):
+- `test/smoke/codex-trust.ts`: the backup of the Codex config sits at a stable printed path (`~/.hivemind-dev/smoke-codex-config.backup`) until the restore succeeds; the restore removes only the exact block the script appended (the file is never overwritten, and is deleted if it did not exist before and holds nothing else), runs synchronously on process exit, SIGINT and SIGTERM and in the `finally`, and on failure prints the backup path and the block to remove.
+- On Windows a timeout kills the whole process tree (`taskkill /T /F`).
+- A rejected Codex model prints "model rejected; set SMOKE_CODEX_MODEL". Default stays `gpt-5.6-luna`.
+- The progress log is `smoke.log` in the run's own temp folder (path printed).
+- `seedRoom` and `roomDatabase` import `node:sqlite` dynamically and fail with "needs Node 22.13 or newer".
+- `wait-message` no longer sleeps: `wait` returns at once if the message already arrived, so the post can go first.
+- `describe('release by push')` is no longer concurrent. The e2e run is now about 3.5 minutes locally.
+- `.gitleaksignore`: the fingerprint of the old fake viewer token line.

@@ -204,17 +204,17 @@ describe('takeover and the budget guard', () => {
     await server.stop();
     const cap = LIMITS.dailyRequestCap;
     const twentyMinutesAgo = Date.now() - 20 * 60_000;
-    seedRoom(persist, 'takeover', (db) => {
+    await seedRoom(persist, 'takeover', (db) => {
       db.prepare('UPDATE agents SET last_event = ? WHERE callsign = ?').run(twentyMinutesAgo, 'claude-ana');
     });
     const seedCount = (room: string, requests: number) => seedRoom(persist, room, (db) => {
       db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(`budget:${today()}`, String(requests));
     });
-    seedCount('b60', Math.ceil(cap * LIMITS.guardSlowAt) - 1);
-    seedCount('b80', Math.ceil(cap * LIMITS.guardSlowerAt) - 1);
-    seedCount('b95', Math.ceil(cap * LIMITS.guardWarnAt) - 1);
+    await seedCount('b60', Math.ceil(cap * LIMITS.guardSlowAt) - 1);
+    await seedCount('b80', Math.ceil(cap * LIMITS.guardSlowerAt) - 1);
+    await seedCount('b95', Math.ceil(cap * LIMITS.guardWarnAt) - 1);
     // The guard switched this room to warn yesterday; the first request of a new day puts it back.
-    seedRoom(persist, 'bnew', (db) => {
+    await seedRoom(persist, 'bnew', (db) => {
       const put = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
       put.run('mode', 'warn');
       put.run('mode_by_guard', 'enforce');

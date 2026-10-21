@@ -5,23 +5,26 @@
  * waits for a message while holding the lock; Codex is blocked by the hook and tells Claude. The test asserts that
  * exactly one of the two was blocked and that the message was delivered.
  *
- * It spends model tokens (Claude: haiku; Codex: the default model at low reasoning effort), so it is run by hand with
+ * It spends model tokens (Claude: haiku; Codex: gpt-5.6-luna at low reasoning effort), so it is run by hand with
  *   npm run test:smoke
  * and never in CI. Take the `real-agents` lock first (docs/parallel-sessions.md section 5).
  *
- * SMOKE_AGENTS=claude runs only the Claude half (no blocking can be checked then); useful to debug the setup without
- * spending Codex tokens. Codex may record the throwaway project as trusted in ~/.codex/config.toml; this test backs that
- * file up first and puts it back afterwards (and says whether the checksum matches).
+ * SMOKE_AGENTS=claude runs only the Claude half (no blocking can be checked then). SMOKE_CODEX_MODEL changes the Codex model.
+ *
+ * This is manual by design and is not in CI. Real claude and codex sessions write their own state outside this test's
+ * control: transcripts and statistics under ~/.claude, ~/.claude.json and ~/.codex/sessions. Codex also needs the
+ * throwaway project trusted in ~/.codex/config.toml: codex-trust.ts adds that one block, keeps a backup at a printed
+ * path, and removes exactly that block on every exit path.
  *
  * Only project-level hook and MCP config is written, and only inside the temporary folder. User-level Claude and Codex
  * hook or MCP config is never touched. Everything talks to 127.0.0.1 only.
  */
-import { appendFileSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SERVER, Team, makeTemp, removeTemp, sleep, startServer, type RunningServer } from '../harness';
+import { trustProject } from './codex-trust';
 import { makeProject, run, watch, type RunResult } from './project';
 
 const AGENTS = (process.env.SMOKE_AGENTS ?? 'claude,codex').split(',').map((s) => s.trim());
@@ -31,7 +34,7 @@ const CLAUDE_TIMEOUT_MS = 300_000;
 const CODEX_TIMEOUT_MS = 300_000;
 /** The default model of this machine's Codex config is not available on every plan; this one is the cheap one the spike used. */
 const CODEX_MODEL = process.env.SMOKE_CODEX_MODEL ?? 'gpt-5.6-luna';
-const LOG = join(tmpdir(), 'hivemind-smoke-last.log');
+let LOG = '';
 
 /** Prints a line and keeps it in a log outside the repository, so a timeout or crash does not lose what happened. */
 function report(...parts: unknown[]): void {
@@ -46,15 +49,16 @@ let persist: string;
 let server: RunningServer;
 let team: Team;
 
-const sha = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
 
 const lastSnapshot = (frames: any[]) => [...frames].reverse().find((f) => f.type === 'snapshot');
 
 const codexHome = () => process.env.CODEX_HOME || join(homedir(), '.codex');
 
 beforeAll(async () => {
-  writeFileSync(LOG, '');
   base = makeTemp('hm-smoke-');
+  LOG = join(base, 'smoke.log');
+  writeFileSync(LOG, '');
+  console.log(`smoke log: ${LOG}`);
   persist = join(base, 'wrangler-state');
   server = await startServer(persist);
   team = new Team('smoke');
@@ -99,20 +103,10 @@ describe('real agents', () => {
     expect(holding, 'claude never took the lock on the shared file').toBe(true);
 
     let codexResult: RunResult | null = null;
-    let codexBackup: { path: string; copy: string; hash: string } | null = null;
+    let restoreCodex: (() => void) | null = null;
     if (WITH_CODEX && codexP) {
-      const cfg = join(codexHome(), 'config.toml');
-      if (existsSync(cfg)) {
-        const copy = join(base, 'codex-config.toml.bak');
-        copyFileSync(cfg, copy);
-        codexBackup = { path: cfg, copy, hash: sha(cfg) };
-      }
-      // Project-level .codex/config.toml (the MCP server) and hooks only load in a trusted project. Codex records that
-      // itself in the user config on first use; doing it here makes it certain, and the backup above puts the file back.
-      appendFileSync(cfg, `
-[projects.'${codexP.dir}']
-trust_level = "trusted"
-`);
+      // Project-level .codex/config.toml (the MCP server) and hooks only load in a trusted project.
+      restoreCodex = trustProject(join(codexHome(), 'config.toml'), codexP.dir, report);
       const codexPrompt = `Use apply_patch to replace the word "old" with "codex" in ${SHARED}, and if Hivemind blocks that edit then call the hivemind post tool with me set to your callsign (from your Hivemind briefing) to tell the agent holding the file, by the callsign in the block message, a short message containing the word SMOKE-PING, and then stop without retrying.`;
       try {
         codexResult = await run(
@@ -120,14 +114,15 @@ trust_level = "trusted"
           codexP.dir, codexP.home, codexPrompt, CODEX_TIMEOUT_MS,
         );
       } finally {
-        if (codexBackup) {
-          copyFileSync(codexBackup.copy, codexBackup.path);
-          report(`codex config restored, checksum ${sha(codexBackup.path) === codexBackup.hash ? 'matches' : 'DIFFERS from'} the original`);
-        }
+        restoreCodex?.();
       }
     }
 
     const claudeResult = await claudeRun;
+    const codexText = codexResult ? `${codexResult.stdout}\n${codexResult.stderr}` : '';
+    if (/not supported|invalid_request/i.test(codexText) && !/hook: PreToolUse/.test(codexText)) {
+      report(`Codex rejected the model "${CODEX_MODEL}": model rejected; set SMOKE_CODEX_MODEL to one your plan supports.`);
+    }
     await sleep(1000); // last frames
     watcher.close();
 

@@ -8,7 +8,7 @@
  */
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -410,12 +410,20 @@ export class Team {
 }
 
 /** The Room's SQLite file for one room under a wrangler persistence folder. Only read it while the server is stopped. */
-export function roomDatabase(persistDir: string, room: string): string {
+async function sqlite(): Promise<typeof import('node:sqlite')> {
+  try {
+    return await import('node:sqlite');
+  } catch {
+    throw new Error('seeding a stopped server needs node:sqlite, which needs Node 22.13 or newer');
+  }
+}
+
+export async function roomDatabase(persistDir: string, room: string): Promise<string> {
   const dir = join(persistDir, 'v3', 'do', 'hivemind-Room');
   for (const f of readdirSync(dir)) {
     if (!f.endsWith('.sqlite') || f === 'metadata.sqlite') continue;
     const path = join(dir, f);
-    const db = new DatabaseSync(path, { readOnly: true });
+    const db = new (await sqlite()).DatabaseSync(path, { readOnly: true });
     try {
       const row = db.prepare("SELECT value FROM meta WHERE key = 'room'").get() as { value?: string } | undefined;
       if (row?.value === room) return path;
@@ -427,7 +435,8 @@ export function roomDatabase(persistDir: string, room: string): string {
 }
 
 /** Runs SQL against a stopped server's Room database (used to put a room into a state that would take hours or 95k requests). */
-export function seedRoom(persistDir: string, room: string, run: (db: DatabaseSync) => void): void {
-  const db = new DatabaseSync(roomDatabase(persistDir, room));
+export async function seedRoom(persistDir: string, room: string, run: (db: DatabaseSync) => void): Promise<void> {
+  const { DatabaseSync } = await sqlite();
+  const db = new DatabaseSync(await roomDatabase(persistDir, room));
   try { run(db); } finally { db.close(); }
 }

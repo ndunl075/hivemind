@@ -3,7 +3,7 @@
  * real agent with its prompt on stdin, and a dashboard watcher. Everything is written inside the Team's temporary
  * folder; user-level Claude and Codex config is never touched.
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import WebSocket from 'ws';
@@ -55,6 +55,14 @@ export interface RunResult {
   timedOut: boolean;
 }
 
+/** Kills a process and its children (on Windows the codex shim runs through a shell, so a plain kill would orphan codex). */
+function killTree(pid: number | undefined, fallback: () => void): void {
+  if (pid !== undefined && process.platform === 'win32') {
+    try { execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' }); return; } catch { /* fall back */ }
+  }
+  fallback();
+}
+
 /** Runs a command with the prompt on stdin (no quoting problems with the model's prompt). */
 export function run(cmd: string, args: string[], cwd: string, home: string, stdin: string, timeoutMs: number): Promise<RunResult> {
   return new Promise((done) => {
@@ -68,7 +76,7 @@ export function run(cmd: string, args: string[], cwd: string, home: string, stdi
     let timedOut = false;
     child.stdout.on('data', (d) => { stdout += String(d); });
     child.stderr.on('data', (d) => { stderr += String(d); });
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs);
+    const timer = setTimeout(() => { timedOut = true; killTree(child.pid, () => child.kill('SIGKILL')); }, timeoutMs);
     child.on('close', (code) => { clearTimeout(timer); done({ code, stdout, stderr, timedOut }); });
     child.on('error', () => { clearTimeout(timer); done({ code: null, stdout, stderr: `${stderr}\nspawn error`, timedOut }); });
     child.stdin.end(stdin);
