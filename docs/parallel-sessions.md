@@ -8,20 +8,23 @@ If your brief starts with `[worker]`, you build exactly the task in your brief a
 
 ## 2. Worktrees
 
-Work in your own git worktree on your own branch, created from the latest `main`:
+Work in your own git worktree on your own branch, created from the latest `main`, then install dependencies there:
 
 ```sh
 git fetch origin
 git worktree add ../hivemind-<task> -b w/<task> origin/main
+cd ../hivemind-<task>
+npm ci
 ```
 
-Don't work in the main checkout. When you're finished and your PR is open, leave the worktree in place. The architect removes it after merging.
+Don't work in the main checkout. When your PR is open, leave the worktree in place. The architect removes it after merging.
 
 ## 3. File ownership
 
-- Edit only the files listed under "You own" in your brief.
-- These are architect-only: `shared/contracts.ts`, the root `package.json` and lockfile, `.github/`, and this file. If you need a change in one of them (a contract field, a dependency, a CI step), don't make it. Write it under **Requests for the architect** in your PR description.
+- Edit only the files listed under "You own" in your brief. That always includes your own evidence file, `docs/evidence/<task>.md`.
+- Architect-only files are listed in [ARCHITECTURE.md §20.2](../ARCHITECTURE.md#202-collision-rules). If you need a change in one of them (a contract field, a dependency, pipeline wiring, a CI step), don't make it. Write it under **Requests for the architect** in your PR description.
 - `shared/contracts.ts` is frozen during a wave. Code against it as it is.
+- If you find a bug outside your files, describe it in your PR description or file an issue. Don't fix it.
 
 ## 4. Deleting folders safely
 
@@ -37,17 +40,35 @@ Some resources can only be used by one session at a time. Take the lock before u
 
 | Resource | Lock name | Used by |
 |---|---|---|
-| Real `claude` and `codex` sessions (they spend tokens and share user config) | `real-agents` | spike, smoke tests |
-| Real user-level config: `~/.claude.json`, `~/.codex/`, `~/.hivemind/` | `user-config` | manual CLI checks only. Automated tests use a temporary `HOME`. |
-| Ports | not locked: each brief assigns its own (W5 uses 8787, W7 uses 8788) | |
+| Real `claude` and `codex` sessions (they spend tokens and can read shared config) | `real-agents` | spike, skeleton manual check, smoke tests |
+| Real user-level config: `~/.claude/settings.json`, `~/.claude.json`, `~/.codex/`, `~/.hivemind/` | `user-config` | any unavoidable write to these. Back the files up first and restore them after. Automated tests use temporary home folders instead. |
 
-To take a lock, create a directory atomically. That fails if someone else already holds it:
+**Never change user-level hook or MCP config** to test something. Those changes would affect every Claude Code and Codex session on the machine, including the architect and other workers. Use project-level config in a throwaway folder instead.
+
+Ports aren't locked: each brief assigns its own.
+
+Locks live in a fixed folder in your home directory, shared by all sessions on the machine. A lock is a directory, and creating a directory either succeeds or fails, so only one session can hold it.
+
+POSIX shell (Git Bash, macOS, Linux):
 
 ```sh
-mkdir "$TMPDIR/hivemind-locks/<lock name>" && echo "<task> $(date -u +%FT%TZ)" > "$TMPDIR/hivemind-locks/<lock name>/owner"
+mkdir -p ~/.hivemind-dev/locks
+mkdir ~/.hivemind-dev/locks/<lock name> && echo "<task> $(date -u +%FT%TZ)" > ~/.hivemind-dev/locks/<lock name>/owner
+# ... use the resource ...
+rm -r ~/.hivemind-dev/locks/<lock name>
 ```
 
-On Windows, use `%TEMP%` in place of `$TMPDIR`. If the lock is held, wait and retry. Only take over a lock that's more than 30 minutes old and whose owning session is clearly gone, and say so in your evidence file. Release with `rm -r "$TMPDIR/hivemind-locks/<lock name>"`.
+PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.hivemind-dev\locks" | Out-Null
+New-Item -ItemType Directory "$HOME\.hivemind-dev\locks\<lock name>" -ErrorAction Stop | Out-Null
+Set-Content "$HOME\.hivemind-dev\locks\<lock name>\owner" "<task> $((Get-Date).ToUniversalTime().ToString('o'))"
+# ... use the resource ...
+Remove-Item -Recurse "$HOME\.hivemind-dev\locks\<lock name>"
+```
+
+If the second command fails, the lock is held: wait and retry. Only take over a lock that's more than 30 minutes old and whose owning session is clearly gone, and say so in your evidence file.
 
 ## 6. Evidence and notes
 
@@ -67,14 +88,15 @@ Never rebase and force-push an open PR. Reviews are tied to exact commits.
 
 ## 8. Before opening the PR
 
-- `npm run typecheck` and `npm test` pass, along with the commands in your brief. Paste the results into the PR description.
-- No secrets anywhere: no real tokens, no `.dev.vars`, no real user config. Tests use obviously fake tokens such as `hm_a_test_0000`.
+- `npm run typecheck`, `npm test` and the commands in your brief pass. Paste the results into the PR description.
+- **No secrets or personal data anywhere**: no real tokens, no `.dev.vars`, no real user config, no usernames, hostnames, emails, home paths or prompt text in fixtures, evidence or logs. Tests use obviously fake tokens such as `hm_a.test.nobody.1.AAAA`.
+- Never commit throwaway files, even temporarily. Commits stay in public history.
 - Commits are small and descriptive.
 
 ## 9. Review gate
 
 - The architect sends every PR to a reviewer that has never seen your session, using the tiers in [ARCHITECTURE.md §20.4](../ARCHITECTURE.md#204-review-and-merge).
-- When asked, fix all listed findings in one round and push. If you disagree with a finding, say why in one or two lines, with evidence. Don't argue in circles.
+- When asked, fix all listed findings in one round and push. If you disagree with a finding, say why in one or two lines, with evidence.
 - Only the architect merges.
 
 ## 10. Stop condition

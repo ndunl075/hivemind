@@ -1,7 +1,10 @@
 .dev.vars
+.dev.vars.*
 .wrangler/
 node_modules/
 dist/
 .env
 .env.*
 *.log
+*.pem
+*.key
