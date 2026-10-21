@@ -2,5 +2,7 @@
 24964a374d1a17303b5280e68101e2b80878de79:server/src/worker.test.ts:generic-api-key:36
 7eafd357b5c6f2ebec964c779f7fb11d4392379d:cli/hook/hook.test.mjs:generic-api-key:22
 
-# Fake viewer token (hm_v.dash.1.not-a-real-signature) in an e2e forged-token check; the line itself is fixed.
+# Fake viewer token in an e2e forged-token check (commit ec6f479); the line itself is fixed.
 ec6f479723a32515ac80f1134a56598bd05095cb:test/e2e/coordination.test.ts:hivemind-token:347
+# The comment that first spelled the fake token out (commit 1193e2e).
+1193e2e5c68d9e25a39605197636b2a239ff6a25:.gitleaksignore:hivemind-token:5
