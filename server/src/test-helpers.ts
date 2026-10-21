@@ -28,9 +28,15 @@ export function get(path: string, token: string): Promise<Response> {
   return SELF.fetch(`https://example.com${path}`, { headers: { authorization: `Bearer ${token}` } });
 }
 
+/** Spread into a hook call to switch the task gate off for that repo (settings persist per repo). */
+export const gateOff: Pick<HookRequest, 'settings'> = { settings: { requireTask: false } };
+
 export function hookBody(session: string, over: Partial<HookRequest> = {}): HookRequest {
   return {
-    v: 1, event: 'PostToolUse', agent: 'claude', session, repo: REPO, checkout: 'checkout-1', branch: 'main', head: 'abc1234', ...over,
+    // No settings field: the defaults apply, including the task gate (§10). A test that is about something else and
+    // edits without a task spreads `gateOff` into its first hook call.
+    v: 1, event: 'PostToolUse', agent: 'claude', session, repo: REPO, checkout: 'checkout-1', branch: 'main', head: 'abc1234',
+    ...over,
   };
 }
 

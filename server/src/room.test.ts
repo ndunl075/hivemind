@@ -2,7 +2,7 @@ import { evictDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LIMITS, type Actor } from '../../shared/contracts';
 import {
-  agentToken, connectViewer, editBody, get, hook, inRoom, post, REPO, roomStub, viewerToken,
+  agentToken, connectViewer, editBody, gateOff, get, hook, inRoom, post, REPO, roomStub, viewerToken,
 } from './test-helpers';
 
 afterEach(() => {
@@ -18,7 +18,7 @@ describe('locks through /hook', () => {
     const room = 'conc';
     const people = Array.from({ length: 50 }, (_, i) => `p${i}`);
     const tokens = await Promise.all(people.map((p) => agentToken(room, p)));
-    await Promise.all(people.map((p, i) => hook(tokens[i] as string, `s-${p}`, { event: 'SessionStart' })));
+    await Promise.all(people.map((p, i) => hook(tokens[i] as string, `s-${p}`, { ...gateOff, event: 'SessionStart' })));
     const results = await Promise.all(
       people.flatMap((p, i) => [0, 1].map(() => hook(tokens[i] as string, `s-${p}`, editBody('src/shared.ts')))),
     );
@@ -35,7 +35,7 @@ describe('locks through /hook', () => {
     const room = 'deny';
     const a = await agentToken(room, 'ana');
     const b = await agentToken(room, 'nico');
-    await hook(a, 'sa', { event: 'SessionStart' });
+    await hook(a, 'sa', { ...gateOff, event: 'SessionStart' });
     await hook(b, 'sb', { event: 'SessionStart' });
     expect((await hook(a, 'sa', editBody('src/auth/login.ts'))).decision).toBe('allow');
     const denied = await hook(b, 'sb', editBody('SRC/auth/Login.ts'));
@@ -48,7 +48,7 @@ describe('locks through /hook', () => {
     const room = 'allornothing';
     const a = await agentToken(room, 'ana');
     const b = await agentToken(room, 'nico');
-    await hook(a, 'sa', editBody('one.ts'));
+    await hook(a, 'sa', { ...gateOff, ...editBody('one.ts') });
     const res = await hook(b, 'sb', { event: 'PreToolUse', tool: 'apply_patch', agent: 'codex', paths: ['free.ts', 'one.ts'] });
     expect(res.decision).toBe('deny');
     const locks = await inRoom(room, (r) => r.features.locks.list());
@@ -60,7 +60,7 @@ describe('locks through /hook', () => {
     vi.setSystemTime(Date.parse('2026-10-21T10:00:00Z'));
     const room = 'diverge';
     const a = await agentToken(room, 'ana');
-    await hook(a, 'sa', editBody('x.ts'));
+    await hook(a, 'sa', { ...gateOff, ...editBody('x.ts') });
     await hook(a, 'sa', editBody('y.ts'));
     const held = () => inRoom(room, (r) => r.features.locks.list().map((l) => l.path).sort());
     expect(await held()).toEqual(['x.ts', 'y.ts']);
@@ -125,7 +125,7 @@ describe('locks through /hook', () => {
     const room = 'takeover';
     const a = await agentToken(room, 'ana');
     const b = await agentToken(room, 'nico');
-    await hook(a, 'sa', { event: 'SessionStart' });
+    await hook(a, 'sa', { ...gateOff, event: 'SessionStart' });
     await hook(b, 'sb', { event: 'SessionStart' });
     await hook(a, 'sa', editBody('f.ts'));
     await hook(a, 'sa', { event: 'Stop' });
@@ -161,7 +161,7 @@ describe('locks through /hook', () => {
   it('a SessionEnd with an exit reason releases everything; clear and resume do not', async () => {
     const room = 'ending';
     const a = await agentToken(room, 'ana');
-    await hook(a, 'sa', editBody('f.ts'));
+    await hook(a, 'sa', { ...gateOff, ...editBody('f.ts') });
     await hook(a, 'sa', { event: 'SessionEnd', endReason: 'clear' });
     expect(await inRoom(room, (r) => r.features.locks.list().length)).toBe(1);
     await hook(a, 'sa', { event: 'SessionEnd', endReason: 'prompt_input_exit' });
@@ -208,7 +208,7 @@ describe('locks through /hook', () => {
     const room = 'unlock';
     const a = await agentToken(room, 'ana');
     const b = await agentToken(room, 'nico');
-    await hook(a, 'sa', editBody('x.ts'));
+    await hook(a, 'sa', { ...gateOff, ...editBody('x.ts') });
     await hook(a, 'sa', editBody('y.ts'));
     await hook(b, 'sb', { event: 'SessionStart' });
     const byPath = await (await post('/unlock', b, { path: { repo: REPO, path: 'x.ts' } })).json() as { released: unknown[] };
@@ -222,7 +222,7 @@ describe('locks through /hook', () => {
 });
 
 describe('messages and the briefing', () => {
-  it('SessionStart returns the briefing; notices arrive on heartbeats; direct notices block Stop once', async () => {
+  it('SessionStart returns the briefing; notices arrive on heartbeats; notices never block Stop', async () => {
     const room = 'brief';
     const a = await agentToken(room, 'ana');
     const b = await agentToken(room, 'nico');
@@ -242,9 +242,8 @@ describe('messages and the briefing', () => {
 
     await inRoom(room, (r) => r.features.messages.notify('claude-ana', 'Second'));
     const stop = await hook(a, 'sa', { event: 'Stop' });
-    expect(stop.decision).toBe('block');
-    expect(stop.reason).toContain('> Second');
-    expect((await hook(a, 'sa', { event: 'Stop' })).decision).toBe('none');
+    expect(stop.decision).toBe('none'); // notices from hivemind never block Stop (§11); only agents' direct messages do
+    expect((await hook(a, 'sa', { event: 'PostToolUse' })).context).toContain('> Second');
     await inRoom(room, (r) => r.features.messages.notify('claude-ana', 'Third'));
     expect((await hook(a, 'sa', { event: 'Stop', stopActive: true })).decision).toBe('none');
   });
@@ -269,7 +268,7 @@ describe('pushes', () => {
     const room = 'pushes';
     const a = await agentToken(room, 'ana');
     const b = await agentToken(room, 'nico');
-    await hook(a, 'sa', {
+    await hook(a, 'sa', { ...gateOff,
       git: { divergent: [], upstream: 'origin/main', truncated: false, pushed: { branch: 'main', sha: 'c1', files: [{ path: 'src/a.ts', blob: 'b1' }] } },
     });
     await hook(a, 'sa', {
@@ -305,7 +304,7 @@ describe('persistence', () => {
   it('state survives a Room restart', async () => {
     const room = 'restart';
     const a = await agentToken(room, 'ana');
-    await hook(a, 'sa', { event: 'SessionStart' });
+    await hook(a, 'sa', { ...gateOff, event: 'SessionStart' });
     await hook(a, 'sa', editBody('keep.ts'));
     await hook(a, 'sa', { event: 'Stop' });
     await inRoom(room, (r) => r.features.locks.reserve(actor('claude-ana', 'ana'), [{ repo: REPO, folder: 'docs/' }], 'writing', null));
@@ -356,7 +355,7 @@ describe('wait registry', () => {
   it('a lock release wakes a waiter on that path', async () => {
     const room = 'wait-release';
     const a = await agentToken(room, 'ana');
-    await hook(a, 'sa', editBody('w.ts'));
+    await hook(a, 'sa', { ...gateOff, ...editBody('w.ts') });
     const res = await inRoom(room, async (r) => {
       const p = r.waits.park('claude-nico', [`release:${REPO}:w.ts`], 45);
       r.features.locks.releaseAll('claude-ana');
@@ -450,7 +449,7 @@ describe('dashboard socket', () => {
     const room = 'dash';
     const a = await agentToken(room, 'ana');
     const b = await agentToken(room, 'nico');
-    await hook(a, 'sa', { event: 'SessionStart' });
+    await hook(a, 'sa', { ...gateOff, event: 'SessionStart' });
     const viewer = await connectViewer(room, await viewerToken(room));
     const first = await viewer.next((m) => m.type === 'snapshot');
     expect(first).toMatchObject({ type: 'snapshot', room: 'dash', mode: 'enforce' });

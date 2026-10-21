@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LIMITS, type Snapshot } from '../../../../shared/contracts';
 import { createSnapshot } from './index';
-import { agentToken, connectViewer, editBody, hook, inRoom, REPO, viewerToken } from '../../test-helpers';
+import { agentToken, connectViewer, editBody, gateOff, hook, inRoom, REPO, viewerToken } from '../../test-helpers';
 
 const list = (v: unknown): unknown[] => {
   expect(Array.isArray(v)).toBe(true);
@@ -13,7 +13,7 @@ describe('snapshot', () => {
     const room = 'snap-seeded';
     const a = await agentToken(room, 'ana');
     const b = await agentToken(room, 'nico');
-    await hook(a, 'sa', { event: 'SessionStart' });
+    await hook(a, 'sa', { ...gateOff, event: 'SessionStart' });
     await hook(b, 'sb', { event: 'SessionStart' });
     const viewer = await connectViewer(room, await viewerToken(room));
     await viewer.next((m) => m.type === 'snapshot');

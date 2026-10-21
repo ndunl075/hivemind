@@ -3,7 +3,7 @@ import { evictDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WaitRegistry } from './waits';
 import {
-  agentToken, connectViewer, editBody, get, hook, inRoom, post, REPO, roomStub, viewerToken,
+  agentToken, connectViewer, editBody, gateOff, get, hook, inRoom, post, REPO, roomStub, viewerToken,
 } from './test-helpers';
 
 afterEach(() => {
@@ -106,7 +106,7 @@ describe('4: paths are canonical', () => {
     expect(gitBad.status).toBe(400);
     await gitBad.text();
 
-    expect((await hook(a, 'sa', editBody('src/./a/../b.ts'))).decision).toBe('allow');
+    expect((await hook(a, 'sa', { ...gateOff, ...editBody('src/./a/../b.ts') })).decision).toBe('allow');
     expect((await inRoom(room, (r) => r.features.locks.list().map((l) => l.path)))).toEqual(['src/b.ts']);
     const denied = await hook(b, 'sb', editBody('./src//b.ts'));
     expect(denied.decision).toBe('deny');
@@ -136,7 +136,7 @@ describe('6: rule 3 follows the lock checkout', () => {
     const room = 'checkouts';
     const a = await agentToken(room, 'ana');
     const b = await agentToken(room, 'nico');
-    await hook(a, 'sa', editBody('f.ts')); // checkout-1
+    await hook(a, 'sa', { ...gateOff, ...editBody('f.ts') }); // checkout-1
     await hook(b, 'sb', { event: 'SessionStart' }); // checkout-1
     at(30_000);
     const empty = { divergent: [], upstream: 'origin/main', truncated: false, pushed: null };
@@ -152,7 +152,7 @@ describe('7: young locks survive an older Git report', () => {
     clock();
     const room = 'young';
     const a = await agentToken(room, 'ana');
-    await hook(a, 'sa', editBody('f.ts'));
+    await hook(a, 'sa', { ...gateOff, ...editBody('f.ts') });
     at(5_000);
     await hook(a, 'sa', { git: { divergent: [], upstream: 'origin/main', truncated: false, pushed: null } });
     expect(await inRoom(room, (r) => r.features.locks.list().length)).toBe(1);
