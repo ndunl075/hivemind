@@ -175,6 +175,24 @@ const NULL_SHA = '0'.repeat(40);
 const STATE_BUDGET_MS = 1_200;
 
 /**
+ * A usable time budget: an integer from 1 to 2_147_483_647 (the largest setTimeout delay), otherwise null (unset).
+ * @param {unknown} v
+ * @returns {number | null}
+ */
+function validBudget(v) {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 2_147_483_647 ? n : null;
+}
+
+/**
+ * Test-only: HIVEMIND_GIT_BUDGET_MS lets slow CI runners finish Git work that production would cut off.
+ * @returns {number | null} the validated value, or null when unset or invalid
+ */
+export function gitBudgetEnv() {
+  return validBudget(process.env.HIVEMIND_GIT_BUDGET_MS);
+}
+
+/**
  * True for failures that say nothing about the repository (a timeout, a kill, a spawn error), as opposed to Git
  * exiting with a status.
  * @param {unknown} err
@@ -393,7 +411,7 @@ export async function state(root, previous, options = {}) {
   const prev = /** @type {Memory | null} */ (previous);
   const exec = options.exec ?? git;
   // HIVEMIND_GIT_BUDGET_MS is test-only: it lets slow CI runners finish Git work that production would cut off.
-  const deadline = Date.now() + (options.budgetMs ?? (Number(process.env.HIVEMIND_GIT_BUDGET_MS) || STATE_BUDGET_MS));
+  const deadline = Date.now() + (validBudget(options.budgetMs) ?? gitBudgetEnv() ?? STATE_BUDGET_MS);
   /** @type {Run} */
   const g = (args, timeout = GIT_TIMEOUT_MS) => {
     const left = deadline - Date.now();
@@ -582,9 +600,9 @@ async function staleWarning(root, branch, p, now, run, callMs = STALE_CALL_MS) {
 export async function staleWarnings(root, branch, lastPush, options = {}) {
   const run = options.exec ?? git;
   // HIVEMIND_GIT_BUDGET_MS is test-only: it lets slow CI runners finish Git work that production would cut off.
-  const budgetMs = options.budgetMs ?? (Number(process.env.HIVEMIND_GIT_BUDGET_MS) || 0);
-  const totalMs = budgetMs > 0 ? budgetMs : STALE_TOTAL_MS;
-  const callMs = Math.max(STALE_CALL_MS, budgetMs > 0 ? budgetMs : 0);
+  const budgetMs = validBudget(options.budgetMs) ?? gitBudgetEnv();
+  const totalMs = budgetMs ?? STALE_TOTAL_MS;
+  const callMs = Math.max(STALE_CALL_MS, budgetMs ?? 0);
   try {
     if (!Array.isArray(lastPush) || lastPush.length === 0) return [];
     const now = Date.now();
@@ -604,4 +622,4 @@ export async function staleWarnings(root, branch, lastPush, options = {}) {
   }
 }
 
-export default { identity, refs, normalize, state, staleWarnings };
+export default { identity, refs, normalize, state, staleWarnings, gitBudgetEnv };

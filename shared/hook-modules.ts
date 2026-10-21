@@ -64,5 +64,5 @@ export interface GitModule {
   /** §12 Git state, plus the memory to keep for next time. `previous` is null on SessionStart. */
   state(root: string, previous: GitMemory | null): Promise<{ report: GitStateReport; memory: GitMemory }>;
   /** §12 stale-copy check. Returns warning lines; never throws. */
-  staleWarnings(root: string, branch: string | null, lastPush: LastPush[]): Promise<string[]>;
+  staleWarnings(root: string, branch: string | null, lastPush: LastPush[], options?: { exec?: (args: string[], cwd: string, timeout?: number) => Promise<string>; budgetMs?: number }): Promise<string[]>;
 }
