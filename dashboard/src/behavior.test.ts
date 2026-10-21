@@ -145,6 +145,34 @@ describe('auth failure from the live source', () => {
     input.value = 'hm_v.test.2.BBBB';
     overlay.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     expect(tokens).toEqual(['hm_v.test.1.AAAA', 'hm_v.test.2.BBBB']);
+    expect(handlers.length).toBe(2);
+    expect(localStorage.getItem('hivemind.viewer.demo')).toBe('hm_v.test.2.BBBB');
     expect(root.querySelector('[inert]')).toBeNull();
+
+    // A late failure from the replaced source is ignored.
+    handlers[0]!.onAuthFailure!();
+    await Promise.resolve();
+    expect(stopped).toBe(1);
+    expect(root.querySelector('[inert]')).toBeNull();
+  });
+
+  it('handles a failure reported synchronously inside start(), with no connecting banner', async () => {
+    let stopped = 0;
+    const source: LiveSource = {
+      start(h) {
+        h.onAuthFailure!();
+        return () => { stopped += 1; };
+      },
+    };
+    let now = fixtureSnapshot.now;
+    app = mountApp(root, { createSource: () => source, sourceNeedsToken: true, room: 'demo', token: 'hm_v.test.1.AAAA', demo: null, clock: () => now });
+    await Promise.resolve();
+    expect(stopped).toBe(1);
+    expect(root.querySelector('[inert]')).not.toBeNull();
+    now += 60_000;
+    app.stop();
+    app = null;
+    expect(stopped).toBe(1);
+    expect(root.textContent).not.toContain('Connecting to the room');
   });
 });

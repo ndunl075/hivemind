@@ -34,6 +34,8 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
   const prompt = createTokenPrompt((token) => {
     saveToken(deps.room, token);
     token_ = token;
+    awaitingToken = false;
+    since = clock();
     prompt.hide();
     startSource();
   }, { dismissible: deps.demo === 'prompt' });
@@ -49,6 +51,11 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
   let since = clock();
   let vm: ViewModel | null = null;
   let stopSource: (() => void) | null = null;
+  /** Bumped on every start and on stop, so callbacks from a replaced or stopped source are ignored. */
+  let generation = 0;
+  let stopped = false;
+  /** True while we're waiting for the person to enter a viewer token; suppresses the connecting banner. */
+  let awaitingToken = false;
 
   const nowMs = () => clock() + offset;
 
@@ -56,7 +63,7 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
     const t = clock();
     vm = snapshot ? buildViewModel(snapshot, nowMs()) : null;
     const items: BannerItem[] = [];
-    if (showReconnectBanner(conn, since, t)) {
+    if (!awaitingToken && showReconnectBanner(conn, since, t)) {
       items.push({ id: 'reconnect', tone: 'warn', text: vm ? 'Reconnecting. Showing the last update received.' : 'Connecting to the room…' });
     }
     if (vm) items.push(...vm.banners);
@@ -73,36 +80,48 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
 
   function startSource(): void {
     stopSource?.();
-    stopSource = deps.createSource({ room: deps.room, token: token_, demo: deps.demo }).start({
+    stopSource = null;
+    const mine = ++generation;
+    const current = () => !stopped && mine === generation;
+    const stop = deps.createSource({ room: deps.room, token: token_, demo: deps.demo }).start({
       onSnapshot(s) {
+        if (!current()) return;
         snapshot = s;
         offset = s.now - clock();
         render();
       },
       onPulse(p: Pulse) {
+        if (!current()) return;
         graph.pulse(p);
       },
       onStatus(state) {
+        if (!current()) return;
         if (state !== 'open' && conn === 'open') since = clock();
         conn = state;
         render();
       },
       onAuthFailure() {
         // The server keeps refusing the viewer token: stop retrying, forget it, and ask for a new one.
+        // Deferred so it also works when a source reports the failure synchronously inside start().
         queueMicrotask(() => {
+          if (!current()) return;
+          generation += 1;
           stopSource?.();
           stopSource = null;
-          forgetToken(deps.room);
+          if (deps.sourceNeedsToken) forgetToken(deps.room);
           token_ = null;
-          conn = 'connecting';
+          awaitingToken = true;
           render();
           prompt.show();
         });
       },
     });
+    if (mine === generation) stopSource = stop;
+    else stop();
   }
 
   document.title = `Hivemind · ${deps.room}`;
+  if (deps.sourceNeedsToken && !token_) awaitingToken = true;
   if ((deps.sourceNeedsToken && !token_) || deps.demo === 'prompt') prompt.show();
   if (!deps.sourceNeedsToken || token_) startSource();
   render();
@@ -110,8 +129,11 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
 
   return {
     stop() {
+      stopped = true;
+      generation += 1;
       clearInterval(timer);
       stopSource?.();
+      stopSource = null;
     },
   };
 }
