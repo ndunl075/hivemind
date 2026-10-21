@@ -17,14 +17,21 @@ export interface GithubPush {
   /** `name`, lowercase: the key to the agents' origin display name. */
   repoName: string;
   branch: string;
+  /** The SHA the branch pointed to before the push (empty for a new branch). */
+  before: string;
   /** The SHA the branch points to after the push. */
   after: string;
+  /** When the pushed head commit was made, if the payload says (ms). */
+  commitAt: number | null;
   /** Who pushed, reduced to a safe `github:<login>` label. */
   by: string;
   files: string[];
   /** True when the payload may not list every changed file (20 commits, or more files than we keep). */
   incomplete: boolean;
 }
+
+/** A push whose head commit is older than this is a late redelivery or an old branch, not news. */
+export const MAX_COMMIT_AGE_MS = LIMITS.pushTtlMs;
 
 export type PushParse = { ok: true; push: GithubPush } | { ok: false; ignore: string } | { ok: false; error: string };
 
@@ -36,7 +43,7 @@ export function pusherLabel(raw: unknown): string {
   return `github:${login || 'someone'}`;
 }
 
-export function parsePush(raw: unknown): PushParse {
+export function parsePush(raw: unknown, now: number = Date.now()): PushParse {
   if (!isObj(raw)) return { ok: false, error: 'payload must be a JSON object' };
   const repo = raw.repository;
   const fullName = isObj(repo) && typeof repo.full_name === 'string' ? repo.full_name.trim() : '';
@@ -50,6 +57,12 @@ export function parsePush(raw: unknown): PushParse {
   const after = raw.after;
   if (typeof after !== 'string' || !/^[0-9a-f]{40,64}$/i.test(after)) return { ok: false, error: 'payload has no after commit' };
   if (raw.deleted === true || ZERO_SHA.test(after)) return { ok: false, ignore: 'branch deleted' };
+
+  const before = typeof raw.before === 'string' && /^[0-9a-f]{40,64}$/i.test(raw.before) && !ZERO_SHA.test(raw.before) ? raw.before.toLowerCase() : '';
+  const head = isObj(raw.head_commit) ? raw.head_commit : null;
+  const parsedAt = head && typeof head.timestamp === 'string' ? Date.parse(head.timestamp) : Number.NaN;
+  const commitAt = Number.isFinite(parsedAt) ? parsedAt : null;
+  if (commitAt !== null && now - commitAt > MAX_COMMIT_AGE_MS) return { ok: false, ignore: 'the pushed commit is more than 24 hours old' };
 
   const commits = Array.isArray(raw.commits) ? raw.commits : [];
   const seen = new Set<string>();
@@ -81,7 +94,7 @@ export function parsePush(raw: unknown): PushParse {
   return {
     ok: true,
     push: {
-      fullName: fullName.toLowerCase(), repoName: name.toLowerCase(), branch, after: after.toLowerCase(),
+      fullName: fullName.toLowerCase(), repoName: name.toLowerCase(), branch, before, after: after.toLowerCase(), commitAt,
       by: pusherLabel(typeof sender === 'string' && sender ? sender : pusher), files, incomplete,
     },
   };

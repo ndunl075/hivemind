@@ -2,7 +2,7 @@
 import { env, listDurableObjectIds, SELF } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AdminWebhookResponse, GitStateReport, HookRequest } from '../../../../shared/contracts';
-import { ADMIN_TOKEN, agentToken, editBody, hook, inRoom, TOKEN_SECRET } from '../../test-helpers';
+import { ADMIN_TOKEN, agentToken, editBody, hook, inRoom, REPO, TOKEN_SECRET } from '../../test-helpers';
 import { parsePush, pusherLabel, verifySignature, webhookSecret } from './index';
 
 afterEach(() => {
@@ -12,6 +12,7 @@ afterEach(() => {
 const BASE = 'https://example.com';
 const T0 = Date.parse('2026-10-21T10:00:00Z');
 const AFTER = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+const BEFORE = 'c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0';
 const ns = (env as unknown as { ROOM: DurableObjectNamespace }).ROOM;
 const enc = new TextEncoder();
 
@@ -22,9 +23,9 @@ async function sign(secret: string, body: string): Promise<string> {
 }
 
 /** Turns the room's webhook on (or rotates it) as the admin. */
-async function enable(room: string): Promise<{ path: string; secret: string; generation: number }> {
+async function enable(room: string, binding: Record<string, string> = { repo: REPO, fullName: 'Acme/Demo-App' }): Promise<{ path: string; secret: string; generation: number }> {
   const res = await SELF.fetch(`${BASE}/admin/rooms/${room}/webhook`, {
-    method: 'POST', headers: { authorization: `Bearer ${ADMIN_TOKEN}`, 'content-type': 'application/json' }, body: '{}',
+    method: 'POST', headers: { authorization: `Bearer ${ADMIN_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify(binding),
   });
   expect(res.status).toBe(200);
   return (await res.json()) as { path: string; secret: string; generation: number };
@@ -44,7 +45,7 @@ async function deliver(path: string, secret: string, body: string, over: Deliver
 
 function payload(over: Record<string, unknown> = {}): string {
   return JSON.stringify({
-    ref: 'refs/heads/main', after: AFTER, deleted: false,
+    ref: 'refs/heads/main', before: BEFORE, after: AFTER, deleted: false,
     repository: { name: 'Demo-App', full_name: 'acme/Demo-App' },
     sender: { login: 'octocat' }, pusher: { name: 'someone-else' },
     commits: [
@@ -142,6 +143,16 @@ describe('admin: create, rotate, switch off', () => {
   it('needs the admin token, hands out a path and secret, and rotates', async () => {
     const room = 'wh-admin';
     const denied = await SELF.fetch(`${BASE}/admin/rooms/${room}/webhook`, { method: 'POST', headers: { authorization: 'Bearer nope' }, body: '{}' });
+    const unbound = await SELF.fetch(`${BASE}/admin/rooms/${room}/webhook`, {
+      method: 'POST', headers: { authorization: `Bearer ${ADMIN_TOKEN}`, 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(unbound.status).toBe(400); // a webhook is always bound to a repository
+    for (const bad of [{ repo: 'xyz', fullName: 'a/b' }, { repo: REPO, fullName: 'no-slash' }, { repo: REPO, fullName: 'a/b/c' }]) {
+      const r = await SELF.fetch(`${BASE}/admin/rooms/${room}/webhook`, {
+        method: 'POST', headers: { authorization: `Bearer ${ADMIN_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify(bad),
+      });
+      expect(r.status, JSON.stringify(bad)).toBe(400);
+    }
     expect(denied.status).toBe(401);
     const get = await SELF.fetch(`${BASE}/admin/rooms/${room}/webhook`, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` } });
     expect(get.status).toBe(405);
@@ -269,14 +280,76 @@ describe('POST /github/<room>/<generation>', () => {
     expect(await inRoom(room, (r) => r.budget.requests)).toBe(before + 2);
   });
 
-  it('limits deliveries per minute', async () => {
-    const { path, secret } = await enable('wh-limit');
-    let limited = 0;
-    for (let i = 0; i < 65; i++) {
-      const sha = `a${i.toString(16).padStart(39, '0')}`;
-      if ((await deliver(path, secret, payload({ after: sha }))).status === 429) limited += 1;
+  it('answers a form-encoded delivery with a message that says to use application/json', async () => {
+    const { path, secret } = await enable('wh-form');
+    const body = `payload=${encodeURIComponent(payload())}`;
+    const r = await deliver(path, secret, body, { extra: { 'content-type': 'application/x-www-form-urlencoded' } });
+    expect(r.status).toBe(400);
+    expect(String(r.json.error)).toContain('application/json');
+  });
+});
+
+describe('what a delivery costs', () => {
+  it('a stale (rotated or switched-off) generation is refused without touching the budget', async () => {
+    const room = 'wh-stale-budget';
+    const first = await enable(room);
+    await enable(room);
+    const before = await inRoom(room, (r) => r.budget.requests);
+    for (let i = 0; i < 30; i++) expect((await deliver(first.path, first.secret, payload(), { event: i % 2 ? 'ping' : 'push' })).status).toBe(401);
+    expect(await inRoom(room, (r) => r.budget.requests)).toBe(before);
+    const off = await SELF.fetch(`${BASE}/admin/rooms/${room}/webhook`, {
+      method: 'POST', headers: { authorization: `Bearer ${ADMIN_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ disable: true }),
+    });
+    expect(off.status).toBe(200);
+    const mid = await inRoom(room, (r) => r.budget.requests);
+    expect((await deliver(first.path, first.secret, payload())).status).toBe(404);
+    expect(await inRoom(room, (r) => r.budget.requests)).toBe(mid);
+  });
+
+  it('every kind of delivery (ping, ignored, invalid, duplicate) shares one per-minute limit, and only the accepted ones are counted', async () => {
+    const room = 'wh-flood';
+    const { path, secret } = await enable(room);
+    const before = await inRoom(room, (r) => r.budget.requests);
+    const statuses: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      const kind = i % 4;
+      const d = kind === 0 ? await deliver(path, secret, '{}', { event: 'ping' })
+        : kind === 1 ? await deliver(path, secret, payload({ ref: 'refs/tags/v1' }))
+          : kind === 2 ? await deliver(path, secret, 'not json')
+            : await deliver(path, secret, payload());
+      statuses.push(d.status);
     }
-    expect(limited).toBeGreaterThan(0);
+    expect(statuses.filter((s) => s === 429).length).toBe(90);
+    expect(statuses.slice(0, 10).includes(429)).toBe(false);
+    expect(await inRoom(room, (r) => r.budget.requests)).toBe(before + 10);
+  });
+
+  it('has a daily cap far below the budget guard, and the mode never changes', async () => {
+    const room = 'wh-daily';
+    const { path, secret } = await enable(room);
+    await inRoom(room, (r) => {
+      const day = new Date().toISOString().slice(0, 10);
+      (r as unknown as { setMeta(k: string, v: string): void }).setMeta(`webhook_day:${day}`, '999');
+    });
+    expect((await deliver(path, secret, '{}', { event: 'ping' })).status).toBe(200);
+    const over = await SELF.fetch(`${BASE}${path}`, {
+      method: 'POST', headers: { 'x-github-event': 'ping', 'x-hub-signature-256': await sign(secret, '{}') }, body: '{}',
+    });
+    expect(over.status).toBe(429);
+    expect(over.headers.get('retry-after')).toBe('3600');
+    expect(await inRoom(room, (r) => r.mode())).toBe('enforce');
+  });
+
+  it('holds a push for 1.5 heartbeats, and for the slowest heartbeat while heartbeats are off', async () => {
+    const room = 'wh-grace';
+    await enable(room);
+    const normal = await inRoom(room, (r) => (r as unknown as { webhookGraceMs(): number }).webhookGraceMs());
+    expect(normal).toBe(22_500);
+    const off = await inRoom(room, (r) => {
+      r.budget.requests = 96_000;
+      return (r as unknown as { webhookGraceMs(): number }).webhookGraceMs();
+    });
+    expect(off).toBe(90_000);
   });
 });
 
@@ -329,7 +402,7 @@ describe('notices', () => {
     expect(await notices(room, ben.cs)).toEqual([]);
   });
 
-  it('still tells about the files the agent did not report, and about the same commit on another branch', async () => {
+  it('announces the same commit on another branch (a merge of the pull request branch), and keeps the author\'s blob so the author is not warned', async () => {
     clock();
     const room = 'wh-partial';
     const { path, secret } = await enable(room);
@@ -337,10 +410,66 @@ describe('notices', () => {
     const ben = await agent(room, 'ben', { checkout: 'c2' });
     await ana.hook({ git: pushedBy(AFTER, 'feature/x', ['a.ts']) });
     expect(await notices(room, ben.cs)).toHaveLength(1);
-    // A pull request from feature/x merged by fast-forward: the same commit, now on main, with one more file.
-    await deliver(path, secret, payload({ commits: [{ modified: ['a.ts', 'b.ts'] }] }));
+    // The pull request is squash-merged on github.com: a new commit on main with the same file.
+    const squash = 'd'.repeat(40);
+    await deliver(path, secret, payload({ after: squash, commits: [{ modified: ['a.ts', 'b.ts'] }] }));
     await afterGrace(ana);
     expect(await notices(room, ben.cs)).toEqual(['github:octocat pushed main (2 files: a.ts, b.ts). Pull before editing those.']);
+    const edit = await ben.hook(editBody('a.ts'));
+    // a.ts keeps the blob Ana reported (the content of her branch); b.ts has none.
+    expect(edit.lastPush).toEqual([{ path: 'a.ts', sha: squash, blob: BLOB(1), by: 'github:octocat', branch: 'main', at: expect.any(Number) }]);
+    const other = await ben.hook({ ...editBody('b.ts') });
+    expect(other.lastPush).toEqual([{ path: 'b.ts', sha: squash, blob: '', by: 'github:octocat', branch: 'main', at: expect.any(Number) }]);
+  });
+
+  it('drops the whole webhook push when an agent already reported that commit on that branch, even for files the agent did not list', async () => {
+    clock();
+    const room = 'wh-whole';
+    const { path, secret } = await enable(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    await ana.hook({ git: pushedBy(AFTER, 'main', ['a.ts']) });
+    expect(await notices(room, ben.cs)).toHaveLength(1);
+    await deliver(path, secret, payload({ commits: [{ modified: ['a.ts', 'b.ts', 'c.ts'] }] }));
+    await afterGrace(ana);
+    expect(await notices(room, ben.cs)).toEqual([]);
+    expect((await ben.hook(editBody('b.ts'))).lastPush).toBeUndefined();
+  });
+
+  it('never overwrites a row newer than the webhook push (a late delivery for an older commit)', async () => {
+    clock();
+    const room = 'wh-late';
+    const { path, secret } = await enable(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    const newer = 'e'.repeat(40);
+    vi.setSystemTime(T0 + 60_000);
+    await ana.hook({ git: pushedBy(newer, 'main', ['a.ts']) });
+    expect(await notices(room, ben.cs)).toHaveLength(1);
+    // GitHub redelivers an older push (made at T0 + 10 s) a minute later.
+    vi.setSystemTime(T0 + 120_000);
+    await deliver(path, secret, payload({
+      commits: [{ modified: ['a.ts', 'z.ts'] }], head_commit: { timestamp: new Date(T0 + 10_000).toISOString() },
+    }));
+    await afterGrace(ana);
+    expect(await notices(room, ben.cs)).toEqual(['github:octocat pushed main (1 file: z.ts). Pull before editing that file.']);
+    const edit = await ben.hook(editBody('a.ts'));
+    expect(edit.lastPush?.map((p) => [p.sha, p.by])).toEqual([[newer, 'claude-ana']]);
+  });
+
+  it('treats A to B to A as three pushes, not a repeat', async () => {
+    clock();
+    const room = 'wh-aba';
+    const { path, secret } = await enable(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    const a = 'a'.repeat(40);
+    const b = 'b'.repeat(40);
+    await deliver(path, secret, payload({ before: a, after: b, commits: [{ modified: ['f.ts'] }] }));
+    await afterGrace(ana);
+    await deliver(path, secret, payload({ before: b, after: a, commits: [{ modified: ['f.ts'] }] }));
+    await afterGrace(ana);
+    expect((await notices(room, ben.cs)).length).toBe(2);
   });
 
   it('ignores a delivery repeated after it was handled (a replay or a redelivery)', async () => {
@@ -359,23 +488,18 @@ describe('notices', () => {
     expect(await notices(room, ben.cs)).toEqual([]);
   });
 
-  it('does nothing when no agent reports that repository name, or when two different repos share it', async () => {
+  it('only serves the bound repository: another repository name is ignored, and agents of another repo in the room hear nothing', async () => {
     clock();
-    const none = 'wh-nomatch';
-    const a = await enable(none);
-    const lone = await agent(none, 'ana', { repoName: 'unrelated' });
-    await deliver(a.path, a.secret, payload());
-    await afterGrace(lone);
-    expect(await notices(none, lone.cs)).toEqual([]);
-
-    const amb = 'wh-ambiguous';
-    const b = await enable(amb);
-    const one = await agent(amb, 'ana', { checkout: 'c1' });
-    const two = await agent(amb, 'ben', { checkout: 'c2', repo: 'e'.repeat(40) });
-    await deliver(b.path, b.secret, payload());
-    await afterGrace(one);
-    expect(await notices(amb, one.cs)).toEqual([]);
-    expect(await notices(amb, two.cs)).toEqual([]);
+    const room = 'wh-bound';
+    const { path, secret } = await enable(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1', repoName: 'something-else' }); // the bound repo, whatever its display name
+    const stranger = await agent(room, 'bob', { checkout: 'c2', repo: 'e'.repeat(40) }); // another repo with the same display name
+    const other = await deliver(path, secret, payload({ repository: { name: 'app', full_name: 'bob/app' } }));
+    expect(other.json).toMatchObject({ ok: true, status: 'ignored' });
+    expect((await deliver(path, secret, payload({ repository: { name: 'Demo-App', full_name: 'ACME/DEMO-APP' } }))).json).toMatchObject({ status: 'queued' }); // case does not matter
+    await afterGrace(stranger);
+    expect(await notices(room, stranger.cs)).toEqual([]);
+    expect(await notices(room, ana.cs)).toHaveLength(1);
   });
 
   it('frames the pusher and branch as data: one clean line, no way to pose as an agent or add instructions', async () => {
@@ -425,5 +549,70 @@ describe('notices', () => {
       const r = await SELF.fetch(`${BASE}${route}`, { method: 'POST', headers: { 'x-hub-signature-256': sig, 'x-github-event': 'push' }, body: '{}' });
       expect(r.status, route).toBe(401);
     }
+  });
+});
+
+describe('backlog and large pushes', () => {
+  it('delivers at most 20 held pushes per request after an idle spell, and the rest on the next ones', async () => {
+    clock();
+    const room = 'wh-backlog';
+    const { path, secret } = await enable(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    // 25 pushes held while the room was idle (the delivery limit would make a real burst of this size take minutes).
+    await inRoom(room, (_r, st) => {
+      for (let i = 0; i < 25; i++) {
+        st.storage.sql.exec(
+          'INSERT INTO github_pushes (repo, full_name, branch, before_sha, sha, pusher, files, incomplete, push_at, received_at, done) VALUES (?,?,?,?,?,?,?,?,?,?,0)',
+          REPO, 'acme/demo-app', `b${i}`, '', `a${i.toString(16).padStart(3, '0')}`.padEnd(40, 'a'), 'github:octocat', JSON.stringify([`f${i}.ts`]), 0, T0, T0,
+        ).toArray();
+      }
+    });
+    void path; void secret;
+    vi.setSystemTime(Date.now() + 10 * 60_000); // idle: nothing flushed yet
+    const done = () => inRoom(room, (_r, st) => Number(st.storage.sql.exec('SELECT COUNT(*) AS n FROM github_pushes WHERE done = 1').toArray()[0]?.n));
+    await ana.hook();
+    expect(await done()).toBe(20); // one flush is bounded
+    await ana.hook();
+    expect(await done()).toBe(25);
+    // Each pushed file is recorded (notices to the room are rate limited per pusher, rows are not).
+    expect((await ben.hook(editBody('f24.ts'))).lastPush?.map((p) => p.branch)).toEqual(['b24']);
+    // Done rows keep no file lists.
+    const left = await inRoom(room, (_r, st) => st.storage.sql.exec("SELECT COUNT(*) AS n FROM github_pushes WHERE files <> '[]'").toArray());
+    expect(Number(left[0]?.n)).toBe(0);
+  });
+
+  it('collapses held pushes of one branch into one notice with all their files, and drops a push held past the retention time', async () => {
+    clock();
+    const room = 'wh-collapse';
+    const { path, secret } = await enable(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    await deliver(path, secret, payload({ before: 'a'.repeat(40), after: '1'.repeat(40), commits: [{ modified: ['one.ts'] }] }));
+    await deliver(path, secret, payload({ before: '1'.repeat(40), after: '2'.repeat(40), commits: [{ modified: ['two.ts'] }] }));
+    await afterGrace(ana);
+    expect(await notices(room, ben.cs)).toEqual(['github:octocat pushed main (2 files: one.ts, two.ts). Pull before editing those.']);
+    await deliver(path, secret, payload({ after: '3'.repeat(40), commits: [{ modified: ['old.ts'] }] }));
+    vi.setSystemTime(Date.now() + 25 * 60 * 60_000);
+    await ana.hook();
+    expect((await notices(room, ben.cs)).filter((t) => t.includes('old.ts'))).toEqual([]);
+  });
+
+  it('says so when a push is too large for GitHub to list in full (20 commits), and ignores commits older than 24 hours', async () => {
+    clock();
+    const room = 'wh-large';
+    const { path, secret } = await enable(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    await deliver(path, secret, payload({ commits: Array.from({ length: 20 }, (_, i) => ({ modified: [`c${i}.ts`] })) }));
+    await afterGrace(ana);
+    const got = await notices(room, ben.cs);
+    expect(got).toHaveLength(2);
+    expect(got[0]).toContain('github:octocat pushed main (20 files');
+    expect(got[1]).toMatch(/lists only some of the files/);
+    expect(got[1]).not.toContain('\n');
+
+    const old = await deliver(path, secret, payload({ after: '9'.repeat(40), head_commit: { timestamp: new Date(Date.now() - 25 * 60 * 60_000).toISOString() } }));
+    expect(old.json).toMatchObject({ ok: true, status: 'ignored' });
   });
 });

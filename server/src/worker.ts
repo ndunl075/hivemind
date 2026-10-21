@@ -119,12 +119,14 @@ async function admin(request: Request, env: Env, url: URL): Promise<Response> {
   }
   if (action === 'webhook') {
     const body = await readJson(request);
-    const res = await toRoom(env, claims, '/admin/webhook', { method: 'POST', body: JSON.stringify({ disable: body.disable === true }) });
+    const res = await toRoom(env, claims, '/admin/webhook', {
+      method: 'POST', body: JSON.stringify({ disable: body.disable === true, repo: body.repo, fullName: body.fullName }),
+    });
     if (!res.ok) return relayError(res);
-    const { generation } = (await res.json()) as { generation?: number };
+    const { generation, fullName } = (await res.json()) as { generation?: number; fullName?: string };
     if (generation === undefined) return json({} satisfies AdminWebhookResponse);
     const out: AdminWebhookResponse = {
-      generation, path: `/github/${room}/${generation}`, secret: await webhookSecret(env.TOKEN_SECRET, room, generation),
+      generation, ...(fullName ? { fullName } : {}), path: `/github/${room}/${generation}`, secret: await webhookSecret(env.TOKEN_SECRET, room, generation),
     };
     return json(out);
   }
@@ -172,6 +174,9 @@ async function githubWebhook(request: Request, env: Env, match: RegExpExecArray)
   const secret = await webhookSecret(env.TOKEN_SECRET, room, generation);
   if (!(await verifySignature(secret, body, signature))) throw new Reject(401, 'invalid signature');
   if (event !== 'ping' && event !== 'push') throw new Reject(400, 'only push events are accepted');
+  if ((request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/x-www-form-urlencoded')) {
+    throw new Reject(400, 'set the webhook content type to application/json (it is application/x-www-form-urlencoded)');
+  }
   const headers = new Headers({ 'content-type': 'application/json', 'x-gh-event': event });
   return toRoom(env, { kind: 'webhook', room, generation }, '/github', { method: 'POST', body: new TextDecoder().decode(body), headers });
 }

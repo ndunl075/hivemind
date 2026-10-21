@@ -5,9 +5,11 @@
  * printed exactly once, by the command that issues it, on its own line so it is easy to copy.
  * @typedef {import('./context.mjs').Context} Context
  */
+import { execFile } from 'node:child_process';
 import { parseArgs, needPositionals } from './args.mjs';
 import { call, dashboardLink, normalizeServer } from './api.mjs';
 import { CliError } from './context.mjs';
+import { identity } from '../hook/git.mjs';
 import { readConfig } from './install.mjs';
 
 const ROOM_NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -141,25 +143,59 @@ export async function rotate(argv, ctx) {
 }
 
 /**
- * hivemind webhook <room> [--off]
- * Creates the room's GitHub push webhook, or rotates it (the old URL and secret stop working), and prints the Payload
- * URL and secret once. `--off` switches it off. A webhook only produces push notices (ARCHITECTURE.md §12).
+ * `owner/name` from a GitHub remote URL (https, ssh://, scp-like), or null.
+ * @param {string | null} url
+ * @returns {string | null}
+ */
+export function githubFullName(url) {
+  if (!url) return null;
+  const parts = url.trim().replace(/\.git$/i, '').replace(/[\\/]+$/, '').split(/[\\/:]/).filter(Boolean);
+  const [owner, name] = parts.slice(-2);
+  return owner && name && /^[A-Za-z0-9_.-]+$/.test(owner) && /^[A-Za-z0-9_.-]+$/.test(name) ? `${owner}/${name}` : null;
+}
+
+/** @param {string} cwd */
+function originUrl(cwd) {
+  return new Promise((resolveUrl) => {
+    execFile('git', ['remote', 'get-url', 'origin'], { cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, timeout: 5000, windowsHide: true }, (err, stdout) => {
+      resolveUrl(err ? null : String(stdout).trim() || null);
+    });
+  });
+}
+
+/**
+ * hivemind webhook <room> [--repo owner/name] | hivemind webhook <room> --off
+ * Run inside the project: it binds the room's GitHub push webhook to this repository (its root commit and its GitHub
+ * owner/name, read from `origin` or given with --repo). Creates the webhook or rotates it (the old URL and secret stop
+ * working) and prints the Payload URL and secret once. `--off` switches it off. A webhook only produces push notices
+ * (ARCHITECTURE.md §12).
  * @param {string[]} argv
  * @param {Context} ctx
  */
 export async function webhook(argv, ctx) {
-  const { positionals, flags, options } = parseArgs(argv, { flags: ['off', 'token-stdin'], options: ['server'] });
-  const [name] = needPositionals(positionals, 1, 'webhook <room> [--off]');
+  const { positionals, flags, options } = parseArgs(argv, { flags: ['off', 'token-stdin'], options: ['server', 'repo'] });
+  const [name] = needPositionals(positionals, 1, 'webhook <room> [--repo owner/name] | webhook <room> --off');
   checkRoom(/** @type {string} */ (name));
+  /** @type {{ repo: string, fullName: string } | null} */
+  let binding = null;
+  if (!flags.has('off')) {
+    const ident = await identity(ctx.cwd);
+    if (!ident) throw new CliError('run this inside the project\'s Git repository: the webhook is bound to that repository');
+    const fullName = options.repo ?? githubFullName(await originUrl(ident.root));
+    if (!fullName || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)) {
+      throw new CliError('could not tell the repository\'s GitHub owner/name from its origin remote; pass --repo owner/name');
+    }
+    binding = { repo: ident.repo, fullName };
+  }
   const { server, secret } = await adminSession(ctx, options, flags);
-  if (flags.has('off')) {
+  if (!binding) {
     await call(ctx, server, `/admin/rooms/${name}/webhook`, { token: secret, body: { disable: true } });
     ctx.out(`The GitHub webhook of room "${name}" is off. Deliveries to its old URL are refused; you can delete it in the repository's settings.\n`);
     return 0;
   }
-  const res = await call(ctx, server, `/admin/rooms/${name}/webhook`, { token: secret, body: {} });
+  const res = await call(ctx, server, `/admin/rooms/${name}/webhook`, { token: secret, body: binding });
   if (typeof res.path !== 'string' || typeof res.secret !== 'string') throw new CliError('the server answered without a webhook URL and secret');
-  ctx.out(`GitHub webhook for room "${name}". In the repository on github.com: Settings > Webhooks > Add webhook (or edit the existing one):\n`);
+  ctx.out(`GitHub webhook for room "${name}", bound to ${binding.fullName}. On github.com: that repository > Settings > Webhooks > Add webhook (or edit the existing one):\n`);
   ctx.out('  Payload URL (copy it):\n');
   ctx.out(`${server}${res.path}\n`);
   ctx.out('  Secret (shown only now, copy it):\n');
@@ -168,7 +204,7 @@ export async function webhook(argv, ctx) {
   ctx.out('  SSL verification: enabled\n');
   ctx.out('  Events: "Let me select individual events", then tick only "Pushes"\n');
   ctx.out('  Active: ticked\n');
-  ctx.out('Agents whose repo\'s origin URL ends in the repository name get a "pulled before editing" notice for pushes and merges made outside any agent.\n');
+  ctx.out(`Only pushes of ${binding.fullName} are used. Agents in this repository get a "pull before editing" notice for pushes and merges made outside any agent.\n`);
   ctx.out(`Running this command again rotates the URL and secret; update GitHub when you do. Switch it off with: hivemind webhook ${name} --off\n`);
   return 0;
 }

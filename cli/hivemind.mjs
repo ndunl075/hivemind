@@ -26,7 +26,8 @@ Once per team (admin; asks for the admin secret in a terminal, or reads HIVEMIND
   hivemind revoke <room> <person>          revoke one person's token
   hivemind rotate <room> --agents|--viewer invalidate all agent tokens, or the dashboard link
   hivemind room delete <room> [--yes]      delete the room's data
-  hivemind webhook <room> [--off]          create or rotate the room's GitHub push webhook (URL and secret, once)
+  hivemind webhook <room> [--repo o/n]     inside the project: create or rotate the room's GitHub push webhook for it
+                                           (URL and secret, once); --off switches it off
 
 Once per project repo:
   hivemind init                            write .hivemind/project.json and the protocol in AGENTS.md and CLAUDE.md

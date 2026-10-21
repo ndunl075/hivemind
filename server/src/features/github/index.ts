@@ -6,18 +6,19 @@
  * A webhook can only produce a notice and a `lastPush` row, through the same PushesApi the hook's reports use. It
  * never takes, releases or grants a lock, task or setting.
  *
- * - Mapping: agents report their repo's `origin` display name (the URL's last segment); the payload carries
- *   `repository.name`. A push belongs to the repo id of the agents whose display name equals it (case-insensitive).
- *   No agent of that name: nothing to tell, and the push is dropped. Agents of two different repos with the same
- *   name: ambiguous, the push is dropped rather than risk a wrong notice.
+ * - Binding: the webhook is created inside a project (`hivemind webhook`), which binds it to that repo's root commit id
+ *   and its GitHub `owner/name`. A delivery whose `repository.full_name` differs is ignored; there is no matching by
+ *   short name, so an unrelated repo with the same name can't receive another's pushes.
  * - Dedupe: a push is held for a grace period (the hook reports a push on its next heartbeat). If an agent reported
- *   the same commit on the same branch meanwhile, the webhook adds nothing for those files. The same delivery twice
- *   (a replay or a redelivery) is a no-op for 24 hours.
- * - Stale-copy checks: the payload has no blob SHAs, so rows are recorded with an empty blob. The hook then warns
- *   unless the pushed commit (`after`) is in the agent's HEAD; it can't use the "same content" shortcut.
- * - The deferred notices are sent by flushDue(), which the Room calls after every request (there are no alarms).
+ *   the same commit on the same branch meanwhile, the whole webhook push is dropped. A file whose latest row is newer
+ *   than the push is never overwritten. A delivery repeated (same branch, before and after) is ignored for 24 hours.
+ *   Held pushes of one branch collapse into one.
+ * - Stale-copy checks: the payload has no blob SHAs. Rows get an empty blob, except where an agent on another branch
+ *   reported the file in the last 24 hours: its blob is kept, so a squash merge of that branch doesn't warn the author.
+ * - The held pushes are delivered by flushDue(), which the Room calls after every request (there are no alarms).
  */
 import { LIMITS, type Actor, type Features, type Millis, type RoomContext } from '../../../../shared/contracts';
+import { pathText } from '../locks/framing';
 import { parsePush, type GithubPush } from './payload';
 
 export { parsePush, pusherLabel } from './payload';
@@ -25,19 +26,26 @@ export { verifySignature, webhookSecret } from './signature';
 
 /** Least time a push waits for an agent's own report of it. */
 export const GRACE_MS = 20_000;
+/** Held pushes delivered per flush; the rest wait for the next request. */
+export const FLUSH_BATCH = 20;
 const MINUTE_MS = 60_000;
-const DELIVERIES_PER_MINUTE = 60;
+
+export interface GithubBinding {
+  /** Root commit id of the repo the webhook was created in. */
+  repo: string;
+  /** `owner/name` on GitHub, lowercase. */
+  fullName: string;
+}
 
 export type Receipt =
   | { ok: true; status: 'queued' | 'duplicate' }
   | { ok: false; status: 'ignored'; reason: string }
-  | { ok: false; status: 'invalid'; reason: string }
-  | { ok: false; status: 'rate-limited' };
+  | { ok: false; status: 'invalid'; reason: string };
 
 export interface GithubApi {
-  /** Validates and queues one verified `push` delivery (raw JSON text). */
-  receive(body: string): Receipt;
-  /** Sends the notices of queued pushes whose grace period is over. Cheap when nothing is due. */
+  /** Validates and queues one verified `push` delivery (raw JSON text) for the bound repo. */
+  receive(body: string, binding: GithubBinding): Receipt;
+  /** Delivers held pushes whose grace period is over (at most FLUSH_BATCH). Cheap when nothing is due. Never throws. */
   flushDue(): void;
 }
 
@@ -46,13 +54,18 @@ export interface GithubOptions {
   graceMs?: () => Millis;
 }
 
+interface Held {
+  repo: string; fullName: string; branch: string; before: string; sha: string; pusher: string;
+  files: string[]; incomplete: boolean; pushAt: Millis; receivedAt: Millis;
+}
+
 export function createGithub(ctx: RoomContext, features: Features, options: GithubOptions = {}): GithubApi {
   ctx.sql.exec(`CREATE TABLE IF NOT EXISTS github_pushes (
-    full_name TEXT NOT NULL, branch TEXT NOT NULL, sha TEXT NOT NULL, repo_name TEXT NOT NULL, pusher TEXT NOT NULL,
-    files TEXT NOT NULL, received_at INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (full_name, branch, sha))`).toArray();
+    repo TEXT NOT NULL, full_name TEXT NOT NULL, branch TEXT NOT NULL, before_sha TEXT NOT NULL, sha TEXT NOT NULL,
+    pusher TEXT NOT NULL, files TEXT NOT NULL, incomplete INTEGER NOT NULL, push_at INTEGER NOT NULL,
+    received_at INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (full_name, branch, before_sha, sha))`).toArray();
 
   const graceMs = (): Millis => Math.max(GRACE_MS, options.graceMs?.() ?? 0);
-  const deliveryTimes: Millis[] = [];
   let nextDue = Number.POSITIVE_INFINITY;
   let lastPrune = 0;
 
@@ -62,75 +75,106 @@ export function createGithub(ctx: RoomContext, features: Features, options: Gith
   };
   refreshDue();
 
-  const allowDelivery = (now: Millis): boolean => {
-    while (deliveryTimes.length > 0 && now - (deliveryTimes[0] as number) >= MINUTE_MS) deliveryTimes.shift();
-    if (deliveryTimes.length >= DELIVERIES_PER_MINUTE) return false;
-    deliveryTimes.push(now);
-    return true;
+  const finish = (r: Record<string, unknown>): void => {
+    ctx.sql.exec(
+      "UPDATE github_pushes SET done = 1, files = '[]' WHERE full_name = ? AND branch = ? AND before_sha = ? AND sha = ?",
+      String(r.full_name), String(r.branch), String(r.before_sha), String(r.sha),
+    ).toArray();
   };
 
-  /** The repo id the push belongs to, or null (no agent of that name, or two repos share it). */
-  const resolveRepo = (repoName: string): string | null => {
-    const ids = new Set<string>();
-    for (const a of ctx.agents()) if (a.repo && a.repoName?.toLowerCase() === repoName) ids.add(a.repo);
-    return ids.size === 1 ? ([...ids][0] as string) : null;
-  };
+  /** True when an agent's hook already reported this commit on this branch (the whole push is then not news). */
+  const reportedByAgent = (repo: string, branch: string, sha: string): boolean =>
+    ctx.sql.exec("SELECT 1 AS x FROM pushes WHERE repo = ? AND branch = ? AND lower(sha) = ? AND callsign NOT LIKE 'github:%' LIMIT 1", repo, branch, sha).toArray().length > 0;
 
-  const deliver = (p: { branch: string; sha: string; repoName: string; pusher: string; files: string[]; receivedAt: Millis }): void => {
-    const repo = resolveRepo(p.repoName);
-    if (!repo || p.files.length === 0) return;
-    const actor: Actor = { callsign: p.pusher, person: 'github', kind: 'claude', repo, checkout: null };
-    // What agents and earlier webhooks already know. An agent's own report of this commit (same branch) covers its files.
-    const known = new Map(features.pushes.latest(actor, repo, p.files).map((l) => [l.path.toLowerCase(), l]));
-    const files = p.files.filter((path) => {
+  const deliver = (p: Held): void => {
+    if (p.files.length === 0) return;
+    if (reportedByAgent(p.repo, p.branch, p.sha)) return;
+    const actor: Actor = { callsign: p.pusher, person: 'github', kind: 'claude', repo: p.repo, checkout: null };
+    const known = new Map(features.pushes.latest(actor, p.repo, p.files).map((l) => [l.path.toLowerCase(), l]));
+    const rows: Array<{ path: string; blob: string }> = [];
+    for (const path of p.files) {
       const l = known.get(path.toLowerCase());
-      if (!l) return true;
-      if (l.sha === p.sha && l.branch === p.branch) return false; // reported already
-      return l.at <= p.receivedAt; // a newer push of this file is the better answer
-    });
-    if (files.length === 0) return;
-    features.pushes.record(actor, repo, { branch: p.branch, sha: p.sha, files: files.map((path) => ({ path, blob: '' })) });
+      if (l && l.at > p.pushAt) continue; // a newer push of this file is the better answer
+      // An agent's report of this file on another branch (the pull request's branch) has the content a squash or
+      // fast-forward merge brings, so keep its blob: the author's agent then isn't warned about its own change.
+      const blob = l && !l.by.startsWith('github:') && l.branch !== p.branch ? l.blob : '';
+      rows.push({ path, blob });
+    }
+    if (rows.length === 0) return;
+    features.pushes.record(actor, p.repo, { branch: p.branch, sha: p.sha, files: rows });
+    if (p.incomplete) {
+      features.messages.notify(
+        '*',
+        `${p.pusher} pushed ${pathText(p.branch, 100)}; GitHub lists only some of the files of a push that large, so more files than named may have changed. Pull before editing.`,
+        { repo: p.repo, exclude: [p.pusher] },
+      );
+    }
   };
 
   return {
-    receive(body): Receipt {
+    receive(body, binding): Receipt {
       let raw: unknown;
       try { raw = JSON.parse(body); } catch { return { ok: false, status: 'invalid', reason: 'payload is not JSON' }; }
-      const parsed = parsePush(raw);
+      const now = ctx.now();
+      const parsed = parsePush(raw, now);
       if (!parsed.ok) {
         return 'ignore' in parsed ? { ok: false, status: 'ignored', reason: parsed.ignore } : { ok: false, status: 'invalid', reason: parsed.error };
       }
-      const now = ctx.now();
-      if (!allowDelivery(now)) return { ok: false, status: 'rate-limited' };
       const push: GithubPush = parsed.push;
-      const seen = ctx.sql.exec('SELECT 1 AS x FROM github_pushes WHERE full_name = ? AND branch = ? AND sha = ?', push.fullName, push.branch, push.after).toArray();
+      if (push.fullName !== binding.fullName.toLowerCase()) {
+        return { ok: false, status: 'ignored', reason: 'this webhook is bound to a different repository' };
+      }
+      const seen = ctx.sql.exec(
+        'SELECT 1 AS x FROM github_pushes WHERE full_name = ? AND branch = ? AND before_sha = ? AND sha = ?', push.fullName, push.branch, push.before, push.after,
+      ).toArray();
       if (seen.length > 0) return { ok: true, status: 'duplicate' };
+
+      // Held pushes of this branch collapse into this one: it carries their files too.
+      let files = push.files;
+      let incomplete = push.incomplete;
+      for (const old of ctx.sql.exec('SELECT * FROM github_pushes WHERE full_name = ? AND branch = ? AND done = 0', push.fullName, push.branch).toArray()) {
+        try {
+          const merged = new Set([...(JSON.parse(String(old.files)) as string[]), ...files]);
+          files = [...merged].slice(0, LIMITS.maxDivergentPaths);
+          incomplete = incomplete || Number(old.incomplete) === 1 || merged.size > LIMITS.maxDivergentPaths;
+        } catch { /* a corrupt row adds nothing */ }
+        finish(old);
+      }
+      const pushAt = push.commitAt !== null && push.commitAt <= now ? push.commitAt : now;
       ctx.sql.exec(
-        'INSERT INTO github_pushes (full_name, branch, sha, repo_name, pusher, files, received_at, done) VALUES (?,?,?,?,?,?,?,0)',
-        push.fullName, push.branch, push.after, push.repoName, push.by, JSON.stringify(push.files), now,
+        'INSERT INTO github_pushes (repo, full_name, branch, before_sha, sha, pusher, files, incomplete, push_at, received_at, done) VALUES (?,?,?,?,?,?,?,?,?,?,0)',
+        binding.repo, push.fullName, push.branch, push.before, push.after, push.by, JSON.stringify(files), incomplete ? 1 : 0, pushAt, now,
       ).toArray();
       refreshDue();
       return { ok: true, status: 'queued' };
     },
 
     flushDue(): void {
-      const now = ctx.now();
-      if (now < nextDue && now - lastPrune < MINUTE_MS) return;
-      const due = ctx.sql.exec('SELECT * FROM github_pushes WHERE done = 0 AND received_at <= ? ORDER BY received_at', now - graceMs()).toArray();
-      for (const r of due) {
-        try {
-          deliver({
-            branch: String(r.branch), sha: String(r.sha), repoName: String(r.repo_name), pusher: String(r.pusher),
-            files: JSON.parse(String(r.files)) as string[], receivedAt: Number(r.received_at),
-          });
-        } catch (e) { /* a bad row must not stop the others or the request that triggered the flush */ }
-        ctx.sql.exec('UPDATE github_pushes SET done = 1 WHERE full_name = ? AND branch = ? AND sha = ?', String(r.full_name), String(r.branch), String(r.sha)).toArray();
-      }
-      if (now - lastPrune >= MINUTE_MS) {
-        lastPrune = now;
-        ctx.sql.exec('DELETE FROM github_pushes WHERE received_at < ?', now - LIMITS.pushTtlMs).toArray();
-      }
-      refreshDue();
+      try {
+        const now = ctx.now();
+        if (now < nextDue && now - lastPrune < MINUTE_MS) return;
+        const due = ctx.sql.exec(
+          'SELECT * FROM github_pushes WHERE done = 0 AND received_at <= ? ORDER BY received_at LIMIT ?', now - graceMs(), FLUSH_BATCH,
+        ).toArray();
+        for (const r of due) {
+          try {
+            // A push held longer than the retention time is no longer news.
+            if (now - Number(r.received_at) <= LIMITS.pushTtlMs) {
+              deliver({
+                repo: String(r.repo), fullName: String(r.full_name), branch: String(r.branch), before: String(r.before_sha), sha: String(r.sha),
+                pusher: String(r.pusher), files: JSON.parse(String(r.files)) as string[], incomplete: Number(r.incomplete) === 1,
+                pushAt: Number(r.push_at), receivedAt: Number(r.received_at),
+              });
+            }
+          } catch { /* a bad row must not stop the others or the request that triggered the flush */ }
+          finish(r);
+        }
+        if (now - lastPrune >= MINUTE_MS) {
+          lastPrune = now;
+          ctx.sql.exec('DELETE FROM github_pushes WHERE received_at < ?', now - LIMITS.pushTtlMs).toArray();
+        }
+        refreshDue();
+      } catch { /* the webhook must never fail the request it rides on */ }
     },
   };
 }

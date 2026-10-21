@@ -282,6 +282,10 @@ export interface AdminRevokeResponse {
 export interface AdminWebhookRequest {
   /** Switch the webhook off instead of creating or rotating it. */
   disable?: boolean;
+  /** Create or rotate: the root commit id of the repository the webhook is for (the CLI reads it from the project). */
+  repo?: string;
+  /** Create or rotate: that repository's GitHub `owner/name`. Deliveries for any other repository are ignored. */
+  fullName?: string;
 }
 
 export interface AdminWebhookResponse {
@@ -290,6 +294,8 @@ export interface AdminWebhookResponse {
   /** The secret for GitHub's Secret field. Derived on demand, shown only by the command that creates or rotates it. */
   secret?: string;
   generation?: number;
+  /** The `owner/name` the webhook is bound to. */
+  fullName?: string;
 }
 
 export interface ErrorResponse {
