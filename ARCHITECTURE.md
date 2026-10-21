@@ -492,6 +492,8 @@ The server name is `hivemind`, so tools appear as `mcp__hivemind__<name>`. Every
 | `POST /admin/rooms` · `DELETE /admin/rooms/<room>` | admin secret | Create or delete a room. Create returns the viewer token. |
 | `POST /admin/rooms/<room>/invite` | admin secret | Issue an agent token for a person. |
 | `POST /admin/rooms/<room>/revoke` | admin secret | Revoke one person's token, or rotate all agent tokens or the viewer token (bumps that generation, §13). |
+| `POST /admin/rooms/<room>/webhook` | admin secret | Create or rotate the room's optional GitHub push webhook, or switch it off (`{"disable":true}`). Returns the payload path and secret (§12, §13). |
+| `POST /github/<room>/<generation>` | GitHub webhook signature | Optional GitHub `push` webhook (§12). Verified in the Worker with `X-Hub-Signature-256`, not a room token. |
 | `GET /health` | none | Liveness. |
 
 **Token checks happen in the Worker,** before any Durable Object is touched: the signature is verified statelessly (§13), so requests with bad tokens or for rooms that don't exist never wake a Room. The Room then checks only the token generation and the revoke list.

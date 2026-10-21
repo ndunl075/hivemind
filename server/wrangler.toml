@@ -8,7 +8,7 @@ compatibility_flags = ["nodejs_compat"]
 directory = "../dashboard/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/hook", "/mcp", "/whoami", "/mode", "/unlock", "/health", "/admin/*", "/r/*/ws"]
+run_worker_first = ["/hook", "/mcp", "/whoami", "/mode", "/unlock", "/health", "/admin/*", "/github/*", "/r/*/ws"]
 
 [[durable_objects.bindings]]
 name = "ROOM"
