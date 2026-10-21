@@ -628,6 +628,7 @@ Hivemind works alongside Git and GitHub with any workflow: a shared branch, a br
 
   These are warnings, not denials `[DECIDED]`. A warning disappears once the agent has the pushed version, or after 24 hours.
 - **Branch and HEAD** are shown per agent on the dashboard, refreshed with each heartbeat.
+- **Limits of the implementation:** a repo with no remote (or no default branch) has no comparison point, so its reports are marked truncated and locks there are never released by divergence; they clear on `release`, task done, or the agent ending. In a shared checkout, shell-edit attribution (§9 rule 4) is skipped while any other agent in that checkout hasn't reported since the reporter's previous heartbeat or has run a shell command since then, so shell edits there may go unlocked rather than be locked for the wrong agent.
 - **Not covered in v1:** people's own clones where no agent runs, so their pushes are invisible. `[OPEN]` Phase 2: an optional GitHub push webhook, or an opt-in `pre-push` Git hook installed with `hivemind join --git-hooks` (opt-in because it would conflict with tools like husky).
 - **GitHub itself** (PRs, reviews, Actions) is untouched and needs no configuration.
 

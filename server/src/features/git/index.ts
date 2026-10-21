@@ -96,7 +96,7 @@ export const createPushes: FeatureFactory<'pushes'> = (ctx, features) => {
 
       for (const f of files) {
         const old = latestByPath.get(k(repo, f.path));
-        if (old && old.at > now) continue; // never replace a newer push with an older one
+        // Pushes are ordered by arrival; the hook only reports a push once (lastReported), so the latest report wins.
         if (old && old.path !== f.path) ctx.sql.exec('DELETE FROM pushes WHERE repo = ? AND path = ?', old.repo, old.path).toArray();
         latestByPath.set(k(repo, f.path), { repo, path: f.path, sha: push.sha, blob: f.blob, by: actor.callsign, branch: push.branch, at: now });
         ctx.sql.exec(
