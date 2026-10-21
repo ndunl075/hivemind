@@ -5,7 +5,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { main } from '../hivemind.mjs';
 import {
@@ -107,6 +107,30 @@ describe('join', () => {
     expect(mcp.headersHelper).toContain('headers-helper.mjs');
     expect(mcp.headersHelper).not.toContain(AGENT_TOKEN);
     expect(JSON.stringify(mcp)).not.toContain('hm_a.');
+  });
+
+  it('the installed hook folder runs on its own: a Codex and a Claude SessionStart print the exact recorded output', async () => {
+    const lap = laptop();
+    await join_(lap);
+    const fixture = (tool, name) => JSON.parse(readFileSync(new URL(`../../shared/fixtures/hooks/${tool}/${name}.json`, import.meta.url), 'utf8'));
+    for (const tool of ['codex', 'claude']) {
+      const payload = { ...fixture(tool, 'SessionStart'), cwd: lap.project.dir, session_id: `installed-${tool}` };
+      const r = await new Promise((resolve) => {
+        const child = spawn(process.execPath, [lap.path('.hivemind', 'hook', 'hook.mjs'), tool], {
+          env: { ...process.env, HIVEMIND_HOME: lap.path('.hivemind'), TEMP: lap.dir, TMP: lap.dir, TMPDIR: lap.dir },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (c) => { stdout += c; });
+        child.stderr.on('data', (c) => { stderr += c; });
+        child.on('close', (status) => resolve({ status, stdout, stderr }));
+        child.stdin.end(JSON.stringify(payload));
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout, r.stderr).toBe(fixture(tool, 'output/SessionStart.additionalContext').stdout);
+    }
+    expect(srv.requests.filter((q) => q.url === '/hook').map((q) => q.body.agent)).toEqual(['codex', 'claude']);
   });
 
   it('writes config.json owner-only where the OS has modes', async () => {

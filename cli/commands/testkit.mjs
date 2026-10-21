@@ -180,6 +180,7 @@ export async function startFakeServer() {
       }
       if (auth !== `Bearer ${AGENT_TOKEN}`) return send(401, { error: 'invalid token' });
       if (url === '/whoami') return send(200, { room: 'hack', person: 'ana', mode: 'enforce' });
+      if (url === '/hook') return send(200, { decision: 'allow', reason: null, context: '<briefing>', callsign: 'codex-ana', heartbeatMs: 15000, mode: 'enforce' });
       if (url === '/mode') return send(200, { mode: body.mode });
       if (url === '/unlock') return send(200, { released: [{ path: 'src/a.ts', holder: 'codex-ben', kind: 'file' }], note: 'Also dropped something.' });
       return send(404, { error: 'not found' });
