@@ -1,5 +1,5 @@
 /**
- * Admin commands (ARCHITECTURE.md §17): room create/delete, invite, revoke, rotate.
+ * Admin commands (ARCHITECTURE.md §17): room create/delete, invite, revoke, rotate, webhook.
  * The admin secret comes from HIVEMIND_ADMIN_TOKEN, a hidden prompt in a terminal, or one piped line with
  * --token-stdin; never from argv. A token or dashboard link is
  * printed exactly once, by the command that issues it, on its own line so it is easy to copy.
@@ -137,5 +137,38 @@ export async function rotate(argv, ctx) {
   if (typeof res.viewerToken !== 'string') throw new CliError('the server answered without a dashboard token');
   ctx.out('The old dashboard link no longer works. New link (read-only; shown only now, copy it):\n');
   ctx.out(`${dashboardLink(server, /** @type {string} */ (name), res.viewerToken)}\n`);
+  return 0;
+}
+
+/**
+ * hivemind webhook <room> [--off]
+ * Creates the room's GitHub push webhook, or rotates it (the old URL and secret stop working), and prints the Payload
+ * URL and secret once. `--off` switches it off. A webhook only produces push notices (ARCHITECTURE.md §12).
+ * @param {string[]} argv
+ * @param {Context} ctx
+ */
+export async function webhook(argv, ctx) {
+  const { positionals, flags, options } = parseArgs(argv, { flags: ['off', 'token-stdin'], options: ['server'] });
+  const [name] = needPositionals(positionals, 1, 'webhook <room> [--off]');
+  checkRoom(/** @type {string} */ (name));
+  const { server, secret } = await adminSession(ctx, options, flags);
+  if (flags.has('off')) {
+    await call(ctx, server, `/admin/rooms/${name}/webhook`, { token: secret, body: { disable: true } });
+    ctx.out(`The GitHub webhook of room "${name}" is off. Deliveries to its old URL are refused; you can delete it in the repository's settings.\n`);
+    return 0;
+  }
+  const res = await call(ctx, server, `/admin/rooms/${name}/webhook`, { token: secret, body: {} });
+  if (typeof res.path !== 'string' || typeof res.secret !== 'string') throw new CliError('the server answered without a webhook URL and secret');
+  ctx.out(`GitHub webhook for room "${name}". In the repository on github.com: Settings > Webhooks > Add webhook (or edit the existing one):\n`);
+  ctx.out('  Payload URL (copy it):\n');
+  ctx.out(`${server}${res.path}\n`);
+  ctx.out('  Secret (shown only now, copy it):\n');
+  ctx.out(`${res.secret}\n`);
+  ctx.out('  Content type: application/json\n');
+  ctx.out('  SSL verification: enabled\n');
+  ctx.out('  Events: "Let me select individual events", then tick only "Pushes"\n');
+  ctx.out('  Active: ticked\n');
+  ctx.out('Agents whose repo\'s origin URL ends in the repository name get a "pulled before editing" notice for pushes and merges made outside any agent.\n');
+  ctx.out(`Running this command again rotates the URL and secret; update GitHub when you do. Switch it off with: hivemind webhook ${name} --off\n`);
   return 0;
 }

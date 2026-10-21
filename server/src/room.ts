@@ -19,6 +19,7 @@ import {
 import { AgentStore } from './agents';
 import { BudgetCounter } from './budget';
 import type { Env } from './env';
+import { createGithub, type GithubApi } from './features/github';
 import { createLocks } from './features/locks';
 import { handleMcp } from './features/mcp';
 import { createMessages } from './features/messages';
@@ -34,7 +35,7 @@ import { WaitRegistry } from './waits';
 
 /** Set by the Worker after it verified the token. Only the Worker can reach a Room. */
 export interface InternalClaims {
-  kind: 'agent' | 'viewer' | 'admin';
+  kind: 'agent' | 'viewer' | 'admin' | 'webhook';
   room: string;
   person?: string;
   generation?: number;
@@ -50,6 +51,7 @@ export class Room extends DurableObject<Env> {
   private meta = new Map<string, string>();
   agents!: AgentStore;
   features!: Features;
+  private github!: GithubApi;
   budget!: BudgetCounter;
   readonly waits = new WaitRegistry();
   private pipeline!: Pipeline;
@@ -131,6 +133,8 @@ export class Room extends DurableObject<Env> {
     features.pushes = createPushes(this.roomCtx, features);
     features.snapshot = createSnapshot(this.roomCtx, features);
     this.features = features;
+
+    this.github = createGithub(this.roomCtx, features, { graceMs: () => this.budget.level().heartbeatMs * 1.5 });
 
     this.svc = {
       ctx: this.roomCtx,
@@ -333,6 +337,7 @@ export class Room extends DurableObject<Env> {
   private afterRequest(): void {
     const now = this.now();
     this.agents.flush();
+    this.github.flushDue();
     if (now - this.lastHousekeeping >= HOUSEKEEPING_EVERY_MS) {
       this.lastHousekeeping = now;
       this.dropOldBudgetKeys(`budget:${this.budget.date}`);
@@ -405,7 +410,7 @@ export class Room extends DurableObject<Env> {
     try {
       const raw = request.headers.get('x-hm-claims');
       const c = raw ? (JSON.parse(raw) as InternalClaims) : null;
-      return c && (c.kind === 'agent' || c.kind === 'viewer' || c.kind === 'admin') ? c : null;
+      return c && (c.kind === 'agent' || c.kind === 'viewer' || c.kind === 'admin' || c.kind === 'webhook') ? c : null;
     } catch {
       return null;
     }
@@ -461,6 +466,9 @@ export class Room extends DurableObject<Env> {
         if (method !== 'POST') throw new HttpError(405, 'method not allowed');
         return json(this.unlock(person, (await this.body(request)) as Partial<UnlockRequest>));
       }
+      case '/github':
+        if (claims.kind !== 'webhook') throw new HttpError(401, 'webhook delivery required');
+        return this.githubDelivery(request, claims);
       case '/ws':
         if (claims.kind !== 'viewer') throw new HttpError(401, 'viewer token required');
         return this.upgrade(request);
@@ -468,6 +476,26 @@ export class Room extends DurableObject<Env> {
         if (path.startsWith('/admin/') && claims.kind === 'admin') return this.admin(path, request);
         throw new HttpError(404, 'not found');
     }
+  }
+
+  /**
+   * A verified GitHub delivery (§12). The Worker checked the signature; here only the generation is checked, so a
+   * rotated secret's old URL stops working. A webhook queues a push notice and nothing else.
+   */
+  private githubDelivery(request: Request, claims: InternalClaims): Promise<Response> | Response {
+    if (request.method !== 'POST') throw new HttpError(405, 'method not allowed');
+    const current = this.meta.get('webhook_generation');
+    if (current === undefined) throw new HttpError(404, 'the GitHub webhook is not enabled for this room');
+    if (claims.generation !== Number(current)) throw new HttpError(401, 'this webhook secret was rotated; use the new payload URL and secret');
+    const isPing = request.headers.get('x-gh-event') === 'ping';
+    return request.text().then((text) => {
+      if (isPing) return json({ ok: true, status: 'pong' });
+      const r = this.github.receive(text);
+      if (r.ok) return json({ ok: true, status: r.status });
+      if (r.status === 'rate-limited') return errorResponse('too many deliveries', 429, { 'retry-after': '60' });
+      if (r.status === 'ignored') return json({ ok: true, status: 'ignored', reason: r.reason });
+      return errorResponse(r.reason, 400);
+    });
   }
 
   private unlock(person: string, b: Partial<UnlockRequest> & { path?: unknown; agent?: unknown }): UnlockResponse {
@@ -567,6 +595,18 @@ export class Room extends DurableObject<Env> {
         }
         throw new HttpError(400, 'rotate must be agents or viewer');
       }
+      case '/admin/webhook': {
+        const b = await this.body(request);
+        if (b.disable === true) {
+          this.delMeta('webhook_generation');
+          return json({});
+        }
+        // The counter only goes up (and survives a room delete), so an old payload URL and secret never work again.
+        const generation = Number(this.meta.get('webhook_counter') ?? 0) + 1;
+        this.setMeta('webhook_counter', String(generation));
+        this.setMeta('webhook_generation', String(generation));
+        return json({ generation });
+      }
       case '/admin/delete': {
         this.wipe();
         return json({ deleted: true });
@@ -580,6 +620,7 @@ export class Room extends DurableObject<Env> {
   private wipe(): void {
     const agentGen = this.num('agent_generation') + 1;
     const viewerGen = this.num('viewer_generation') + 1;
+    const webhookCounter = this.meta.get('webhook_counter');
     this.closeViewers('room deleted');
     this.waits.cancelAll();
     if (this.snapshotTimer !== null) {
@@ -594,5 +635,6 @@ export class Room extends DurableObject<Env> {
     this.boot();
     this.setMeta('agent_generation', String(agentGen));
     this.setMeta('viewer_generation', String(viewerGen));
+    if (webhookCounter !== undefined) this.setMeta('webhook_counter', webhookCounter);
   }
 }

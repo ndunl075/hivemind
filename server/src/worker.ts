@@ -3,10 +3,11 @@
  * so requests with bad tokens never wake a Room. The Room then checks only the generation and the revoke list.
  */
 import type {
-  AdminCreateRoomResponse, AdminInviteResponse, AdminRevokeResponse, ErrorResponse,
+  AdminCreateRoomResponse, AdminInviteResponse, AdminRevokeResponse, AdminWebhookResponse, ErrorResponse,
 } from '../../shared/contracts';
 import { DASHBOARD_SUBPROTOCOL } from '../../shared/contracts';
 import type { Env } from './env';
+import { verifySignature, webhookSecret } from './features/github';
 import type { InternalClaims } from './room';
 import {
   bearer, PERSON_NAME_RE, ROOM_NAME_RE, secretsEqual, signAgentToken, signViewerToken, verifyAgentToken, verifyViewerToken,
@@ -16,6 +17,8 @@ import { errorResponse, json } from './util';
 export { Room } from './room';
 
 const MAX_BODY_BYTES = 256 * 1024;
+/** A GitHub push payload lists every file of up to 20 commits; this is generous for that and bounded for the rest. */
+const MAX_WEBHOOK_BYTES = 1024 * 1024;
 
 class Reject extends Error {
   constructor(readonly status: number, message: string) {
@@ -114,7 +117,63 @@ async function admin(request: Request, env: Env, url: URL): Promise<Response> {
     const out: AdminRevokeResponse = viewerGeneration === undefined ? {} : { viewerToken: await signViewerToken(env.TOKEN_SECRET, room, viewerGeneration) };
     return json(out);
   }
+  if (action === 'webhook') {
+    const body = await readJson(request);
+    const res = await toRoom(env, claims, '/admin/webhook', { method: 'POST', body: JSON.stringify({ disable: body.disable === true }) });
+    if (!res.ok) return relayError(res);
+    const { generation } = (await res.json()) as { generation?: number };
+    if (generation === undefined) return json({} satisfies AdminWebhookResponse);
+    const out: AdminWebhookResponse = {
+      generation, path: `/github/${room}/${generation}`, secret: await webhookSecret(env.TOKEN_SECRET, room, generation),
+    };
+    return json(out);
+  }
   throw new Reject(404, 'not found');
+}
+
+/** The body of a webhook delivery as bytes (the signature is over the exact bytes), refusing more than the limit. */
+async function readWebhookBody(request: Request): Promise<Uint8Array> {
+  const declared = Number(request.headers.get('content-length') ?? 0);
+  if (declared > MAX_WEBHOOK_BYTES) throw new Reject(413, 'body too large');
+  const reader = request.body?.getReader();
+  if (!reader) return new Uint8Array(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_WEBHOOK_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Reject(413, 'body too large');
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.byteLength; }
+  return out;
+}
+
+/**
+ * POST /github/<room>/<generation>: a GitHub `push` webhook (§12, §13). The signature is checked statelessly here, with
+ * the secret derived from TOKEN_SECRET, so unsigned or mis-signed requests and unknown rooms never wake a Room.
+ * The Room then checks that this generation is the current one.
+ */
+async function githubWebhook(request: Request, env: Env, match: RegExpExecArray): Promise<Response> {
+  if (request.method !== 'POST') throw new Reject(405, 'method not allowed');
+  const room = match[1] as string;
+  const generation = Number(match[2]);
+  if (!ROOM_NAME_RE.test(room) || !Number.isSafeInteger(generation) || generation < 1) throw new Reject(404, 'not found');
+  const event = request.headers.get('x-github-event');
+  const signature = request.headers.get('x-hub-signature-256');
+  if (!signature || !event) throw new Reject(401, 'invalid signature');
+  const body = await readWebhookBody(request);
+  const secret = await webhookSecret(env.TOKEN_SECRET, room, generation);
+  if (!(await verifySignature(secret, body, signature))) throw new Reject(401, 'invalid signature');
+  if (event !== 'ping' && event !== 'push') throw new Reject(400, 'only push events are accepted');
+  const headers = new Headers({ 'content-type': 'application/json', 'x-gh-event': event });
+  return toRoom(env, { kind: 'webhook', room, generation }, '/github', { method: 'POST', body: new TextDecoder().decode(body), headers });
 }
 
 /** The viewer token rides in Sec-WebSocket-Protocol next to 'hivemind' (§13), never in the URL. */
@@ -131,6 +190,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
 
   if (path === '/health') return json({ ok: true });
   if (path.startsWith('/admin/')) return admin(request, env, url);
+
+  const githubMatch = /^\/github\/([^/]+)\/(\d{1,9})$/.exec(path);
+  if (githubMatch) return githubWebhook(request, env, githubMatch);
 
   const wsMatch = /^\/r\/([^/]+)\/ws$/.exec(path);
   if (wsMatch) {

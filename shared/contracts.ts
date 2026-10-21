@@ -278,6 +278,20 @@ export interface AdminRevokeResponse {
   viewerToken?: string;
 }
 
+/** POST /admin/rooms/<room>/webhook: create or rotate the room's GitHub push webhook (§12, §13), or switch it off. */
+export interface AdminWebhookRequest {
+  /** Switch the webhook off instead of creating or rotating it. */
+  disable?: boolean;
+}
+
+export interface AdminWebhookResponse {
+  /** Absent when the webhook was switched off. Append to the server URL to get GitHub's Payload URL. */
+  path?: string;
+  /** The secret for GitHub's Secret field. Derived on demand, shown only by the command that creates or rotates it. */
+  secret?: string;
+  generation?: number;
+}
+
 export interface ErrorResponse {
   error: string;
 }
