@@ -340,6 +340,8 @@ The `command` plus `args` form is expected to run without a shell, so it behaves
 
 **Codex registration** (merged into `~/.codex/hooks.json`): the same events and matchers, with `PreToolUse` matching `apply_patch|Edit|Write|mcp__hivemind__.*`. Each handler has a `command` (POSIX quoting of the absolute node and script paths) and a `commandWindows` (Windows quoting), and `timeout` 5, or 3 for `SessionEnd`. `[VERIFY]` which shell Codex uses on each OS. After `join`, each Codex user approves the new hooks once with `/hooks`. Since the definitions never change, that approval holds until `hivemind update` changes them.
 
+While the budget guard has heartbeats off (`heartbeatMs: 0`, §16), none of the Git state above is sent, so pushes don't release locks and shell edits aren't detected; the room is in `warn` mode for exactly that reason.
+
 **Coverage:**
 - Edits made through the edit tools are checked **before** they happen.
 - Edits made any other way (shell commands, formatters, code generators, `apply_patch` sent through a shell) are **detected after** they happen, at the heartbeat that follows the shell command (or the next regular heartbeat), from the checkout's divergent files (§9, §12).
@@ -354,12 +356,13 @@ The `command` plus `args` form is expected to run without a shell, so it behaves
 6. **Local fast paths, no network:**
    - `mcp__hivemind__` calls only get the `me` check (§5).
    - `PostToolUse` after a shell tool (`Bash`, `PowerShell`) sets `shellSinceHeartbeat` in the session state.
-   - `PostToolUse` then exits if the heartbeat isn't due (`now < lastHeartbeat + heartbeatMs`), unless a shell tool just ran: the first `PostToolUse` after a shell command always sends a heartbeat, so pushes and shell edits are seen right away.
+   - If the last response said `heartbeatMs: 0` (the budget guard, §16), heartbeats are off: `PostToolUse` exits here, and `UserPromptSubmit` and `Stop` send no Git state. Otherwise:
+   - `PostToolUse` exits if the heartbeat isn't due (`now < lastHeartbeat + heartbeatMs`), unless a shell tool just ran: the first `PostToolUse` after a shell command always sends a heartbeat, so pushes and shell edits are seen right away.
 7. **Path extraction for edits:**
    - Claude `Edit`, `Write` and `MultiEdit`: `tool_input.file_path`. `NotebookEdit`: `tool_input.notebook_path`.
    - Codex `apply_patch`: parse `*** Add File: `, `*** Update File: `, `*** Delete File: ` and `*** Move to: ` lines from `tool_input.command`. Relative paths resolve against `cwd`.
 8. **Normalization:** convert to repo-relative POSIX paths. Drop paths outside the checkout and anything under `.git/`.
-9. **Git state** (on `SessionStart`, `UserPromptSubmit`, `Stop` and heartbeats): divergent files, upstream position and pushed files are computed locally (§12). On `SessionStart`, the divergent files are saved as the session's **baseline**: changes that existed before this agent started are never attributed to it (§9 rule 4).
+9. **Git state** (on `SessionStart`, `UserPromptSubmit`, `Stop` and heartbeats, except while heartbeats are off): divergent files, upstream position and pushed files are computed locally (§12). On `SessionStart`, the divergent files are saved as the session's **baseline**: changes that existed before this agent started are never attributed to it (§9 rule 4).
 10. **Settings:** the hook reads `.hivemind/project.json` from the checkout, if present, and sends it on `SessionStart` and whenever its hash changes. The server keeps the latest settings per repo in `meta`.
 11. Send **one** request to `POST /hook` (§6.4), with a network timeout of 1,500 ms (800 ms for `SessionEnd`).
 12. **Stale-copy check** (on edits, after the server answers): for each `lastPush` returned, compare the local copy against the pushed version (§12) and compose a warning. A failure in this step drops only the warning. It never changes the lock decision.
@@ -408,7 +411,7 @@ The `command` plus `args` form is expected to run without a shell, so it behaves
   "context": "…",                   // additionalContext text, or null
   "callsign": "claude-nico",
   "lastPush": [{ "path": "src/auth/login.ts", "sha": "c3d4e5f", "blob": "9a1f…", "by": "codex-ana", "branch": "main", "at": 1761000000000 }],
-  "heartbeatMs": 15000,             // server-controlled interval (§16)
+  "heartbeatMs": 15000,             // server-controlled interval (§16); 0 = heartbeats and Git state off
   "mode": "enforce"                 // 'enforce' | 'warn' | 'off'
 }
 ```
@@ -794,10 +797,10 @@ Cloudflare's Workers Free plan allows about **100,000 Worker requests a day** an
 
 | Source | Rate | Requests a day |
 |---|---|---|
-| Heartbeats (`PostToolUse`, throttled) | 1 per 15 s per working agent | 23,040 |
+| Heartbeats (`PostToolUse` throttled to 1 per 15 s, plus forced ones after shell commands) | about 1 per 15 s per working agent | 23,040 |
 | Edit checks (`PreToolUse`) | about 1.5 edits a minute per agent | 8,640 |
 | MCP tool calls (the `me` check is local and costs nothing) | about 20 an hour per agent | 1,920 |
-| Session, prompt and stop events | — | about 2,000 |
+| Session, prompt and stop events | about 15 an hour per agent | about 2,000 (more if agents run very short turns) |
 | **Total** | | **about 36,000** (36% of each cap) |
 
 At 16 agents and 3 edits a minute, the same rates come to about 88,000. That's why there's a guard.
