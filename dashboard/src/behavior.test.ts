@@ -114,3 +114,79 @@ describe('live updates', () => {
     expect(list.getAttribute('aria-live')).toBe('polite');
   });
 });
+
+describe('auth failure from the live source', () => {
+  it('stops the source, forgets the token, re-prompts, and restarts with the new token', async () => {
+    const handlers: LiveHandlers[] = [];
+    const tokens: (string | null)[] = [];
+    let stopped = 0;
+    const createSource = (opts: { token: string | null }): LiveSource => {
+      tokens.push(opts.token);
+      return {
+        start(h) {
+          handlers.push(h);
+          return () => { stopped += 1; };
+        },
+      };
+    };
+    localStorage.setItem('hivemind.viewer.demo', 'hm_v.test.1.AAAA');
+    const snap = structuredClone(fixtureSnapshot);
+    app = mountApp(root, { createSource, sourceNeedsToken: true, room: 'demo', token: 'hm_v.test.1.AAAA', demo: null, clock: () => snap.now });
+    expect(root.querySelector('[inert]')).toBeNull();
+
+    handlers[0]!.onAuthFailure!();
+    await Promise.resolve();
+    expect(stopped).toBe(1);
+    expect(root.querySelector('[inert]')).not.toBeNull();
+    expect(localStorage.getItem('hivemind.viewer.demo')).toBeNull();
+
+    const overlay = root.querySelector<HTMLElement>('.token-overlay')!;
+    const input = overlay.querySelector('input')!;
+    input.value = 'hm_v.test.2.BBBB';
+    overlay.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(tokens).toEqual(['hm_v.test.1.AAAA', 'hm_v.test.2.BBBB']);
+    expect(handlers.length).toBe(2);
+    expect(localStorage.getItem('hivemind.viewer.demo')).toBe('hm_v.test.2.BBBB');
+    expect(root.querySelector('[inert]')).toBeNull();
+
+    // A late failure from the replaced source is ignored.
+    handlers[0]!.onAuthFailure!();
+    await Promise.resolve();
+    expect(stopped).toBe(1);
+    expect(root.querySelector('[inert]')).toBeNull();
+  });
+
+  it('handles a failure reported synchronously inside start(), with no connecting banner', async () => {
+    let stopped = 0;
+    const source: LiveSource = {
+      start(h) {
+        h.onAuthFailure!();
+        return () => { stopped += 1; };
+      },
+    };
+    vi.useFakeTimers();
+    let now = fixtureSnapshot.now;
+    app = mountApp(root, { createSource: () => source, sourceNeedsToken: true, room: 'demo', token: 'hm_v.test.1.AAAA', demo: null, clock: () => now });
+    await Promise.resolve();
+    expect(stopped).toBe(1);
+    expect(root.querySelector('[inert]')).not.toBeNull();
+    now += 60_000;
+    vi.advanceTimersByTime(1000);
+    expect(root.textContent).not.toContain('Connecting to the room');
+    expect(root.textContent).not.toContain('Reconnecting');
+    app.stop();
+    app = null;
+    expect(stopped).toBe(1);
+  });
+
+  it('shows no connecting banner while the initial token prompt is open', () => {
+    vi.useFakeTimers();
+    let now = fixtureSnapshot.now;
+    const source: LiveSource = { start() { return () => {}; } };
+    app = mountApp(root, { createSource: () => source, sourceNeedsToken: true, room: 'demo', token: null, demo: null, clock: () => now });
+    now += 60_000;
+    vi.advanceTimersByTime(1000);
+    expect(root.querySelector('[inert]')).not.toBeNull();
+    expect(root.textContent).not.toContain('Connecting to the room');
+  });
+});
