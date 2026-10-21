@@ -23,10 +23,10 @@ describe('snapshot', () => {
     expect((await hook(b, 'sb', editBody('src/auth/login.ts'))).decision).toBe('deny');
     expect(await viewer.next((m) => m.type === 'pulse' && m.kind === 'denied')).toMatchObject({ from: 'claude-nico', to: 'claude-ana' });
 
-    // A push.
+    // A push of that file; it is edited again (still divergent), so the push notice is sent and the lock stays.
     await hook(a, 'sa', {
       event: 'PostToolUse',
-      git: { divergent: [], upstream: 'origin/main', truncated: false, pushed: { branch: 'main', sha: 'abc1234', files: [{ path: 'src/auth/login.ts', blob: 'b1' }] } },
+      git: { divergent: ['src/auth/login.ts'], upstream: 'origin/main', truncated: false, pushed: { branch: 'main', sha: 'abc1234', files: [{ path: 'src/auth/login.ts', blob: 'b1' }] } },
     });
     expect(await viewer.next((m) => m.type === 'pulse' && m.kind === 'push')).toMatchObject({ from: 'claude-ana', path: 'src/auth/login.ts' });
 

@@ -10,4 +10,6 @@ Tests (`server/src/features/locks/locks.test.ts`, new describe "rule 3: a push r
 3. pushed file divergent again: not released.
 4. truncated report: nothing released.
 
-Results: `npm run typecheck` passes. `npm run test:workers`: 201 passed, 1 failed. The failure is `server/src/features/snapshot/snapshot.test.ts` ("snap.locks" expects `src/auth/login.ts` still locked right after a PostToolUse that pushes that same file, one request after the edit). That test depended on the bug; it passes on main. It is outside this task's ownership, so it is not edited here. Suggested fix for its owner: advance the clock (or fake time) more than a heartbeat interval between the edit and the push, or push a different file than the one still expected to be locked.
+Results: `npm run typecheck` passes. Full `npm test` passes (root 326 passed/3 skipped, workers 202, dashboard 98).
+
+`server/src/features/snapshot/snapshot.test.ts` depended on the bug (it expected the lock on `src/auth/login.ts` to survive a push of that same file, one request after the edit). With approval, its push report now lists the file as still divergent (edited again), so the lock stays held and the push notice is still in the snapshot.
