@@ -125,7 +125,7 @@ sequenceDiagram
   R-->>HN: deny: held by codex-ana, task #4, unpushed changes
   HN-->>K: deny, with reason and options
   K->>R: post(to: codex-ana, "need login.ts for the session fix")
-  C->>HA: PostToolUse (any tool)
+  C->>HA: PostToolUse (after a shell command)
   HA->>R: heartbeat
   R-->>HA: 1 message from claude-nico
   HA-->>C: additionalContext: message from claude-nico
@@ -327,7 +327,7 @@ Recorded payloads and accepted output shapes for every event are in `shared/fixt
   "hooks": {
     "SessionStart":     [{ "hooks": [{ "type": "command", "command": "/abs/node", "args": ["/home/me/.hivemind/hook/hook.mjs", "claude"], "timeout": 5 }] }],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/abs/node", "args": ["/home/me/.hivemind/hook/hook.mjs", "claude"], "timeout": 5 }] }],
-    "PreToolUse":       [{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|mcp__hivemind__.*", // MultiEdit is absent in 2.1.287; harmless
+    "PreToolUse":       [{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|mcp__hivemind__.*",
                            "hooks": [{ "type": "command", "command": "/abs/node", "args": ["/home/me/.hivemind/hook/hook.mjs", "claude"], "timeout": 5 }] }],
     "PostToolUse":      [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/abs/node", "args": ["/home/me/.hivemind/hook/hook.mjs", "claude"], "timeout": 5 }] }],
     "Stop":             [{ "hooks": [{ "type": "command", "command": "/abs/node", "args": ["/home/me/.hivemind/hook/hook.mjs", "claude"], "timeout": 5 }] }],
@@ -336,7 +336,7 @@ Recorded payloads and accepted output shapes for every event are in `shared/fixt
 }
 ```
 
-The `command` plus `args` form runs without a shell, so it behaves the same under Git Bash and PowerShell on Windows (confirmed by the spike, §21 item 5).
+`MultiEdit` doesn't exist in Claude Code 2.1.287; keeping it in the matcher is harmless. The `command` plus `args` form runs without a shell, so it behaves the same under Git Bash and PowerShell on Windows (confirmed by the spike, §21 item 5).
 
 **Codex registration** (merged into `~/.codex/hooks.json`): the same events, with `PreToolUse` matching `apply_patch|Edit|Write|mcp__hivemind__.*` and `PostToolUse` matching only `Bash|apply_patch` (unlike Claude's `.*`; Codex doesn't support the lookahead exclusion, and each Codex hook costs PowerShell startup on Windows). Codex agents therefore heartbeat after shell commands and patches, plus on `UserPromptSubmit` and `Stop`. Each handler has a `command` (POSIX quoting of the absolute node and script paths) and a `commandWindows`, and `timeout` 5, or 3 for `SessionEnd`. The spike confirmed that on Windows Codex runs `commandWindows` through Windows PowerShell 5.1, so it must use the call operator: `& "<node>" "<hook.mjs>" codex; exit $LASTEXITCODE`. PowerShell startup costs about 1.1 s per Codex hook on Windows, so Codex's `PostToolUse` matcher is kept narrow there (§21 item 10). After `join`, each Codex user approves the new hooks once with `/hooks`. Since the definitions never change, that approval holds until `hivemind update` changes them.
 
