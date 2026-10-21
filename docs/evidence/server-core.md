@@ -28,7 +28,7 @@
 - `events.data` is JSON `{ text, data?, pulse?, edge?, wake? }`, so W7 can rebuild the activity feed and recent edges from the table. The Room overwrites `room`, `mode`, `now` and `usage` in every snapshot, whatever `SnapshotApi.build()` returns for them.
 - `reserve` is strict in every mode (it is an explicit request). `checkEdit` in `warn` mode still takes locks for free paths; in `off` it takes none.
 - Rule 3 releases a file lock when the holder, or any agent in the lock's checkout, reports a complete list without the file (rule 5's release half). Known small race: a lock taken just before a same-checkout agent's heartbeat computed its list can be released early and is re-taken on the next edit.
-- Messages: broadcasts reach agents that registered before the message. `unreadCount()` is an extra method on the messages feature that the `status` tool uses when present (the frozen `MessagesApi` cannot count without delivering); it falls back to `hasUnreadDirect`.
+- Messages: broadcasts reach agents that registered before the message. `unreadCount()` (now part of `MessagesApi` after contract checkpoint 1) counts unread direct and broadcast messages without delivering them; the `status` tool uses it.
 - Test pitfall recorded: an unread response body keeps a request in flight and stalls `evictDurableObject`; tests read bodies.
 
 ## Review round 1 (Tier 2)

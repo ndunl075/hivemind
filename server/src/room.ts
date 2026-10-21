@@ -342,7 +342,7 @@ export class Room extends DurableObject<Env> {
 
   /** The messages feature may offer forget(callsign): drop direct messages and delivered state of a gone callsign. */
   private forgetMessages(callsign: string): void {
-    (this.features.messages as { forget?: (cs: string) => void }).forget?.(callsign);
+    this.features.messages.forget(callsign);
   }
 
   // ---------------------------------------------------------------------------------------------- requests
@@ -443,7 +443,7 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  private unlock(person: string, b: Partial<UnlockRequest> & { path?: unknown; agent?: unknown }): UnlockResponse & { note?: string } {
+  private unlock(person: string, b: Partial<UnlockRequest> & { path?: unknown; agent?: unknown }): UnlockResponse {
     const hasPath = b.path !== undefined;
     const hasAgent = b.agent !== undefined;
     if (hasPath === hasAgent) throw new HttpError(400, 'give exactly one of path or agent');
