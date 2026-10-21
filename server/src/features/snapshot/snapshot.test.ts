@@ -23,7 +23,7 @@ describe('snapshot', () => {
     expect((await hook(b, 'sb', editBody('src/auth/login.ts'))).decision).toBe('deny');
     expect(await viewer.next((m) => m.type === 'pulse' && m.kind === 'denied')).toMatchObject({ from: 'claude-nico', to: 'claude-ana' });
 
-    // A push.
+    // A push of that file: the push notice is sent and, as the file is no longer divergent, the lock is released.
     await hook(a, 'sa', {
       event: 'PostToolUse',
       git: { divergent: [], upstream: 'origin/main', truncated: false, pushed: { branch: 'main', sha: 'abc1234', files: [{ path: 'src/auth/login.ts', blob: 'b1' }] } },
@@ -47,7 +47,7 @@ describe('snapshot', () => {
     expect(snap.usage.requests).toBeGreaterThan(0); // supplied by the Room from its request counter
     expect(typeof snap.now).toBe('number');
     expect(snap.agents.map((x) => x.callsign).sort()).toEqual(['claude-ana', 'claude-nico']);
-    expect(snap.locks.map((l) => l.path)).toEqual(['src/auth/login.ts']);
+    expect(snap.locks).toEqual([]); // the push released the file
     expect(snap.tasks).toEqual([]);
     expect(snap.edges).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'blocked', from: 'claude-nico', to: 'claude-ana', label: 'login.ts' }),
