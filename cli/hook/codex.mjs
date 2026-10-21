@@ -58,7 +58,7 @@ export function parse(raw) {
   } else if (tool !== null && PATH_TOOLS.has(tool) && typeof input.file_path === 'string') {
     editPaths = [input.file_path];
   }
-  const isHivemindTool = tool !== null && tool.startsWith('mcp__hivemind__');
+  const isHivemindTool = tool !== null && /^mcp__hivemind(?:-[a-z0-9]+)*__/.test(tool);
   return {
     event: /** @type {HookEvent} */ (String(raw.hook_event_name)),
     session: raw.session_id,

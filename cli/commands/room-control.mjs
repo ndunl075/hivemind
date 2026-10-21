@@ -5,13 +5,23 @@
 import { parseArgs } from './args.mjs';
 import { call, normalizeServer } from './api.mjs';
 import { CliError, paths } from './context.mjs';
-import { readConfig } from './install.mjs';
+import { readRooms } from './install.mjs';
+import { roomForRepo } from './rooms.mjs';
 import { identity, normalize } from '../hook/git.mjs';
 
-/** @param {Context} ctx */
-function needConfig(ctx) {
-  const config = readConfig(ctx);
-  if (!config) throw new CliError(`this laptop has not joined a room (${paths(ctx).config} is missing). Run hivemind join first.`);
+/**
+ * The room for the project the command runs in. A laptop can be in several rooms (each tied to its repos); with one
+ * room, that room is used wherever the command runs.
+ * @param {Context} ctx
+ */
+async function needConfig(ctx) {
+  const rooms = readRooms(ctx);
+  if (!rooms) throw new CliError(`this laptop has not joined a room (${paths(ctx).config} is missing). Run hivemind join first.`);
+  const ident = await identity(ctx.cwd);
+  const config = (ident ? roomForRepo(rooms, ident.repo) : undefined) ?? (rooms.length === 1 ? rooms[0] : undefined);
+  if (!config) {
+    throw new CliError(`this laptop is in ${rooms.length} rooms and this folder is not a project mapped to one of them. Run this inside a joined project.`);
+  }
   return { server: normalizeServer(config.server), token: config.token, room: config.room };
 }
 
@@ -24,7 +34,7 @@ export async function mode(argv, ctx) {
   const { positionals } = parseArgs(argv);
   const [m] = positionals;
   if (positionals.length !== 1 || (m !== 'enforce' && m !== 'warn' && m !== 'off')) throw new CliError('usage: hivemind mode enforce|warn|off');
-  const { server, token, room } = needConfig(ctx);
+  const { server, token, room } = await needConfig(ctx);
   const res = await call(ctx, server, '/mode', { token, body: { mode: m } });
   ctx.out(`Room "${room}" is now in ${res.mode ?? m} mode.\n`);
   return 0;
@@ -37,7 +47,7 @@ export async function mode(argv, ctx) {
  */
 export async function unlock(argv, ctx) {
   const { positionals, options } = parseArgs(argv, { options: ['agent'] });
-  const { server, token } = needConfig(ctx);
+  const { server, token } = await needConfig(ctx);
   /** @type {{ agent: string } | { path: { repo: string, path: string } }} */
   let body;
   if (options.agent !== undefined) {

@@ -41,7 +41,7 @@ While working:
   hivemind unlock --agent <callsign>       emergency release of everything an agent holds
   hivemind off | on                        pause or resume Hivemind on this laptop only
   hivemind update                          refresh the hook folder and registrations
-  hivemind leave                           remove this laptop's config and registrations
+  hivemind leave [--room <name>|--all]     leave this project's room (or one room, or every room)
 
 Admin commands also take --server <url> (or HIVEMIND_SERVER).
 `;

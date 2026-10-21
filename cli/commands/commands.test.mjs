@@ -72,7 +72,9 @@ describe('join', () => {
     const r = await join_(lap);
     expect(r.code, r.err).toBe(0);
     const config = readJson(lap.path('.hivemind', 'config.json'));
-    expect(config).toEqual({ server: SERVER, room: 'hack', person: 'ana', token: AGENT_TOKEN, repos: [lap.project.root] });
+    // The first room's fields stay at the top level (older hooks read them) and the rooms list holds every room.
+    const entry = { server: SERVER, room: 'hack', person: 'ana', token: AGENT_TOKEN, repos: [lap.project.root], mcp: 'hivemind' };
+    expect(config).toEqual({ server: SERVER, room: 'hack', person: 'ana', token: AGENT_TOKEN, repos: [lap.project.root], rooms: [entry] });
     // Only the runtime files plus the helper; no tests.
     const files = Object.keys(snapshot(lap.path('.hivemind', 'hook'))).sort();
     expect(files).toEqual([
@@ -84,14 +86,14 @@ describe('join', () => {
     expect(settings.permissions.allow).toEqual(['mcp__hivemind']);
     const hookScript = lap.path('.hivemind', 'hook', 'hook.mjs');
     expect(settings.hooks.SessionStart).toEqual([{ hooks: [{ type: 'command', command: process.execPath, args: [hookScript, 'claude'], timeout: 5 }] }]);
-    expect(settings.hooks.PreToolUse[0].matcher).toBe('Edit|Write|MultiEdit|NotebookEdit|mcp__hivemind__.*');
+    expect(settings.hooks.PreToolUse[0].matcher).toBe('Edit|Write|MultiEdit|NotebookEdit|mcp__hivemind.*');
     expect(settings.hooks.PostToolUse[0].matcher).toBe('.*');
     expect(settings.hooks.SessionEnd[0].hooks[0].timeout).toBe(3);
     expect(Object.keys(settings.hooks).sort()).toEqual(['PostToolUse', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit']);
 
     const codex = readJson(lap.path('.codex', 'hooks.json'));
     expect(Object.keys(codex.hooks).sort()).toEqual(['PostToolUse', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit']);
-    expect(codex.hooks.PreToolUse[0].matcher).toBe('apply_patch|Edit|Write|mcp__hivemind__.*');
+    expect(codex.hooks.PreToolUse[0].matcher).toBe('apply_patch|Edit|Write|mcp__hivemind.*');
     expect(codex.hooks.PostToolUse[0].matcher).toBe('Bash|apply_patch');
     const h = codex.hooks.SessionStart[0].hooks[0];
     expect(h.type).toBe('command');
@@ -597,7 +599,7 @@ describe('doctor', () => {
     expect(r.code, r.out).toBe(0);
     expect(r.out).toContain('accepts the token');
     expect(r.out).toContain('all 6 hooks registered');
-    expect(r.out).toContain('Codex: MCP server URL matches');
+    expect(r.out).toContain('Codex: MCP server "hivemind" URL matches');
     expect(r.out).toContain('permission rule "mcp__hivemind" present');
     expect(r.out).toContain('Self-test');
     expect(r.out).toContain('[Hivemind] You are');
@@ -625,13 +627,14 @@ describe('doctor', () => {
     rmSync(lap.stub.file);
     const cfgPath = lap.path('.hivemind', 'config.json');
     const cfg = readJson(cfgPath);
+    delete cfg.rooms; // an old single-room file, edited by hand
     cfg.repos = ['0000000000000000000000000000000000000000'];
     writeFileSync(cfgPath, JSON.stringify(cfg));
     const r = await lap.run(main, ['doctor']);
     expect(r.code).toBe(1);
     expect(r.out).toContain('hook files missing: codex.mjs');
     expect(r.out).toContain('hooks with a bad path or command for Stop');
-    expect(r.out).toContain('MCP server "hivemind" is missing');
+    expect(r.out).toContain('MCP server "hivemind" (room "hack") is missing');
     expect(r.out).toContain('NOT mapped');
 
     cfg.token = OTHER_TOKEN;
@@ -905,7 +908,7 @@ describe('the headersHelper command string, run the way a shell would', () => {
         // One word that needs no shell syntax of its own: the wrapper, with the node path inside it.
         expect(cmd.endsWith('hook/headers-helper.cmd')).toBe(true);
         const wrapper = readFileSync(join(home, 'hook', 'headers-helper.cmd'), 'utf8');
-        expect(wrapper).toBe(`@echo off\r\n"${process.execPath}" "%~dp0headers-helper.mjs"\r\n`);
+        expect(wrapper).toBe(`@echo off\r\n"${process.execPath}" "%~dp0headers-helper.mjs" %*\r\n`);
       }
       for (const [name, program, args, opts] of shells(cmd)) {
         const run = spawnSync(program, args, { encoding: 'utf8', timeout: 90000, stdio: ['ignore', 'pipe', 'pipe'], ...opts });
@@ -1129,7 +1132,7 @@ describe('messages and checks', () => {
   it('doctor accepts the Claude MCP entry join made, and flags one that is not ours', async () => {
     const lap = laptop();
     await join_(lap);
-    expect((await lap.run(main, ['doctor'])).out).toContain('MCP server "hivemind" is set up and is ours');
+    expect((await lap.run(main, ['doctor'])).out).toContain('MCP server "hivemind" (room "hack") is set up and is ours');
     rmSync(lap.path('.hivemind', 'install.json'));
     write(lap.path('.claude.json'), JSON.stringify({ mcpServers: { hivemind: { type: 'stdio', command: 'x' } } }));
     const r = await lap.run(main, ['doctor']);

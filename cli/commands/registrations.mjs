@@ -4,8 +4,8 @@
  */
 import { CliError } from './context.mjs';
 
-const CLAUDE_EDIT_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|mcp__hivemind__.*';
-const CODEX_EDIT_MATCHER = 'apply_patch|Edit|Write|mcp__hivemind__.*';
+const CLAUDE_EDIT_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|mcp__hivemind.*';
+const CODEX_EDIT_MATCHER = 'apply_patch|Edit|Write|mcp__hivemind.*';
 
 /** @type {HookSpec[]} */
 export const CLAUDE_SPECS = [
@@ -107,10 +107,14 @@ export function shellWord(path) {
  * @param {string} node
  * @param {string} helperScript
  * @param {string} helperCmd the Windows wrapper
+ * @param {string} [mcp] which room's token the helper prints, as the MCP server name. Left out for the plain
+ *   `hivemind` server, so a registration written before there were several rooms is exactly what is written now.
  */
-export function headersHelperCommand(platform, node, helperScript, helperCmd) {
-  if (platform === 'win32') return shellWord(helperCmd);
-  return `${posixQuote(node)} ${posixQuote(helperScript)}`;
+export function headersHelperCommand(platform, node, helperScript, helperCmd, mcp = 'hivemind') {
+  if (!/^hivemind(?:-[a-z0-9]+)*$/.test(mcp)) throw new CliError(`"${mcp}" is not a Hivemind MCP server name`);
+  const arg = mcp === 'hivemind' ? '' : ` ${mcp}`;
+  if (platform === 'win32') return shellWord(helperCmd) + arg;
+  return `${posixQuote(node)} ${posixQuote(helperScript)}${arg}`;
 }
 
 /**
@@ -119,7 +123,7 @@ export function headersHelperCommand(platform, node, helperScript, helperCmd) {
  */
 export function helperCmdText(node) {
   if (/["\r\n]/.test(node)) throw new CliError('the node path has a character a Windows script cannot hold');
-  return `@echo off\r\n"${node.replace(/%/g, '%%')}" "%~dp0headers-helper.mjs"\r\n`;
+  return `@echo off\r\n"${node.replace(/%/g, '%%')}" "%~dp0headers-helper.mjs" %*\r\n`;
 }
 
 /**
@@ -174,3 +178,9 @@ export function claudeMcpJson(server, helperCommand) {
 }
 
 export const ALLOW_RULE = 'mcp__hivemind';
+
+/**
+ * The permission rule that lets one Hivemind MCP server's tools run without a prompt.
+ * @param {string} mcp the MCP server name
+ */
+export const allowRule = (mcp) => `mcp__${mcp}`;

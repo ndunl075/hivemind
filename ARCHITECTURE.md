@@ -258,7 +258,7 @@ Each person gets their own **agent token** from `hivemind invite` (§17). The to
 Each agent session gets a short, human-readable **callsign**: `<kind>-<person>`, with `-2`, `-3` and so on for further sessions of the same kind by the same person (`claude-nico`, `claude-nico-2`, `codex-ana`). Numbers of ended agents are reused.
 
 - **Identity comes from the hook's `session_id`** `[DECIDED]`. Both tools pass `session_id` to every hook. The spike confirmed that Codex subagent lifecycle events carry the parent's `session_id` plus an `agent_id`; subagent tool hooks weren't observed yet. The first hook event from a session (normally `SessionStart`) registers it and assigns a callsign. If an ended agent's `session_id` shows up again (a resumed session), it's revived with its old callsign, unless another active agent has taken that callsign in the meantime, in which case it gets a new one. `[VERIFY]` that Claude Code subagents also share the parent's `session_id`, and how `session_id` behaves across resume, `/clear` and compaction (reports conflict). If a resumed session arrives with a new id, it simply gets a new callsign, and the old one ends after 12 hours of silence. Nothing breaks; the roster just shows an extra ended entry.
-- **MCP calls carry no session id**, so every Hivemind tool takes a required **`me`** argument (the callsign). The callsign is in the briefing and in every message Hivemind injects. The hook caches the callsign locally, and a `PreToolUse` hook on `mcp__hivemind__.*` compares `tool_input.me` with it **without any network call**. If they differ, it denies the call and gives the correct callsign. The server also rejects any `me` that doesn't belong to the token's person.
+- **MCP calls carry no session id**, so every Hivemind tool takes a required **`me`** argument (the callsign). The callsign is in the briefing and in every message Hivemind injects. The hook caches the callsign locally, and a `PreToolUse` hook on the Hivemind tools (`mcp__hivemind__*`, and `mcp__hivemind-<room>__*` for a laptop in several rooms, §6.1) compares `tool_input.me` with it **without any network call**. If they differ, it denies the call and gives the correct callsign. The server also rejects any `me` that doesn't belong to the token's person.
 - **Agents whose hooks don't run** can call `register` (§7) to get a callsign, so they can still see the board, claim tasks and message. They're marked *not enforced* (`hooked = 0`) everywhere. This is a degraded mode, not a normal path.
 
 ### Agent states
@@ -284,12 +284,12 @@ An agent that is idle or quiet **with 15 minutes or more of silence** is *takeab
 
 | Location | File | In Git? | Contains | Written by |
 |---|---|---|---|---|
-| Laptop | `~/.hivemind/config.json` | no | server, room, person, agent token, and the list of repo ids (root commits) mapped to the room | `hivemind join` |
+| Laptop | `~/.hivemind/config.json` | no | One entry per room this laptop is in: server, room, person, agent token, the list of repo ids (root commits) mapped to that room, and the name of the room's MCP server. The first room's server, room, person, token and repos are also repeated at the top level, so an older hook or helper still reads the file. | `hivemind join` |
 | Laptop | `~/.hivemind/hook/` | no | The hook script `hook.mjs` and its modules, copied as a folder from the Hivemind CLI package. Zero dependencies, Node 20 or newer. | `hivemind join` / `update` |
-| Laptop | `~/.claude/settings.json` (merged in) | no | Claude Code hook registrations, and `permissions.allow: ["mcp__hivemind"]` | `hivemind join` |
-| Laptop | `~/.claude.json`, user-scope MCP server `hivemind` | no | URL plus a `headersHelper` that prints the token from `~/.hivemind/config.json`. The token itself is never stored there. | `hivemind join` (via `claude mcp add-json --scope user`) |
+| Laptop | `~/.claude/settings.json` (merged in) | no | Claude Code hook registrations, and `permissions.allow: ["mcp__hivemind"]`, plus `mcp__hivemind-<room>` for each further room | `hivemind join` |
+| Laptop | `~/.claude.json`, user-scope MCP server `hivemind`, and `hivemind-<room>` for each further room | no | URL plus a `headersHelper` that prints that room's token from `~/.hivemind/config.json` (the further rooms' helpers are passed their server name). The token itself is never stored there. | `hivemind join` (via `claude mcp add-json --scope user`) |
 | Laptop | `~/.codex/hooks.json` (merged in) | no | Codex hook registrations, with `command` and `commandWindows` | `hivemind join` |
-| Laptop | `~/.codex/config.toml`, table `[mcp_servers.hivemind]` | no | URL, `Authorization` header, `default_tools_approval_mode = "approve"` | `hivemind join` |
+| Laptop | `~/.codex/config.toml`, table `[mcp_servers.hivemind]`, and `[mcp_servers.hivemind-<room>]` for each further room | no | URL, `Authorization` header, `default_tools_approval_mode = "approve"` | `hivemind join` |
 | Project | `.hivemind/project.json` | yes, optional | Lock settings (§9). **No secrets.** | `hivemind init` |
 | Project | `AGENTS.md` and `CLAUDE.md`, a marker-delimited section | yes | The protocol in §6.5 | `hivemind init` |
 
@@ -300,7 +300,12 @@ Why it's laid out this way:
 - **Repos are mapped to the room by root commit.** `join` runs inside the project and records its root commit. On a laptop where the current repo isn't mapped, the hook exits immediately and does nothing.
 - **Tokens never appear in command lines, shell history or project files.** Claude Code gets the token through `headersHelper` (partly confirmed; user scope is manual check M2 in `docs/manual-checks.md`). Codex gets a static header in its user-level config; the spike confirmed Codex accepts a static `Authorization` in `http_headers`. If not, fall back to `bearer_token_env_var` with a user-level environment variable, and document how to set it so the Codex app can see it on each OS.
 - **Hivemind's tools don't prompt.** Without the Claude allow rule and the Codex approval mode, every `status` or `post` would wait for a person to click approve. The spike confirmed the `mcp__hivemind` allow rule via `--settings`; the user-level setting is checked in M2.
-- **One room per laptop at a time** `[DECIDED]`. Enough for one team working on one project at a time; more rooms per laptop is an open item (§21).
+- **One laptop can be in several rooms, one per repo** `[DECIDED]`. People on several teams or projects join each room from inside that project's repo; each repo belongs to exactly one room, and the rooms can be on different servers.
+  - **Hook:** it picks the room whose repo list includes the current checkout's root commit (the first match). No match means it does nothing, exactly as before. Hook events carry the working directory, so this needs no guess.
+  - **MCP, Claude Code:** one MCP server per room. The first room keeps the name `hivemind`, so a laptop in one room looks exactly as it did before and agents see `mcp__hivemind__<tool>`; each further room is `hivemind-<room>` (tools `mcp__hivemind-<room>__<tool>`). The name is fixed when the room is added and does not change when other rooms come and go. The reason is that a `headersHelper` is told nothing about the project: it is a shell command run by Claude Code for the server, with no repo or session in its arguments, and its working directory is not documented, so it cannot choose between rooms by repo. One server per room avoids guessing; each entry's helper is passed its own server name and prints that room's token. The cost is that every Claude session sees every room's tools, and an agent must use the server for its own repo's room. The `me` check and the server both reject a call that does not match, because the callsign belongs to one room.
+  - **MCP, Codex:** the same, one table per room in `config.toml`, each in its own marker-delimited block.
+  - **Commands:** `hivemind join` inside a project adds that project's room, or adds the repo to the room it is already in, and leaves every other room as it was; joining a repo that is mapped to another room moves it, and a room left with no repos is removed. `hivemind leave` removes this project's mapping (and the room once no repo uses it); `--room <name>` removes a whole room and `--all` everything. `update` refreshes every room. `mode` and `unlock` use the room of the project they run in. `doctor` lists and checks every room.
+  - **Old files:** a `config.json` without a room list reads as one room, and is rewritten in the new shape the next time `join` or `update` writes it. Because the first room is repeated at the top level, an older installed hook or helper keeps working against a newer file (for the first room only) until `hivemind update` refreshes the hook folder.
 - **The Hivemind home** is, in order: `$HIVEMIND_HOME`; otherwise the folder the hook is installed in (`<home>` when it runs as `<home>/hook/hook.mjs` next to `<home>/config.json`); otherwise `~/.hivemind`. The CLI resolves it the same way (`$HIVEMIND_HOME`, else the home recorded at `join`, else `~/.hivemind`), so `off`, `on` and `leave` act on the same folder the hook reads. Tests and smoke runs point it at a temporary folder, together with project-level hook registration in a throwaway project, so they never touch a real laptop's setup.
 
 ### 6.2 Hook events
@@ -859,11 +864,13 @@ Admin commands ask for the admin secret with hidden input, or read `HIVEMIND_ADM
    - adds the MCP server and pre-approves its tools,
    - maps this repo's root commit to the room.
 
+   Run it again inside another project to join another room: the laptop keeps every room it has joined, each tied to its own repos and, in Claude Code and Codex, to its own MCP server (§6.1). Joining a project that is already in the room just refreshes it.
+
    Codex users then approve the hooks once with `/hooks`. Already-running sessions must be restarted to pick up hooks.
 6. `hivemind doctor` checks:
    - the server is reachable and `/whoami` accepts the token,
    - hooks are registered with valid absolute paths,
-   - MCP entries are present,
+   - MCP entries are present, for every room on the laptop,
    - the Node version,
    - recent `hook.log` activity.
 
@@ -876,11 +883,11 @@ Admin commands ask for the admin secret with hidden input, or read `HIVEMIND_ADM
 | `hivemind mode enforce\|warn\|off` | Change room enforcement (any teammate). |
 | `hivemind unlock <path>` or `hivemind unlock --agent <callsign>` | Emergency release; announced to every agent. |
 | `hivemind off` / `hivemind on` | Pause or resume Hivemind on this laptop only. |
-| `hivemind update` | Refresh the hook folder and registrations. Codex users approve the hooks again. |
+| `hivemind update` | Refresh the hook folder and the registrations of every room. Codex users approve the hooks again. |
 | `hivemind revoke my-team <person>` | Admin: revoke one person's token. |
 | `hivemind rotate my-team --agents` or `--viewer` | Admin: invalidate all agent tokens (everyone is invited and runs `join` again) or only the dashboard link, in which case the new link is printed once. |
 
-**When you're done with a room:** `hivemind leave` removes this laptop's config and registrations. `hivemind room delete my-team` deletes the room's data.
+**When you're done with a room:** `hivemind leave`, run inside the project, stops using Hivemind for that project: its room, token and MCP registrations go once no other project on the laptop uses the room, and the other rooms are left alone. `hivemind leave --room <name>` removes a whole room, `hivemind leave --all` removes everything Hivemind put on the laptop. With a single room, `leave` works from any folder. `hivemind room delete my-team` deletes the room's data.
 
 **Rehearse onboarding before a team first relies on it** (§20.5). Restarts, Codex approvals and the per-app self-test take longer than they look.
 
@@ -1099,7 +1106,7 @@ Items 11–17 are Nico's manual checks, written up step by step in `docs/manual-
 
 - Phase 2 coverage of people's own clones (§12).
 - npm publishing (§17).
-- More than one room per laptop.
+- More than one room per laptop is built (§6.1): one MCP server per room, picked per repo by the hook. Still open: telling an agent which room's server is its own in the protocol text (§6.5), and a single server that picks the room itself if Claude Code ever tells a `headersHelper` which project it serves.
 
 ---
 

@@ -78,9 +78,9 @@ const CALLSIGN_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const OUTAGE_NOTICE =
   "[Hivemind] Can't reach the server (3 failed attempts). Coordination is paused and edits aren't being checked. Retrying every minute.";
 
-/** @type {{ home: string | null; event: string | null; tool: string | null; token: string | null; started: number; deadline: number; statePath: string | null; watchdog: ReturnType<typeof setTimeout> | null }} */
+/** @type {{ home: string | null; event: string | null; tool: string | null; tokens: string[]; started: number; deadline: number; statePath: string | null; watchdog: ReturnType<typeof setTimeout> | null }} */
 const ctx = {
-  home: null, event: null, tool: null, token: null, started: Date.now(), deadline: Date.now() + DEADLINE_MS, statePath: null, watchdog: null,
+  home: null, event: null, tool: null, tokens: [], started: Date.now(), deadline: Date.now() + DEADLINE_MS, statePath: null, watchdog: null,
 };
 
 const remaining = () => ctx.deadline - Date.now();
@@ -240,7 +240,7 @@ function log(ok, error, ms) {
     let msg;
     if (error instanceof SyntaxError) msg = 'SyntaxError: invalid JSON';
     else if (error !== undefined) msg = String(error instanceof Error ? `${error.name}: ${error.message}` : error);
-    if (msg !== undefined && ctx.token) msg = msg.split(ctx.token).join('[token]');
+    if (msg !== undefined) for (const t of ctx.tokens) if (t) msg = msg.split(t).join('[token]');
     appendFileSync(path, `${JSON.stringify({
       ts: Date.now(), event: ctx.event, tool: ctx.tool, ok, ms: ms ?? Date.now() - ctx.started, ...(msg !== undefined ? { error: msg.slice(0, 200) } : {}),
     })}\n`);
@@ -262,15 +262,24 @@ function serverAllowed(server) {
 }
 
 /**
+ * The rooms in config.json. A laptop can be in several (ARCHITECTURE.md §6.1): the file has a `rooms` list, each
+ * entry with its server, token and repos. A file without `rooms` is the older single-room format and reads as one
+ * room. An entry that is unusable (no token, a server that isn't https or loopback) is skipped, not fatal to the others.
  * @param {string} home
- * @returns {HookConfig | null}
+ * @returns {HookConfig[] | null} null when there is no usable room
  */
 function readConfig(home) {
   try {
     const c = JSON.parse(stripBom(readFileSync(join(home, 'config.json'), 'utf8')));
-    if (typeof c?.server !== 'string' || typeof c?.token !== 'string' || !Array.isArray(c?.repos)) return null;
-    if (!serverAllowed(c.server)) return null;
-    return { server: c.server.replace(/\/+$/, ''), token: c.token, repos: c.repos.filter((/** @type {unknown} */ r) => typeof r === 'string') };
+    const raw = Array.isArray(c?.rooms) ? c.rooms : [c];
+    /** @type {HookConfig[]} */
+    const rooms = [];
+    for (const e of raw) {
+      if (typeof e?.server !== 'string' || typeof e?.token !== 'string' || !Array.isArray(e?.repos)) continue;
+      if (!serverAllowed(e.server)) continue;
+      rooms.push({ server: e.server.replace(/\/+$/, ''), token: e.token, repos: e.repos.filter((/** @type {unknown} */ r) => typeof r === 'string') });
+    }
+    return rooms.length > 0 ? rooms : null;
   } catch {
     return null;
   }
@@ -499,9 +508,9 @@ async function run() {
   ctx.home = process.env.HIVEMIND_HOME || installedHome() || join(homedir(), '.hivemind');
   const home = ctx.home;
   if (existsSync(join(home, 'off'))) return { out: null, event: null, adapter: null };
-  const config = readConfig(home);
-  if (!config) return { out: null, event: null, adapter: null };
-  ctx.token = config.token;
+  const rooms = readConfig(home);
+  if (!rooms) return { out: null, event: null, adapter: null };
+  ctx.tokens = rooms.map((r) => r.token); // every token is redacted from the log, whichever room ends up used
 
   const stdin = await readStdin();
   if (stdin === null) return { out: null, event: null, adapter: null };
@@ -564,7 +573,10 @@ async function run() {
       return done(null);
     }
   }
-  if (!config.repos.includes(ident.repo)) return done(null);
+  // The room is the one whose repos include this checkout's root commit (first match). No match: do nothing.
+  const repo = ident.repo;
+  const config = rooms.find((r) => r.repos.includes(repo));
+  if (!config) return done(null);
 
   // Local fast paths: no network.
   if (event === 'PreToolUse' && input.isHivemindTool) return done(meCheck(input, state));
