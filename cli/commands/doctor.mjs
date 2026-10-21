@@ -6,13 +6,13 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { parseArgs } from './args.mjs';
 import { call, normalizeServer } from './api.mjs';
-import { readBlock } from './codex-config.mjs';
+import { blockNames, readBlock } from './codex-config.mjs';
 import { paths } from './context.mjs';
 import { readJsonObject, readText } from './files.mjs';
 import { oursMatcher } from './hooks-merge.mjs';
-import { HELPER_CMD_FILE, HELPER_FILE, HOOK_FILES, readManifest, readRooms } from './install.mjs';
+import { HELPER_CMD_FILE, HELPER_FILE, HOOK_FILES, ROOM_HELPER_CMD_FILE, ROOM_HELPER_FILE, isOurHelperText, readManifest, readRooms } from './install.mjs';
 import { roomForRepo } from './rooms.mjs';
-import { CLAUDE_SPECS, CODEX_SPECS, allowRule, isOurHelper } from './registrations.mjs';
+import { CLAUDE_SPECS, CODEX_SPECS, allowRule } from './registrations.mjs';
 import { identity } from '../hook/git.mjs';
 
 export const SELF_TEST_PROMPT = [
@@ -87,7 +87,7 @@ export async function doctor(argv, ctx) {
   else line(here ? 'ok' : 'warn', here ? `this repository is mapped to room "${here.room}"` : 'this repository is NOT mapped to any room; run hivemind join inside it');
 
   // Hook files and node
-  const missing = [...HOOK_FILES, HELPER_FILE, ...(ctx.platform === 'win32' ? [HELPER_CMD_FILE] : [])].filter((f) => !existsSync(`${p.hookDir}/${f}`));
+  const missing = [...HOOK_FILES, HELPER_FILE, ROOM_HELPER_FILE, ...(ctx.platform === 'win32' ? [HELPER_CMD_FILE, ROOM_HELPER_CMD_FILE] : [])].filter((f) => !existsSync(`${p.hookDir}/${f}`));
   line(missing.length === 0 ? 'ok' : 'FAIL', missing.length === 0 ? `hook files present in ${p.hookDir}` : `hook files missing: ${missing.join(', ')}. Run: hivemind update`);
   const manifest = readManifest(ctx);
   if (manifest?.node) line(existsSync(manifest.node) ? 'ok' : 'FAIL', `node recorded for the hooks: ${manifest.node}${existsSync(manifest.node) ? '' : ' (no longer exists; run hivemind update)'}`);
@@ -115,9 +115,15 @@ export async function doctor(argv, ctx) {
           break;
         }
         if (got.code !== 0) line('FAIL', `Claude Code: MCP server "${r.mcp}" (room "${r.room}") is missing; run hivemind update`);
-        else if (!isOurHelper(got.stdout, p.helperScript, p.helperCmd) && !manifest?.claude.mcpServers.includes(r.mcp)) line('FAIL', `Claude Code: the MCP server named "${r.mcp}" is not the Hivemind one (its helper is not ours); rename or remove it, then run hivemind update`);
+        else if (!isOurHelperText(ctx, got.stdout) && !manifest?.claude.mcpServers.includes(r.mcp)) line('FAIL', `Claude Code: the MCP server named "${r.mcp}" is not the Hivemind one (its helper is not ours); rename or remove it, then run hivemind update`);
         else if (!got.stdout.includes(`${normalizeServer(r.server)}/mcp`)) line('FAIL', `Claude Code: MCP server "${r.mcp}" points at a different URL than config.json; run hivemind update`);
         else line('ok', `Claude Code: MCP server "${r.mcp}" (room "${r.room}") is set up and is ours`);
+      }
+      // Servers Hivemind registered for rooms that are no longer in config.json: they could still be reached.
+      for (const name of manifest?.claude.mcpServers ?? []) {
+        if (rooms.some((r) => r.mcp === name)) continue;
+        const got = await ctx.runner('claude', ['mcp', 'get', name]);
+        if (got.code === 0 && isOurHelperText(ctx, got.stdout)) line('FAIL', `Claude Code: MCP server "${name}" is a leftover of a room that is not in config.json; remove it with: claude mcp remove --scope user ${name}`);
       }
     }
   } catch (e) {
@@ -138,6 +144,9 @@ export async function doctor(argv, ctx) {
           const urlOk = block.url === `${normalizeServer(r.server)}/mcp`;
           line(urlOk && block.hasAuth && block.approve ? 'ok' : 'FAIL', `Codex: MCP server "${r.mcp}" ${urlOk ? 'URL matches' : 'URL differs from config.json'}, ${block.hasAuth ? 'has' : 'lacks'} a token header, tools ${block.approve ? 'pre-approved' : 'NOT pre-approved'}`);
         }
+      }
+      for (const name of toml === null ? [] : blockNames(toml)) {
+        if (!rooms.some((r) => r.mcp === name)) line('FAIL', `Codex: [mcp_servers.${name}] in config.toml is a leftover of a room that is not in config.json; run hivemind update`);
       }
     }
   } catch (e) {

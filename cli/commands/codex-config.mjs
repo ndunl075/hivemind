@@ -346,3 +346,17 @@ export function readBlock(text, name = DEFAULT_NAME) {
     return null;
   }
 }
+
+/**
+ * Names of every server in the file's `mcp_servers`, ours or not. Empty when there is no file or it cannot be read.
+ * @param {string | null} text
+ * @returns {Set<string>}
+ */
+export function tomlServerNames(text) {
+  try {
+    const servers = text === null ? null : /** @type {any} */ (parse(text)).mcp_servers;
+    return new Set(servers && typeof servers === 'object' ? Object.keys(servers) : []);
+  } catch {
+    return new Set();
+  }
+}

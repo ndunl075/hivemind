@@ -33,17 +33,27 @@ export function slug(room) {
 }
 
 /**
- * The MCP server name for a new room: `hivemind` if no room has it, else `hivemind-<room>`, with `-2`, `-3` if that
- * is taken too (the same room name on another server).
- * @param {RoomEntry[]} rooms
+ * The names a new room's MCP server may take, best first: `hivemind`, `hivemind-<room>`, then `-2`, `-3`...
  * @param {string} room
+ * @param {number} [count]
  */
-export function allocateMcp(rooms, room) {
-  const taken = new Set(rooms.map((r) => r.mcp));
-  if (!taken.has(DEFAULT_MCP)) return DEFAULT_MCP;
+export function candidateNames(room, count = 12) {
   const base = `${DEFAULT_MCP}-${slug(room)}`;
-  if (!taken.has(base)) return base;
-  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
+  return [DEFAULT_MCP, base, ...Array.from({ length: count }, (_, i) => `${base}-${i + 2}`)];
+}
+
+/**
+ * The MCP server name for a new room: the first candidate that no room uses and that is not in `taken`. `taken` holds
+ * names that might still be registered, by Hivemind for a room that was left or by the user: a name is never reused
+ * while a registration under it could still exist.
+ * @param {Array<{ mcp: string }>} rooms
+ * @param {string} room
+ * @param {Set<string>} [taken]
+ */
+export function allocateMcp(rooms, room, taken = new Set()) {
+  const used = new Set([...rooms.map((r) => r.mcp), ...taken]);
+  for (const n of candidateNames(room, 1000)) if (!used.has(n)) return n;
+  throw new CliError('no free MCP server name for this room');
 }
 
 /**

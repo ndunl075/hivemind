@@ -11,7 +11,7 @@
 import { parseArgs } from './args.mjs';
 import { call, looksLikeAgentToken, normalizeServer } from './api.mjs';
 import { CliError, paths } from './context.mjs';
-import { installAll, readRooms, uninstallAll } from './install.mjs';
+import { installAll, readRooms, takenMcpNames, uninstallAll, withLock } from './install.mjs';
 import { allocateMcp, roomForRepo, sameRoom } from './rooms.mjs';
 import { identity } from '../hook/git.mjs';
 
@@ -33,7 +33,6 @@ function printReport(ctx, report) {
  */
 export async function join(argv, ctx) {
   const { flags, options } = parseArgs(argv, { flags: ['yes', 'token-stdin'], options: ['server'] });
-  const existing = readRooms(ctx) ?? [];
   const server = normalizeServer(options.server ?? ctx.env.HIVEMIND_SERVER ?? (await ctx.readLine('Server URL')));
   const token = flags.has('token-stdin') ? await ctx.readStdin() : await ctx.readSecret('Your agent token (input hidden)');
   if (!looksLikeAgentToken(token)) throw new CliError('that does not look like an agent token (they start with hm_a.)');
@@ -49,6 +48,16 @@ export async function join(argv, ctx) {
     if (answer !== '' && answer !== 'y' && answer !== 'yes') throw new CliError('cancelled');
   }
 
+  return withLock(ctx, () => joinLocked(ctx, { server, token, who, ident, flags }));
+}
+
+/**
+ * The part of join that changes the setup, with the lock held.
+ * @param {Context} ctx
+ * @param {{ server: string, token: string, who: { room: string, person: string, mode?: string }, ident: { repo: string, repoName?: string | null, root: string }, flags: Set<string> }} a
+ */
+async function joinLocked(ctx, { server, token, who, ident }) {
+  const existing = readRooms(ctx) ?? [];
   // A repository belongs to one room. Joining it to this room takes it out of any other room on this laptop (a room
   // left with no repos is dropped); every other room is left exactly as it was.
   const isThis = sameRoom(server, who.room);
@@ -70,7 +79,7 @@ export async function join(argv, ctx) {
   /** @type {RoomEntry} */
   const entry = mine
     ? { ...mine, server, person: who.person, token, repos: mine.repos.includes(ident.repo) ? [...mine.repos] : [...mine.repos, ident.repo] }
-    : { server, room: who.room, person: who.person, token, repos: [ident.repo], mcp: allocateMcp(others, who.room) };
+    : { server, room: who.room, person: who.person, token, repos: [ident.repo], mcp: allocateMcp(others, who.room, await takenMcpNames(ctx, who.room)) };
   // Keep the order rooms were joined in: the entry stays where it was, a new one goes last.
   const rooms = mine
     ? existing.flatMap((r) => (isThis(r) ? [entry] : others.filter((o) => o.mcp === r.mcp)))
@@ -92,9 +101,11 @@ export async function join(argv, ctx) {
  */
 export async function update(argv, ctx) {
   parseArgs(argv);
-  const rooms = readRooms(ctx);
-  if (!rooms) throw new CliError(`nothing to update: ${paths(ctx).config} is missing. Run hivemind join first.`);
-  const report = await installAll(ctx, rooms);
+  const report = await withLock(ctx, async () => {
+    const rooms = readRooms(ctx);
+    if (!rooms) throw new CliError(`nothing to update: ${paths(ctx).config} is missing. Run hivemind join first.`);
+    return installAll(ctx, rooms);
+  });
   printReport(ctx, report);
   ctx.out('Codex users: approve the hooks again with /hooks if Codex asks.\n');
   return report.failed ? 1 : 0;
@@ -110,6 +121,15 @@ export async function update(argv, ctx) {
 export async function leave(argv, ctx) {
   const { flags, options } = parseArgs(argv, { flags: ['all'], options: ['room'] });
   if (flags.has('all') && options.room !== undefined) throw new CliError('give --room <name> or --all, not both');
+  const ident = flags.has('all') || options.room !== undefined ? null : await identity(ctx.cwd);
+  return withLock(ctx, () => leaveLocked(ctx, { flags, options, ident }));
+}
+
+/**
+ * @param {Context} ctx
+ * @param {{ flags: Set<string>, options: Record<string, string>, ident: { repo: string } | null }} a
+ */
+async function leaveLocked(ctx, { flags, options, ident }) {
   const rooms = readRooms(ctx);
   // --all, or a laptop with no readable config (a half-installed setup is still cleaned up): everything goes.
   if (flags.has('all') || !rooms) return finishLeave(ctx, await uninstallAll(ctx), 'Left every room.');
@@ -126,7 +146,6 @@ export async function leave(argv, ctx) {
     remaining = rooms.filter((r) => r !== hits[0]);
     message = `Left room "${hits[0]?.room}".`;
   } else {
-    const ident = await identity(ctx.cwd);
     const here = ident ? roomForRepo(rooms, ident.repo) : undefined;
     if (ident && here) {
       const left = { ...here, repos: here.repos.filter((x) => x !== ident.repo) };

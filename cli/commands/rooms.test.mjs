@@ -5,7 +5,7 @@
  * temporary home and projects, the stubbed `claude`/`codex` runner, and a stubbed fetch (no port is bound).
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { main } from '../hivemind.mjs';
@@ -173,8 +173,9 @@ describe('join with several rooms', () => {
     const servers = claudeServers(lap);
     expect(servers.hivemind).toEqual(claudeBefore);
     expect(servers['hivemind-platform'].url).toBe(`${SERVER_2}/mcp`);
-    expect(servers['hivemind-platform'].headersHelper.endsWith(' hivemind-platform')).toBe(true);
-    expect(servers.hivemind.headersHelper).not.toContain('hivemind-platform');
+    // each helper is told its server's name and origin; the other rooms' servers use the room-only copy of the helper
+    expect(servers['hivemind-platform'].headersHelper).toMatch(/headers-helper-room\.(mjs"|cmd) hivemind-platform http:\/\/127\.0\.0\.1:18792$/);
+    expect(servers.hivemind.headersHelper).toMatch(/headers-helper\.(mjs"|cmd) hivemind http:\/\/127\.0\.0\.1:18791$/);
     expect(JSON.stringify(servers)).not.toContain(OTHER_TOKEN);
     expect(allow(lap)).toEqual(expect.arrayContaining(['mcp__hivemind', 'mcp__hivemind-platform']));
     // Codex: two blocks with their own token
@@ -251,7 +252,7 @@ describe('join with several rooms', () => {
     expect(toml(lap)).toContain('[mcp_servers.other]');
   });
 
-  it('refuses to take over a Claude server of the user\'s own with the same name', async () => {
+  it('skips a Claude server name the user already has', async () => {
     const lap = laptop();
     await joinFrom(lap, 'project', SERVER_1, AGENT_TOKEN);
     const j = lap.path('.claude.json');
@@ -259,8 +260,8 @@ describe('join with several rooms', () => {
     o.mcpServers['hivemind-platform'] = { type: 'stdio', command: 'mine' };
     writeFileSync(j, JSON.stringify(o));
     const r = await joinFrom(lap, 'second', SERVER_2, OTHER_TOKEN);
-    expect(r.code).toBe(1);
-    expect(r.err).toContain('already has its own MCP server named "hivemind-platform"');
+    expect(r.code, r.err).toBe(0);
+    expect(config(lap).rooms[1].mcp).toBe('hivemind-platform-2');
     expect(readJson(j).mcpServers['hivemind-platform']).toEqual({ type: 'stdio', command: 'mine' });
     expect(claudeServers(lap).hivemind.url).toBe(`${SERVER_1}/mcp`); // the first room is still fine
   });
@@ -411,7 +412,7 @@ describe('update, doctor and room commands with several rooms', () => {
 
 describe('headers helper', () => {
   /** Run the installed helper the way Claude would: a child process in the hook folder, with an optional argument. */
-  const helper = (lap, ...args) => spawnSync(process.execPath, [lap.path('.hivemind', 'hook', 'headers-helper.mjs'), ...args], { encoding: 'utf8' });
+  const helper = (lap, ...args) => spawnSync(process.execPath, [lap.path('.hivemind', 'hook', args[0] === 'hivemind' || args.length === 0 ? 'headers-helper.mjs' : 'headers-helper-room.mjs'), ...args], { encoding: 'utf8' });
 
   it('prints the token of the server it is told, and the first room\'s with no argument', async () => {
     const lap = laptop();
@@ -420,9 +421,9 @@ describe('headers helper', () => {
     const plain = helper(lap);
     expect(plain.status).toBe(0);
     expect(JSON.parse(plain.stdout)).toEqual({ Authorization: `Bearer ${AGENT_TOKEN}` });
-    expect(JSON.parse(helper(lap, 'hivemind').stdout)).toEqual({ Authorization: `Bearer ${AGENT_TOKEN}` });
-    expect(JSON.parse(helper(lap, 'hivemind-platform').stdout)).toEqual({ Authorization: `Bearer ${OTHER_TOKEN}` });
-    const unknown = helper(lap, 'hivemind-nope');
+    expect(JSON.parse(helper(lap, 'hivemind', SERVER_1).stdout)).toEqual({ Authorization: `Bearer ${AGENT_TOKEN}` });
+    expect(JSON.parse(helper(lap, 'hivemind-platform', SERVER_2).stdout)).toEqual({ Authorization: `Bearer ${OTHER_TOKEN}` });
+    const unknown = helper(lap, 'hivemind-nope', SERVER_2);
     expect(unknown.status).toBe(1);
     expect(unknown.stdout).toBe('');
     expect(unknown.stderr).toContain('no token found');
@@ -497,5 +498,140 @@ describe('version skew', () => {
   it('the Windows wrapper passes the server name on', () => {
     // headersHelperCommand puts the name after the wrapper; the wrapper forwards %* to the helper (merge.test.mjs).
     expect(headersHelperCommand('win32', 'n', 's', 'C:\\h\\hook\\headers-helper.cmd', 'hivemind-a')).toBe('C:/h/hook/headers-helper.cmd hivemind-a');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review round: a room's token must never reach another room's server; races; leftovers.
+
+const old = { // headers-helper.mjs as the version before several rooms wrote it: ignores its arguments
+  text: "import { readFileSync } from 'node:fs';\nimport { fileURLToPath } from 'node:url';\n"
+    + "const c = JSON.parse(readFileSync(fileURLToPath(new URL('../config.json', import.meta.url)), 'utf8'));\n"
+    + "process.stdout.write(JSON.stringify({ Authorization: 'Bearer ' + c.token }));\n",
+};
+const runCmd = (cmd) => spawnSync(cmd, { shell: true, encoding: 'utf8' });
+const claudeGone = (inner) => async (cmd, args, opts) => (cmd === 'claude' ? { code: 127, stdout: '', stderr: 'not found' } : inner(cmd, args, opts));
+
+describe('a stale registration fails closed', () => {
+  async function two() {
+    const lap = laptop();
+    await joinFrom(lap, 'project', SERVER_1, AGENT_TOKEN);
+    await joinFrom(lap, 'second', SERVER_2, OTHER_TOKEN);
+    return lap;
+  }
+  const helper = (lap, ...args) => spawnSync(process.execPath, [lap.path('.hivemind', 'hook', args[0] === 'hivemind' || args.length === 0 ? 'headers-helper.mjs' : 'headers-helper-room.mjs'), ...args], { encoding: 'utf8' });
+
+  it('no fallback to another room when the named one is gone from a config with a rooms list', async () => {
+    const lap = await two();
+    await run(lap, ['leave', '--room', 'my-team']); // the plain "hivemind" room goes; "hivemind-platform" stays
+    // a running Claude session still has the old registration; whatever it runs must not print platform's token
+    for (const args of [[], ['hivemind'], ['hivemind', SERVER_1]]) {
+      const r = helper(lap, ...args);
+      expect(r.status, args.join(' ')).toBe(1);
+      expect(r.stdout).toBe('');
+    }
+    expect(JSON.parse(helper(lap, 'hivemind-platform', SERVER_2).stdout)).toEqual({ Authorization: `Bearer ${OTHER_TOKEN}` });
+  });
+
+  it('a name with the wrong server is refused, and a named server needs its origin', async () => {
+    const lap = await two();
+    for (const args of [['hivemind-platform', SERVER_1], ['hivemind-platform'], ['hivemind', SERVER_2]]) {
+      const r = helper(lap, ...args);
+      expect(r.status, args.join(' ')).toBe(1);
+      expect(r.stdout).toBe('');
+    }
+  });
+
+  it('leave with claude off the PATH says so, keeps the server on record, and the name is not reused', async () => {
+    const lap = await two();
+    const r = await lap.run(main, ['leave', '--room', 'my-team'], { cwd: lap.project.dir, fetch: fetchStub, runner: claudeGone(lap.stub.runner) });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('MCP server "hivemind" of a room you left could not be removed');
+    expect(readJson(lap.path('.hivemind', 'install.json')).claude.mcpServers).toContain('hivemind');
+    expect(claudeServers(lap).hivemind).toBeDefined(); // still registered, so it must not be handed to another room
+    await joinFrom(lap, 'third', SERVER_1, TOKEN_3); // "my-team" again, on the first server
+    const mine = config(lap).rooms.find((x) => x.room === 'my-team');
+    expect(mine.mcp).toBe('hivemind-my-team');
+    // the join with claude back removed the leftover
+    expect(claudeServers(lap).hivemind).toBeUndefined();
+    expect(readJson(lap.path('.hivemind', 'install.json')).claude.mcpServers.sort()).toEqual(['hivemind-my-team', 'hivemind-platform']);
+  });
+
+  it('a registration that differs from ours only by a suffix is replaced, not taken as set up', async () => {
+    const lap = await two();
+    const j = lap.path('.claude.json');
+    const o = readJson(j);
+    o.mcpServers['hivemind-platform'].headersHelper += ' --other';
+    writeFileSync(j, JSON.stringify(o));
+    expect((await run(lap, ['update'])).code).toBe(0);
+    expect(claudeServers(lap)['hivemind-platform'].headersHelper.endsWith('--other')).toBe(false);
+  });
+});
+
+describe('downgrade: an older CLI rewrote the files', () => {
+  it('a room server keeps failing closed when headers-helper.mjs and config.json are the old versions', async () => {
+    const lap = laptop();
+    await joinFrom(lap, 'project', SERVER_1, AGENT_TOKEN);
+    await joinFrom(lap, 'second', SERVER_2, OTHER_TOKEN);
+    const servers = claudeServers(lap);
+    // old `update`: its helper (ignores arguments) and a single-room config.json
+    writeFileSync(lap.path('.hivemind', 'hook', 'headers-helper.mjs'), old.text);
+    const c = config(lap);
+    delete c.rooms;
+    writeFileSync(lap.path('.hivemind', 'config.json'), JSON.stringify(c));
+    const platform = runCmd(servers['hivemind-platform'].headersHelper);
+    expect(platform.status).toBe(1);
+    expect(platform.stdout).toBe('');
+    // the plain server works for the one room the old file knows
+    expect(JSON.parse(runCmd(servers.hivemind.headersHelper).stdout)).toEqual({ Authorization: `Bearer ${AGENT_TOKEN}` });
+  });
+});
+
+describe('names, the lock and leftovers', () => {
+  it('a Codex table of the user with a candidate name is skipped', async () => {
+    const lap = laptop();
+    writeFileSync(lap.path('.codex', 'config.toml'), '[mcp_servers.hivemind]\nurl = "https://elsewhere.example/mcp"\n\n[mcp_servers.hivemind-my-team]\nurl = "https://x.example/mcp"\n');
+    await joinFrom(lap, 'project', SERVER_1, AGENT_TOKEN);
+    expect(config(lap).rooms[0].mcp).toBe('hivemind-my-team-2');
+    expect(toml(lap)).toContain('url = "https://elsewhere.example/mcp"');
+  });
+
+  it('two joins at once both land, and the lock is gone afterwards', async () => {
+    const lap = laptop();
+    lap.answers.secrets.push(AGENT_TOKEN, OTHER_TOKEN);
+    const outs = [];
+    const mk = (project, server) => {
+      const ctx = lap.ctx({ cwd: lap[project].dir, fetch: fetchStub, out: (t) => outs.push(t), err: (t) => outs.push(t) });
+      return main(['join', '--server', server, '--yes'], ctx);
+    };
+    const codes = await Promise.all([mk('project', SERVER_1), mk('second', SERVER_2)]);
+    expect(codes, outs.join('')).toEqual([0, 0]);
+    expect(config(lap).rooms.map((r) => r.room).sort()).toEqual(['my-team', 'platform']);
+    expect(Object.keys(claudeServers(lap))).toHaveLength(2);
+    expect(new Set(config(lap).rooms.map((r) => r.mcp)).size).toBe(2);
+    expect(existsSync(lap.path('.hivemind', '.lock'))).toBe(false);
+  });
+
+  it('a lock left by a dead command is taken over; a fresh one makes the command wait and then say so', async () => {
+    const lap = laptop();
+    mkdirSync(lap.path('.hivemind'), { recursive: true });
+    writeFileSync(lap.path('.hivemind', '.lock'), '1');
+    const past = new Date(Date.now() - 120000);
+    utimesSync(lap.path('.hivemind', '.lock'), past, past);
+    expect((await joinFrom(lap, 'project', SERVER_1, AGENT_TOKEN)).code).toBe(0);
+    expect(existsSync(lap.path('.hivemind', '.lock'))).toBe(false);
+  });
+
+  it('doctor fails on a Claude server and a Codex table of a room that is not in config.json', async () => {
+    const lap = laptop();
+    await joinFrom(lap, 'project', SERVER_1, AGENT_TOKEN);
+    await joinFrom(lap, 'second', SERVER_2, OTHER_TOKEN);
+    const c = config(lap);
+    c.rooms = c.rooms.filter((r) => r.room !== 'platform');
+    writeFileSync(lap.path('.hivemind', 'config.json'), JSON.stringify(c));
+    const r = await run(lap, ['doctor']);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('MCP server "hivemind-platform" is a leftover');
+    expect(r.out).toContain('[mcp_servers.hivemind-platform] in config.toml is a leftover');
   });
 });

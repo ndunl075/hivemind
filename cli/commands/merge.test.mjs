@@ -111,7 +111,7 @@ describe('registrations', () => {
   it('Claude events, matchers and timeouts follow ARCHITECTURE.md 6.2', () => {
     expect(CLAUDE_SPECS.map((s) => [s.event, s.matcher ?? null, s.timeout])).toEqual([
       ['SessionStart', null, 5], ['UserPromptSubmit', null, 5],
-      ['PreToolUse', 'Edit|Write|MultiEdit|NotebookEdit|mcp__hivemind.*', 5],
+      ['PreToolUse', 'Edit|Write|MultiEdit|NotebookEdit|mcp__hivemind(-[a-z0-9]+)*__.*', 5],
       ['PostToolUse', '.*', 5], ['Stop', null, 5], ['SessionEnd', null, 3],
     ]);
   });
@@ -119,7 +119,7 @@ describe('registrations', () => {
   it('Codex events, matchers and timeouts follow ARCHITECTURE.md 6.2 and the spike', () => {
     expect(CODEX_SPECS.map((s) => [s.event, s.matcher ?? null, s.timeout])).toEqual([
       ['SessionStart', null, 5], ['UserPromptSubmit', null, 5],
-      ['PreToolUse', 'apply_patch|Edit|Write|mcp__hivemind.*', 5],
+      ['PreToolUse', 'apply_patch|Edit|Write|mcp__hivemind(-[a-z0-9]+)*__.*', 5],
       ['PostToolUse', 'Bash|apply_patch', 5], ['Stop', null, 5], ['SessionEnd', null, 3],
     ]);
   });

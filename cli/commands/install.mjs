@@ -11,10 +11,10 @@
  * @typedef {import('./context.mjs').Context} Context
  * @typedef {import('./rooms.mjs').RoomEntry} HivemindConfig
  */
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { blockNames, codexMcpBlock, hasOurBlock, removeBlock, setBlock } from './codex-config.mjs';
+import { blockNames, codexMcpBlock, hasOurBlock, removeBlock, setBlock, tomlServerNames } from './codex-config.mjs';
 import { CliError, paths } from './context.mjs';
 import { readJsonObject, readText, removeDirIfEmpty, removeFile, writeAtomic, writeIfChanged, writeJson } from './files.mjs';
 import { mergeHooks, oursMatcher, removeHooks } from './hooks-merge.mjs';
@@ -22,14 +22,21 @@ import {
   ALLOW_RULE, CLAUDE_SPECS, CODEX_SPECS, addJsonCommands, allowRule, claudeHandler, claudeMcpJson, codexHandler, headersHelperCommand,
   helperCmdText, isOurHelper,
 } from './registrations.mjs';
-import { DEFAULT_MCP, configJson, roomsFromJson } from './rooms.mjs';
+import { DEFAULT_MCP, candidateNames, configJson, roomsFromJson } from './rooms.mjs';
 
 /** The hook's runtime files; tests (*.test.mjs) are never copied. */
 export const HOOK_FILES = ['hook.mjs', 'claude.mjs', 'codex.mjs', 'git.mjs', 'limits.mjs'];
-/** The helper that sits next to them. */
+/** The helper that sits next to them: the plain `hivemind` server uses this one. */
 export const HELPER_FILE = 'headers-helper.mjs';
 /** The Windows wrapper that runs it (written on Windows only, removed everywhere). */
 export const HELPER_CMD_FILE = 'headers-helper.cmd';
+/**
+ * The same helper under a name only this version knows, for every other room's server. An older CLI rewrites
+ * headers-helper.mjs with its own (argument-ignoring) version and never touches this one, so after a downgrade the
+ * servers that depend on the arguments keep running a helper that checks them.
+ */
+export const ROOM_HELPER_FILE = 'headers-helper-room.mjs';
+export const ROOM_HELPER_CMD_FILE = 'headers-helper-room.cmd';
 
 /**
  * `mcp` and `allowRules` are lists of what Hivemind registered / added (a manifest written before several rooms
@@ -99,6 +106,66 @@ export function readConfig(ctx) {
 }
 
 /**
+ * Run `fn` while holding the Hivemind lock (an exclusively created file in the Hivemind home), so two commands that
+ * change the setup (join, update, leave) can't interleave their reads and writes of config.json and the registrations.
+ * A lock older than a minute belongs to a command that died and is taken over.
+ * @template T
+ * @param {Context} ctx
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+export async function withLock(ctx, fn) {
+  const p = paths(ctx);
+  mkdirSync(p.home, { recursive: true, mode: 0o700 });
+  const give = Date.now() + 15000;
+  for (;;) {
+    try {
+      const fd = openSync(p.lock, 'wx', 0o600);
+      writeSync(fd, String(process.pid));
+      closeSync(fd);
+      break;
+    } catch (e) {
+      if (/** @type {NodeJS.ErrnoException} */ (e).code !== 'EEXIST') throw e;
+      try {
+        if (Date.now() - statSync(p.lock).mtimeMs > 60000) {
+          unlinkSync(p.lock);
+          continue;
+        }
+      } catch { /* it just went away: try again */ }
+      if (Date.now() > give) throw new CliError(`another hivemind command is changing this laptop's setup (${p.lock}). Wait for it to finish; if none is running, delete that file.`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    try { unlinkSync(p.lock); } catch { /* gone */ }
+    removeDirIfEmpty(p.home); // a leave that removed everything else leaves the folder to us
+  }
+}
+
+/**
+ * MCP server names a new room must not take: ones Hivemind registered and may still have (a room that was left but whose
+ * server could not be removed), and any candidate that Claude Code or Codex already has under that name (the user's own).
+ * @param {Context} ctx
+ * @param {string} room
+ * @returns {Promise<Set<string>>}
+ */
+export async function takenMcpNames(ctx, room) {
+  const taken = new Set(readManifest(ctx)?.claude.mcpServers ?? []);
+  const toml = readText(paths(ctx).codexToml);
+  const tomlNames = tomlServerNames(toml);
+  const ourBlocks = toml === null ? [] : blockNames(toml);
+  for (const n of candidateNames(room, 12)) {
+    // Ours are rewritten by the join that is about to run; anyone else's stay.
+    if (tomlNames.has(n) && !ourBlocks.includes(n)) taken.add(n);
+    const got = await ctx.runner('claude', ['mcp', 'get', n]);
+    if (got.code === 0 && !isOurHelperText(ctx, got.stdout)) taken.add(n);
+  }
+  return taken;
+}
+
+/**
  * The hook files, byte for byte as they ship. Returns true if anything changed.
  * @param {Context} ctx
  */
@@ -110,13 +177,17 @@ export function copyRuntime(ctx) {
   const files = [
     ...HOOK_FILES.map((f) => /** @type {[URL, string]} */ ([new URL(`../hook/${f}`, import.meta.url), f])),
     [new URL(`./${HELPER_FILE}`, import.meta.url), HELPER_FILE],
+    [new URL(`./${HELPER_FILE}`, import.meta.url), ROOM_HELPER_FILE],
   ];
   for (const [src, name] of files) {
     const text = readText(fileURLToPath(src));
     if (text === null) throw new CliError(`the Hivemind package is incomplete: ${name} is missing`);
     if (writeIfChanged(join(p.hookDir, name), text)) changed = true;
   }
-  if (ctx.platform === 'win32' && writeIfChanged(p.helperCmd, helperCmdText(ctx.nodePath))) changed = true;
+  if (ctx.platform === 'win32') {
+    if (writeIfChanged(p.helperCmd, helperCmdText(ctx.nodePath))) changed = true;
+    if (writeIfChanged(p.roomHelperCmd, helperCmdText(ctx.nodePath, ROOM_HELPER_FILE))) changed = true;
+  }
   return changed;
 }
 
@@ -158,6 +229,42 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
  */
 
 /**
+ * The helper script and Windows wrapper for a server: `hivemind` has the original files, every other server the
+ * room-only copies.
+ * @param {Context} ctx
+ * @param {string} mcp
+ */
+export function helperFiles(ctx, mcp) {
+  const p = paths(ctx);
+  return mcp === DEFAULT_MCP ? { script: p.helperScript, cmd: p.helperCmd } : { script: p.roomHelperScript, cmd: p.roomHelperCmd };
+}
+
+/** @param {Context} ctx @param {string} mcp @param {string} server */
+function helperCommandFor(ctx, mcp, server) {
+  const { script, cmd } = helperFiles(ctx, mcp);
+  return headersHelperCommand(ctx.platform, ctx.nodePath, script, cmd, mcp, new URL(server).origin);
+}
+
+/**
+ * Whether text from `claude mcp get` names one of our helper files.
+ * @param {Context} ctx
+ * @param {string} text
+ */
+export function isOurHelperText(ctx, text) {
+  const p = paths(ctx);
+  return isOurHelper(text, p.helperScript, p.helperCmd, p.roomHelperScript, p.roomHelperCmd);
+}
+
+/**
+ * The command in the "Headers helper:" line of `claude mcp get`, or null when the output has no such line.
+ * @param {string} text
+ */
+function printedHelper(text) {
+  const m = /^\s*headers[ _-]?helper\s*:\s*(.*?)\s*$/im.exec(text);
+  return m ? (m[1] ?? null) : null;
+}
+
+/**
  * One room's MCP server in Claude Code, through the claude CLI.
  * @param {Context} ctx
  * @param {HivemindConfig} room
@@ -165,20 +272,20 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
  * @param {Report} report
  */
 async function registerClaudeMcp(ctx, room, manifest, report) {
-  const p = paths(ctx);
   const name = room.mcp;
   // The JSON holds the URL and a headersHelper, never the token. The helper is told which server it serves.
-  const helper = headersHelperCommand(ctx.platform, ctx.nodePath, p.helperScript, p.helperCmd, name);
+  const helper = helperCommandFor(ctx, name, room.server);
   const json = JSON.stringify(claudeMcpJson(room.server, helper));
   const got = await ctx.runner('claude', ['mcp', 'get', name]);
   if (got.code === 0) {
     // An entry with this name that is not ours belongs to the user: never replace it.
-    if (!isOurHelper(got.stdout, p.helperScript, p.helperCmd) && !manifest.claude.mcpServers.includes(name)) {
+    if (!isOurHelperText(ctx, got.stdout) && !manifest.claude.mcpServers.includes(name)) {
       throw new CliError(
         `Claude Code already has its own MCP server named "${name}", so the Hivemind one was not added. Rename or remove yours (claude mcp remove --scope user ${name}), then run hivemind update.`,
       );
     }
-    if (got.stdout.includes(`${room.server}/mcp`) && got.stdout.includes(helper)) {
+    // Exactly this URL and exactly this helper command, as parsed from the output; anything else is replaced.
+    if (got.stdout.includes(`${room.server}/mcp`) && printedHelper(got.stdout) === helper) {
       noteMcp(manifest, name);
       report.lines.push(`Claude Code: MCP server "${name}" already set up`);
       return;
@@ -216,9 +323,9 @@ function noteMcp(manifest, name) {
  */
 async function registerClaude(ctx, rooms, manifest, claudeOnPath, report) {
   const p = paths(ctx);
-  const isOurs = oursMatcher(p.hookScript);
+  const isOursHook = oursMatcher(p.hookScript);
   const { value: settings, existed } = readJsonObject(p.claudeSettings, {});
-  const next = mergeHooks(settings, CLAUDE_SPECS, (spec) => claudeHandler(ctx.nodePath, p.hookScript, spec), isOurs);
+  const next = mergeHooks(settings, CLAUDE_SPECS, (spec) => claudeHandler(ctx.nodePath, p.hookScript, spec), isOursHook);
   if (next.permissions === undefined) next.permissions = {};
   if (typeof next.permissions !== 'object' || next.permissions === null || Array.isArray(next.permissions)) {
     throw new CliError(`"permissions" in ${p.claudeSettings} is not an object; nothing was changed.`);
@@ -247,8 +354,13 @@ async function registerClaude(ctx, rooms, manifest, claudeOnPath, report) {
   report.lines.push(`Claude Code: hooks registered in ${p.claudeSettings}`);
 
   if (!claudeOnPath) {
+    // Servers of rooms that are gone cannot be removed without claude: say so loudly, and keep them on record.
+    for (const gone of manifest.claude.mcpServers.filter((n) => !rooms.some((r) => r.mcp === n))) {
+      report.failed = true;
+      report.warnings.push(`Claude Code: the "claude" program was not found, so the MCP server "${gone}" of a room you left could not be removed. Put claude on your PATH and run hivemind update, or run: claude mcp remove --scope user ${gone}`);
+    }
     for (const room of rooms) {
-      const helper = headersHelperCommand(ctx.platform, ctx.nodePath, p.helperScript, p.helperCmd, room.mcp);
+      const helper = helperCommandFor(ctx, room.mcp, room.server);
       const json = JSON.stringify(claudeMcpJson(room.server, helper));
       const by = addJsonCommands(ctx.platform, json, `claude mcp add-json --scope user ${room.mcp}`).map((c) => `  ${c.shell}:  ${c.command}`).join('\n');
       report.warnings.push(
@@ -282,10 +394,9 @@ async function registerClaude(ctx, rooms, manifest, claudeOnPath, report) {
  * @param {Report} report
  */
 async function removeClaudeMcp(ctx, name, manifest, report) {
-  const p = paths(ctx);
   const got = await ctx.runner('claude', ['mcp', 'get', name]);
   if (got.code === 0) {
-    if (isOurHelper(got.stdout, p.helperScript, p.helperCmd)) {
+    if (isOurHelperText(ctx, got.stdout)) {
       const r = await ctx.runner('claude', ['mcp', 'remove', '--scope', 'user', name]);
       if (r.code === 0) {
         report.lines.push(`Claude Code: MCP server "${name}" removed`);
@@ -463,7 +574,7 @@ export async function uninstallAll(ctx) {
     report.warnings.push(`Hivemind is only partly removed. ${p.home} (hook files, config and install record) was kept; fix the problem above, then run hivemind leave again.`);
     return report;
   }
-  for (const f of [...HOOK_FILES, HELPER_FILE, HELPER_CMD_FILE]) removeFile(join(p.hookDir, f));
+  for (const f of [...HOOK_FILES, HELPER_FILE, HELPER_CMD_FILE, ROOM_HELPER_FILE, ROOM_HELPER_CMD_FILE]) removeFile(join(p.hookDir, f));
   removeDirIfEmpty(p.hookDir);
   for (const f of [p.config, p.manifest, p.off, p.hookLog, `${p.hookLog}.1`]) removeFile(f);
   if (existsSync(p.state)) rmSync(p.state, { recursive: true, force: true });

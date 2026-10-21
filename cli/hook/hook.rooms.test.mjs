@@ -217,3 +217,81 @@ describe('config.json formats and version skew', () => {
     expect(a.requests).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Callsigns repeat across rooms, so a session must only use the Hivemind server of its own project's room.
+
+/** A Claude PreToolUse for a tool of an MCP server, from `cwd`. Returns the parsed stdout (or null when quiet). */
+async function toolCall(t, cwd, tool, input = {}) {
+  const raw = JSON.parse(readFileSync(new URL('PreToolUse.Edit.json', FIXTURES), 'utf8'));
+  raw.cwd = cwd;
+  raw.session_id = t.session;
+  raw.tool_name = tool;
+  raw.tool_input = input;
+  const out = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [HOOK, 'claude'], { env: { ...process.env, HIVEMIND_HOME: t.home }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+    child.stdout.on('data', (c) => { stdout += c; });
+    child.on('close', () => resolve(stdout));
+    child.stdin.end(JSON.stringify(raw));
+  });
+  return out === '' ? null : JSON.parse(out);
+}
+const denied = (o) => o?.hookSpecificOutput?.permissionDecision === 'deny';
+const reasonOf = (o) => o?.hookSpecificOutput?.permissionDecisionReason ?? '';
+
+describe('Hivemind tools are tied to the project\'s room', () => {
+  it('a tool of another room\'s server is denied, the right room\'s server is not', async () => {
+    const a = await fakeServer();
+    const b = await fakeServer();
+    const t = laptop({ rooms: [entry(a.url, TOKEN_A, [rootA], { mcp: 'hivemind', room: 'ra' }), entry(b.url, TOKEN_B, [rootB], { mcp: 'hivemind-b', room: 'rb' })] });
+    const wrong = await toolCall(t, repoA, 'mcp__hivemind-b__status', { me: 'claude-test' });
+    expect(denied(wrong)).toBe(true);
+    expect(reasonOf(wrong)).toContain('mcp__hivemind__*');
+    const wrong2 = await toolCall(t, repoB, 'mcp__hivemind__status', { me: 'claude-test' });
+    expect(denied(wrong2)).toBe(true);
+    expect(reasonOf(wrong2)).toContain('mcp__hivemind-b__*');
+    expect(await toolCall(t, repoB, 'mcp__hivemind-b__status', { me: 'claude-test' })).toBeNull();
+    expect(a.requests.length + b.requests.length).toBe(0); // all local
+  });
+
+  it('no room for the folder (unmapped repo, or not a repo): Hivemind tools are denied, other tools are untouched', async () => {
+    const a = await fakeServer();
+    const t = laptop({ rooms: [entry(a.url, TOKEN_A, [rootA], { mcp: 'hivemind' })] });
+    const notRepo = join(base, 'plain');
+    mkdirSync(notRepo, { recursive: true });
+    expect(denied(await toolCall(t, repoB, 'mcp__hivemind__status', { me: 'x' }))).toBe(true);
+    expect(denied(await toolCall(t, notRepo, 'mcp__hivemind__status', { me: 'x' }))).toBe(true);
+    expect(await toolCall(t, repoB, 'mcp__other__thing', {})).toBeNull();
+    expect(await toolCall(t, notRepo, 'Read', { file_path: join(notRepo, 'x') })).toBeNull();
+  });
+
+  it('a user\'s own hivemind-notes server is not a Hivemind server', async () => {
+    const a = await fakeServer();
+    const t = laptop({ rooms: [entry(a.url, TOKEN_A, [rootA], { mcp: 'hivemind' })] });
+    expect(await toolCall(t, repoA, 'mcp__hivemind-notes__add', { me: 'whatever' })).toBeNull();
+    expect(await toolCall(t, repoB, 'mcp__hivemind-notes__add', { me: 'whatever' })).toBeNull();
+  });
+
+  it('the SessionStart briefing names the tool prefix when the laptop is in several rooms, and only then', async () => {
+    const a = await fakeServer();
+    const b = await fakeServer();
+    const two = laptop({ rooms: [entry(a.url, TOKEN_A, [rootA], { mcp: 'hivemind', room: 'ra' }), entry(b.url, TOKEN_B, [rootB], { mcp: 'hivemind-b', room: 'rb' })] });
+    const r = await run(two, repoB);
+    expect(r.stdout).toContain('This project\'s room is \\"rb\\"; its tools are mcp__hivemind-b__*.');
+    const one = laptop({ rooms: [entry(a.url, TOKEN_A, [rootA], { mcp: 'hivemind', room: 'ra' })] });
+    expect((await run(one, repoA)).stdout).not.toContain('its tools are');
+  });
+
+  it('the saved callsign belongs to a room: moving the session to another room\'s repo does not reuse it', async () => {
+    const a = await fakeServer();
+    const b = await fakeServer();
+    const t = laptop({ rooms: [entry(a.url, TOKEN_A, [rootA], { mcp: 'hivemind', room: 'ra' }), entry(b.url, TOKEN_B, [rootB], { mcp: 'hivemind-b', room: 'rb' })] });
+    await run(t, repoA); // learns callsign "claude-test" in room ra
+    // the same session now works in room rb's repo and calls its tool with another callsign: no stale callsign applies
+    expect(await toolCall(t, repoB, 'mcp__hivemind-b__status', { me: 'claude-in-rb' })).toBeNull();
+    // back in ra the callsign is checked again (the state was reset for rb, so ra has none until its next SessionStart)
+    await run(t, repoA);
+    expect(denied(await toolCall(t, repoA, 'mcp__hivemind__status', { me: 'someone-else' }))).toBe(true);
+  });
+});
