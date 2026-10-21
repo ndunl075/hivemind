@@ -118,7 +118,7 @@ async function dispatch(svc: RoomServices, person: string, msg: JsonRpcRequest):
     case 'tools/call': {
       const name = msg.params?.name;
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;
-      const tool = typeof name === 'string' ? TOOLS[name as ToolName] : undefined;
+      const tool = typeof name === 'string' && Object.hasOwn(TOOLS, name) ? TOOLS[name as ToolName] : undefined;
       if (!tool) return rpcError(id, -32602, `Unknown tool: ${String(name)}`);
       let agent: AgentRecord | null = null;
       if (!tool.noMe) {
@@ -128,7 +128,9 @@ async function dispatch(svc: RoomServices, person: string, msg: JsonRpcRequest):
         if (!agent || agent.person !== person) {
           return { jsonrpc: '2.0', id, result: textResult(`"${me}" is not your callsign. Use the one in your Hivemind briefing.`, true) };
         }
+        const wasIdle = agent.idleSince !== null;
         svc.agents.touch(agent);
+        if (wasIdle) svc.changed();
       }
       try {
         const out = await tool.run({ svc, person, agent: agent as AgentRecord }, args);

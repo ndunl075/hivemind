@@ -15,9 +15,19 @@ interface Msg extends MessageView {
   repo: string | null;
 }
 
+function parseList(v: unknown): string[] {
+  try {
+    const x: unknown = typeof v === 'string' ? JSON.parse(v) : [];
+    return Array.isArray(x) ? x.filter((s): s is string => typeof s === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 export const createMessages: FeatureFactory<'messages'> = (ctx) => {
   ctx.sql.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY, sender TEXT NOT NULL, recipient TEXT NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL)`).toArray();
+    id INTEGER PRIMARY KEY, sender TEXT NOT NULL, recipient TEXT NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL,
+    exclude TEXT, repo TEXT)`).toArray(); // exclude (JSON list) and repo hold the notify() filters of a '*' notice
   ctx.sql.exec(`CREATE TABLE IF NOT EXISTS deliveries (
     message_id INTEGER NOT NULL, callsign TEXT NOT NULL, delivered_at INTEGER NOT NULL, PRIMARY KEY (message_id, callsign))`).toArray();
 
@@ -28,7 +38,7 @@ export const createMessages: FeatureFactory<'messages'> = (ctx) => {
   for (const r of ctx.sql.exec('SELECT * FROM messages ORDER BY id').toArray()) {
     messages.push({
       id: Number(r.id), sender: String(r.sender), recipient: String(r.recipient), text: String(r.text),
-      createdAt: Number(r.created_at), skip: new Set(), repo: null,
+      createdAt: Number(r.created_at), skip: new Set(parseList(r.exclude)), repo: r.repo === null ? null : String(r.repo),
     });
     nextId = Math.max(nextId, Number(r.id) + 1);
   }
@@ -83,8 +93,9 @@ export const createMessages: FeatureFactory<'messages'> = (ctx) => {
         skip: new Set(options.exclude ?? []), repo: to === '*' ? (options.repo ?? null) : null,
       };
       messages.push(msg);
-      ctx.sql.exec('INSERT INTO messages (id, sender, recipient, text, created_at) VALUES (?,?,?,?,?)',
-        msg.id, msg.sender, msg.recipient, msg.text, msg.createdAt).toArray();
+      ctx.sql.exec('INSERT INTO messages (id, sender, recipient, text, created_at, exclude, repo) VALUES (?,?,?,?,?,?,?)',
+        msg.id, msg.sender, msg.recipient, msg.text, msg.createdAt,
+        msg.skip.size > 0 ? JSON.stringify([...msg.skip]) : null, msg.repo).toArray();
       trim();
       const targets = to === '*'
         ? ctx.agents().filter((a) => isActive(a.callsign) && deliverable(msg, a.callsign, 0, a.repo)).map((a) => a.callsign)
@@ -116,6 +127,15 @@ export const createMessages: FeatureFactory<'messages'> = (ctx) => {
       return list.map((m) => (m.sender === 'hivemind'
         ? `[Hivemind] notice (${agoText(now, m.createdAt)}):\n${quote(m.text)}`
         : `[Hivemind] message from ${m.sender} (${agoText(now, m.createdAt)}), a teammate's agent:\n${quote(m.text)}`)).join('\n\n');
+    },
+
+    /** Drops everything held for a callsign that is being reused or deleted: its direct messages and delivered state. */
+    forget(callsign: Callsign): void {
+      delivered.delete(callsign);
+      const gone = messages.filter((m) => m.recipient === callsign);
+      for (const m of gone) messages.splice(messages.indexOf(m), 1);
+      ctx.sql.exec('DELETE FROM deliveries WHERE callsign = ? OR message_id IN (SELECT id FROM messages WHERE recipient = ?)', callsign, callsign).toArray();
+      ctx.sql.exec('DELETE FROM messages WHERE recipient = ?', callsign).toArray();
     },
 
     // Extra, used by the status tool: how many messages are waiting, without delivering them.

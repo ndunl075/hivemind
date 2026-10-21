@@ -4,7 +4,13 @@
  */
 import { LIMITS, type Callsign, type WakeKey } from '../../shared/contracts';
 
-export type WaitResult = { event: 'wake'; key: WakeKey } | { event: 'timeout' };
+/** Lines up with ToolResults['wait'].event; `key` is the wake key that fired. */
+export type WaitResult = { event: 'message' | 'release' | 'task'; key: WakeKey } | { event: 'timeout' };
+
+function eventOf(key: WakeKey): 'message' | 'release' | 'task' {
+  const kind = key.slice(0, key.indexOf(':'));
+  return kind === 'release' || kind === 'task' ? kind : 'message';
+}
 
 interface Parked {
   keys: Set<WakeKey>;
@@ -16,6 +22,7 @@ export class WaitRegistry {
   private readonly parked = new Map<Callsign, Parked>();
 
   park(callsign: Callsign, keys: WakeKey[], seconds: number): Promise<WaitResult> {
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds)) throw new RangeError('seconds must be a finite number');
     this.settle(callsign, { event: 'timeout' });
     const ms = Math.min(Math.max(seconds, 0), LIMITS.waitMaxSeconds) * 1000;
     return new Promise<WaitResult>((resolve) => {
@@ -29,7 +36,7 @@ export class WaitRegistry {
     if (this.parked.size === 0) return;
     for (const [callsign, p] of [...this.parked]) {
       const hit = keys.find((k) => p.keys.has(k));
-      if (hit !== undefined) this.settle(callsign, { event: 'wake', key: hit });
+      if (hit !== undefined) this.settle(callsign, { event: eventOf(hit), key: hit });
     }
   }
 

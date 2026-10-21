@@ -27,6 +27,13 @@ export class AgentStore {
   private readonly sessions = new Map<string, Callsign>();
   private readonly dirty = new Set<Callsign>();
   private lastFlush = 0;
+  /**
+   * Called once for an agent that is over (ended, or 12 hours silent) before its callsign is reused or its session
+   * revived: the Room releases its locks, returns its tasks and clears its messages.
+   */
+  onRetire: (a: AgentRecord, fresh: boolean) => void = () => {};
+  /** Called when an agent row is deleted for good. */
+  onDelete: (callsign: Callsign) => void = () => {};
 
   constructor(private readonly sql: SqlLike, private readonly now: () => Millis) {}
 
@@ -99,10 +106,22 @@ export class AgentStore {
       const existing = this.map.get(cs);
       if (!existing) return cs;
       if (this.isEnded(existing)) {
+        this.retire(existing);
         this.remove(cs);
         return cs;
       }
     }
+  }
+
+  /** Makes sure an over agent has been cleaned up, whether or not it was marked ended. */
+  retire(a: AgentRecord): void {
+    const fresh = a.endedAt === null;
+    if (fresh) {
+      a.endedAt = Math.min(this.now(), a.lastEvent + LIMITS.endedAfterMs);
+      a.activity = null;
+      this.persist(a);
+    }
+    this.onRetire(a, fresh);
   }
 
   private remove(callsign: Callsign): void {
@@ -112,6 +131,7 @@ export class AgentStore {
     this.map.delete(callsign);
     this.dirty.delete(callsign);
     this.sql.exec('DELETE FROM agents WHERE callsign = ?', callsign).toArray();
+    this.onDelete(callsign);
   }
 
   /** Creates an agent with a fresh callsign. Throws RoomFullError at the agent cap. */
@@ -133,6 +153,7 @@ export class AgentStore {
 
   /** A session that comes back after ending (or after 12 hours of silence) keeps its callsign. */
   revive(a: AgentRecord): void {
+    this.retire(a);
     const now = this.now();
     a.endedAt = null;
     a.idleSince = null;

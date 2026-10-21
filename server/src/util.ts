@@ -39,3 +39,25 @@ export function errorResponse(error: string, status: number, headers?: Record<st
 export function rows(cursor: { toArray(): Record<string, unknown>[] }): Record<string, unknown>[] {
   return cursor.toArray();
 }
+
+/**
+ * Canonical repo-relative POSIX path: backslashes become '/', '.' and empty segments vanish, '..' pops a segment.
+ * Returns null for absolute paths (leading '/' or a backslash, a drive letter) and for paths that escape the repo.
+ * A trailing '/' (a folder) is kept. '.' alone canonicalises to ''.
+ */
+export function canonicalPath(raw: string): string | null {
+  const p = raw.replace(/\\/g, '/');
+  if (p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.includes('\0')) return null;
+  const out: string[] = [];
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      if (out.length === 0) return null;
+      out.pop();
+    } else {
+      out.push(seg);
+    }
+  }
+  const joined = out.join('/');
+  return joined !== '' && p.endsWith('/') ? `${joined}/` : joined;
+}

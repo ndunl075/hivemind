@@ -23,6 +23,8 @@ export interface RoomServices {
   /** Ends an agent: marks it ended, releases its locks, returns its tasks. */
   endAgent(agent: AgentRecord): void;
   /** Stores per-repo settings received on /hook. */
+  /** Something the dashboard shows has changed: schedule a snapshot. */
+  changed(): void;
   storeSettings(repo: string, settings: import('../../shared/contracts').ProjectSettings): void;
 }
 

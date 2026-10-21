@@ -28,7 +28,7 @@ import { createTasks } from './features/tasks';
 import { Pipeline } from './pipeline';
 import { HttpError, type RoomServices } from './services';
 import { PERSON_NAME_RE } from './tokens';
-import { errorResponse, json, utcDate } from './util';
+import { canonicalPath, errorResponse, json, utcDate } from './util';
 import { isObj, isRoomMode, parseHookRequest, sanitizeSettings } from './validate';
 import { WaitRegistry } from './waits';
 
@@ -135,8 +135,14 @@ export class Room extends DurableObject<Env> {
       allowMessage: (cs) => this.allowMessage(cs),
       endAgent: (a) => this.endAgent(a),
       storeSettings: (repo, s) => this.storeSettings(repo, s),
+      changed: () => this.scheduleSnapshot(),
     };
     this.pipeline = new Pipeline(this.svc);
+
+    // Over agents are cleaned up before their callsign is reused or their session revived, and at boot.
+    this.agents.onRetire = (a, fresh) => this.cleanupEnded(a, fresh);
+    this.agents.onDelete = (cs) => this.forgetMessages(cs);
+    for (const a of this.agents.all()) if (this.agents.isEnded(a)) this.agents.retire(a);
 
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
     this.restoreModeIfNewDay();
@@ -291,7 +297,6 @@ export class Room extends DurableObject<Env> {
       this.emit({ type: 'mode.restored', actor: null, text: `Daily budget reset: room mode restored to ${replaced}` });
       this.announce(`The daily request budget has reset. Room mode is back to ${replaced}.`);
     }
-    for (const k of [...this.meta.keys()]) if (k.startsWith('budget:') && k !== `budget:${today}`) this.delMeta(k);
   }
 
   private afterRequest(): void {
@@ -300,12 +305,25 @@ export class Room extends DurableObject<Env> {
     if (now - this.lastBudgetFlush >= HOUSEKEEPING_EVERY_MS) {
       this.lastBudgetFlush = now;
       this.setMeta(`budget:${this.budget.date}`, String(this.budget.requests));
+      for (const k of [...this.meta.keys()]) if (k.startsWith('budget:') && k !== `budget:${this.budget.date}`) this.delMeta(k);
     }
     if (now - this.lastHousekeeping >= HOUSEKEEPING_EVERY_MS) {
       this.lastHousekeeping = now;
       for (const a of this.agents.reap().newlyEnded) this.cleanupEnded(a);
+      this.pruneSettings();
     }
-    this.scheduleSnapshot();
+  }
+
+  /** Settings of repos that no agent has been seen in for 24 hours are dropped. */
+  private pruneSettings(): void {
+    const cutoff = this.now() - LIMITS.deleteEndedAfterMs;
+    const live = new Set<string>();
+    for (const a of this.agents.all()) if (a.repo && a.lastEvent >= cutoff) live.add(a.repo);
+    for (const repo of [...this.settingsByRepo.keys()]) {
+      if (live.has(repo)) continue;
+      this.settingsByRepo.delete(repo);
+      this.delMeta(`settings:${repo}`);
+    }
   }
 
   // ---------------------------------------------------------------------------------------------- agents
@@ -315,10 +333,16 @@ export class Room extends DurableObject<Env> {
   }
 
   /** §9 rule 8 and §10: an ended agent loses its locks, and its tasks return to open. */
-  private cleanupEnded(a: AgentRecord): void {
+  private cleanupEnded(a: AgentRecord, announce = true): void {
     this.features.locks.releaseAll(a.callsign);
     this.features.tasks.onAgentEnded(a.callsign);
-    this.emit({ type: 'agent.ended', actor: a.callsign, text: `${a.callsign} ended` });
+    this.forgetMessages(a.callsign);
+    if (announce) this.emit({ type: 'agent.ended', actor: a.callsign, text: `${a.callsign} ended` });
+  }
+
+  /** The messages feature may offer forget(callsign): drop direct messages and delivered state of a gone callsign. */
+  private forgetMessages(callsign: string): void {
+    (this.features.messages as { forget?: (cs: string) => void }).forget?.(callsign);
   }
 
   // ---------------------------------------------------------------------------------------------- requests
@@ -394,11 +418,14 @@ export class Room extends DurableObject<Env> {
         if (method !== 'POST') throw new HttpError(405, 'method not allowed');
         const b = (await this.body(request)) as Partial<ModeRequest>;
         if (!isRoomMode(b.mode)) throw new HttpError(400, 'mode must be enforce, warn or off');
-        // A mode set by a teammate always wins over the budget guard's.
+        // A mode set by a teammate always wins over the budget guard's, even when it names the current mode.
+        const changed = this.mode() !== b.mode;
         this.setMeta('mode', b.mode);
         this.delMeta('mode_by_guard');
-        this.emit({ type: 'mode.changed', actor: null, text: `${person} set the room mode to ${b.mode}` });
-        this.announce(`Room mode is now ${b.mode} (set by ${person}).`);
+        if (changed) {
+          this.emit({ type: 'mode.changed', actor: person, text: `${person} set the room mode to ${b.mode}` });
+          this.announce(`Room mode is now ${b.mode} (set by ${person}).`);
+        }
         const res: ModeResponse = { mode: b.mode };
         return json(res);
       }
@@ -416,17 +443,24 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  private unlock(person: string, b: Partial<UnlockRequest> & { path?: unknown; agent?: unknown }): UnlockResponse {
+  private unlock(person: string, b: Partial<UnlockRequest> & { path?: unknown; agent?: unknown }): UnlockResponse & { note?: string } {
     const hasPath = b.path !== undefined;
     const hasAgent = b.agent !== undefined;
     if (hasPath === hasAgent) throw new HttpError(400, 'give exactly one of path or agent');
     let released;
     let what: string;
+    let note = '';
     if (hasPath) {
       const p = b.path as { repo?: unknown; path?: unknown };
       if (!isObj(p) || typeof p.repo !== 'string' || typeof p.path !== 'string' || !p.path) throw new HttpError(400, 'path needs repo and path');
-      released = this.features.locks.unlockPath(p.repo, p.path);
-      what = p.path;
+      const canon = canonicalPath(p.path);
+      if (!canon) throw new HttpError(400, 'path must be repo-relative and stay inside the repo');
+      released = this.features.locks.unlockPath(p.repo, canon);
+      what = canon;
+      const extra = released.filter((l) => l.path.toLowerCase() !== canon.toLowerCase());
+      if (extra.length > 0) {
+        note = `Also dropped ${extra.map((l) => `${l.kind} lock ${l.path} (held by ${l.holder})`).join(', ')}.`;
+      }
     } else {
       if (typeof b.agent !== 'string' || !b.agent) throw new HttpError(400, 'agent must be a callsign');
       released = this.features.locks.holdings(b.agent);
@@ -434,8 +468,8 @@ export class Room extends DurableObject<Env> {
       what = `all locks of ${b.agent}`;
     }
     this.emit({ type: 'unlock', actor: null, text: `${person} unlocked ${what} (${released.length} released)`, data: { released: released.map((l) => l.path) } });
-    this.announce(`Emergency unlock by ${person}: ${what}. ${released.length} lock${released.length === 1 ? '' : 's'} released. Re-check before editing.`);
-    return { released };
+    this.announce(`Emergency unlock by ${person}: ${what}. ${released.length} lock${released.length === 1 ? '' : 's'} released.${note ? ` ${note}` : ''} Re-check before editing.`);
+    return note ? { released, note } : { released };
   }
 
   private upgrade(request: Request): Response {

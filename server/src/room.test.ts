@@ -56,12 +56,15 @@ describe('locks through /hook', () => {
   });
 
   it('releases a lock when the divergent list drops the file, never on a truncated list', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-21T10:00:00Z'));
     const room = 'diverge';
     const a = await agentToken(room, 'ana');
     await hook(a, 'sa', editBody('x.ts'));
     await hook(a, 'sa', editBody('y.ts'));
     const held = () => inRoom(room, (r) => r.features.locks.list().map((l) => l.path).sort());
     expect(await held()).toEqual(['x.ts', 'y.ts']);
+    vi.setSystemTime(Date.parse('2026-10-21T10:00:20Z')); // past the heartbeat grace for new locks
     // Truncated: nothing is released, even though x.ts is missing.
     await hook(a, 'sa', { git: { divergent: ['y.ts'], upstream: 'origin/main', truncated: true, pushed: null } });
     expect(await held()).toEqual(['x.ts', 'y.ts']);
@@ -99,7 +102,7 @@ describe('locks through /hook', () => {
     expect(r.other.granted).toBe(true);
     expect(r.own.allow).toBe(true);
     expect(r.stolen).toEqual({ ok: false, error: expect.stringContaining('not takeable') });
-    expect(r.after).toBe(true);
+    expect(r.after).toBe(false); // rule 1: ana's edit under her own reservation took a file lock too
   });
 
   it('reserving is all or nothing', async () => {
@@ -331,7 +334,7 @@ describe('wait registry', () => {
       r.features.messages.notify('claude-ana', 'wake up');
       return p;
     });
-    expect(woke).toEqual({ event: 'wake', key: 'message:claude-ana' });
+    expect(woke).toEqual({ event: 'message', key: 'message:claude-ana' });
 
     const timeline = await inRoom(room, async (r) => {
       vi.useFakeTimers();
@@ -359,7 +362,7 @@ describe('wait registry', () => {
       r.features.locks.releaseAll('claude-ana');
       return p;
     });
-    expect(res).toEqual({ event: 'wake', key: `release:${REPO}:w.ts` });
+    expect(res).toEqual({ event: 'release', key: `release:${REPO}:w.ts` });
   });
 });
 

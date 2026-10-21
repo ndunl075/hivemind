@@ -10,6 +10,7 @@ import {
 } from '../../shared/contracts';
 import { buildBriefing } from './briefing';
 import { denialText } from './features/locks/denial';
+import { RoomFullError } from './agents';
 import { actorOf, HttpError, type RoomServices } from './services';
 import { deriveState } from '../../shared/state';
 
@@ -84,8 +85,9 @@ export class Pipeline {
           kind: req.agent, person, session: req.session, hooked: true, repo: req.repo, repoName: req.repoName ?? null,
           checkout: req.checkout, branch: req.branch, head: req.head,
         });
-      } catch {
-        throw new HttpError(429, 'room is full');
+      } catch (e) {
+        if (e instanceof RoomFullError) throw new HttpError(429, 'room is full');
+        throw e;
       }
       ctx.emit({ type: 'agent.joined', actor: agent.callsign, text: `${agent.callsign} joined` });
     } else if (agents.isEnded(agent)) {
@@ -95,6 +97,8 @@ export class Pipeline {
     }
 
     // roster
+    const shown = (a: AgentRecord): string => [a.branch, a.head, a.checkout, a.repo, a.repoName, a.activity, a.idleSince !== null, a.outageAt, a.hooked].join('|');
+    const before = shown(agent);
     agent.hooked = true;
     agent.repo = req.repo;
     agent.checkout = req.checkout;
@@ -114,6 +118,7 @@ export class Pipeline {
         ? { activity: `${req.tool ?? 'Edit'} ${editPaths.slice(0, 3).join(', ')}`.slice(0, 300) }
         : clearsActivity ? { activity: null } : {}),
     });
+    if (shown(agent) !== before) this.svc.changed();
     const actor = actorOf(agent);
 
     const call: HookCall = {
@@ -168,7 +173,9 @@ export class Pipeline {
           }
         }
         if (mode !== 'off' && !call.denied) {
+          const held = features.locks.holdings(actor.callsign).length;
           const d = features.locks.checkEdit(actor, req.repo, editPaths);
+          if (features.locks.holdings(actor.callsign).length !== held) this.svc.changed();
           if (!d.allow) {
             const titles = new Map(features.tasks.list().map((t) => [t.id, t.title] as const));
             const silence = new Map(ctx.agents().map((a) => [a.callsign, deriveState(a, now).silenceMs] as const));

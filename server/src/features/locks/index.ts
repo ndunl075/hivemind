@@ -6,10 +6,13 @@
  * Not here yet (W5 git-layer): advisory and ignore globs (rules 9, 10), shell-edit attribution and cross-checkout
  * conflict notices (rules 4, 5). Only the always-ignored `.git/` is handled.
  */
-import type {
-  Actor, Callsign, EditDecision, FeatureFactory, GitStateReport, LockConflict, LockView, RepoId, RepoPath, RoomContext,
+import {
+  LIMITS,
+  type Actor, type Callsign, type EditDecision, type FeatureFactory, type GitStateReport, type LockConflict, type LockView,
+  type RepoId, type RepoPath, type RoomContext,
 } from '../../../../shared/contracts';
 import { deriveState } from '../../../../shared/state';
+import { canonicalPath } from '../../util';
 
 interface LockRow {
   key: string;
@@ -24,7 +27,7 @@ interface LockRow {
 }
 
 export function normalizePath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/^\/+/, '').replace(/\/{2,}/g, '/');
+  return canonicalPath(path) ?? '';
 }
 
 export function normalizeFolder(path: string): string {
@@ -127,15 +130,6 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
 
   const currentTask = (callsign: Callsign): number | null => features.tasks.inProgressFor(callsign)?.id ?? null;
 
-  const actorHoldsCovering = (actor: Actor, repo: RepoId, path: string): boolean => {
-    const r = repo.toLowerCase();
-    const p = path.toLowerCase();
-    for (const l of locks.values()) {
-      if (l.holder === actor.callsign && l.repo.toLowerCase() === r && l.kind === 'folder' && p.startsWith(l.path.toLowerCase())) return true;
-    }
-    return false;
-  };
-
   return {
     checkEdit(actor, repo, paths): EditDecision {
       const mode = ctx.mode();
@@ -167,7 +161,7 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
       for (const p of wanted) {
         if (conflicted.has(p.toLowerCase())) continue;
         const key = lockKey(repo, p);
-        if (locks.has(key) || actorHoldsCovering(actor, repo, p)) continue;
+        if (locks.has(key)) continue; // rule 1: editing takes a file lock, even under the actor's own folder reservation
         save({ key, repo, path: p, kind: 'file', holder: actor.callsign, checkout: actor.checkout ?? '', taskId, reason: null, acquiredAt: ctx.now() });
       }
       return { allow: true, conflicts, notes };
@@ -179,11 +173,14 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
       const divergent = new Set(state.divergent.map((p) => normalizePath(p).toLowerCase()));
       const r = repo.toLowerCase();
       const release: LockRow[] = [];
+      // A lock taken after the report was computed (parallel tool calls) must survive it: leave young locks alone.
+      const youngAfter = ctx.now() - LIMITS.heartbeatMs;
       for (const l of locks.values()) {
         if (l.kind !== 'file' || l.repo.toLowerCase() !== r) continue;
-        // Rule 5: agents in one checkout see the same divergent files.
-        const mine = l.holder === actor.callsign || (!!actor.checkout && l.checkout === actor.checkout);
-        if (mine && !divergent.has(l.path.toLowerCase())) release.push(l);
+        // Rules 3 and 5: only a report from the lock's own checkout counts, whichever agent in it sent the report.
+        if (!actor.checkout || l.checkout !== actor.checkout) continue;
+        if (l.acquiredAt > youngAfter) continue;
+        if (!divergent.has(l.path.toLowerCase())) release.push(l);
       }
       drop(release, 'lock.released', actor.callsign, `${actor.callsign}: ${release.length} file(s) no longer divergent, released`);
     },

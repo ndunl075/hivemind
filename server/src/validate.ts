@@ -1,4 +1,5 @@
 /** Request validation. Returns a clean value or an error string; never throws. */
+import { canonicalPath } from './util';
 import { LIMITS, type GitStateReport, type HookEvent, type HookRequest, type ProjectSettings, type RoomMode } from '../../shared/contracts';
 
 type Obj = Record<string, unknown>;
@@ -24,8 +25,10 @@ function pathList(v: unknown, cap: number): { list: string[]; truncated: boolean
   if (!Array.isArray(v)) return null;
   const list: string[] = [];
   for (const p of v) {
-    if (typeof p !== 'string' || p.length > MAX_STR || p.includes('\0')) return null;
-    if (p.length > 0) list.push(p);
+    if (typeof p !== 'string' || p.length > MAX_STR) return null;
+    const c = canonicalPath(p);
+    if (c === null) return null; // absolute, or escaping the repo
+    if (c.length > 0) list.push(c);
   }
   return list.length > cap ? { list: list.slice(0, cap), truncated: true } : { list, truncated: false };
 }
@@ -63,7 +66,9 @@ function parseGit(v: unknown): GitStateReport | null | string {
     const files: { path: string; blob: string }[] = [];
     for (const f of p.files.slice(0, MAX_PATHS)) {
       if (!isObj(f) || !str(f.path) || !str(f.blob, 80)) return 'git.pushed.files is malformed';
-      files.push({ path: f.path as string, blob: f.blob as string });
+      const fp = canonicalPath(f.path as string);
+      if (!fp) return 'git.pushed.files has an invalid path';
+      files.push({ path: fp, blob: f.blob as string });
     }
     pushed = { branch: p.branch as string, sha: p.sha as string, files };
   }

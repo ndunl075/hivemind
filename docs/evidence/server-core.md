@@ -30,3 +30,12 @@
 - Rule 3 releases a file lock when the holder, or any agent in the lock's checkout, reports a complete list without the file (rule 5's release half). Known small race: a lock taken just before a same-checkout agent's heartbeat computed its list can be released early and is re-taken on the next edit.
 - Messages: broadcasts reach agents that registered before the message. `unreadCount()` is an extra method on the messages feature that the `status` tool uses when present (the frozen `MessagesApi` cannot count without delivering); it falls back to `hasUnreadDirect`.
 - Test pitfall recorded: an unread response body keeps a request in flight and stalls `evictDurableObject`; tests read bodies.
+
+## Review round 1 (Tier 2)
+All 13 findings fixed; tests for each are in `server/src/review.test.ts` (plus updated expectations in `room.test.ts`). Points worth knowing:
+- Over agents (ended, or 12 h silent) go through one cleanup (locks, tasks, direct messages and delivered state) before their callsign is reused, their session revived, and at boot.
+- `messages` gained `exclude` and `repo` columns (the notify filters survive a restart) and an extra `forget(callsign)`.
+- Paths are canonicalised at validation (`canonicalPath` in `util.ts`) and again inside locks; absolute or escaping paths are a 400.
+- Rule 3 releases only on a report from the lock's own checkout, and never a lock younger than `LIMITS.heartbeatMs`.
+- Snapshots are scheduled by events and visible roster or lock changes only. `/unlock` of a path may add a `note` field to its response when it also dropped a folder reservation (additive to `UnlockResponse`).
+- `WaitResult.event` is `'message' | 'release' | 'task' | 'timeout'`; non-finite `seconds` throws a `RangeError` (the future `wait` tool must validate first).
