@@ -42,6 +42,8 @@ export interface InternalClaims {
 
 const SNAPSHOT_MIN_GAP_MS = 1000 / LIMITS.snapshotsPerSecond;
 const HOUSEKEEPING_EVERY_MS = 60_000;
+/** The request counter is written to storage at most once per this many requests, ahead of the count (ARCHITECTURE.md §16). */
+const BUDGET_PERSIST_EVERY = 25;
 const DEFAULT_MODE: RoomMode = 'enforce';
 
 export class Room extends DurableObject<Env> {
@@ -59,7 +61,10 @@ export class Room extends DurableObject<Env> {
   private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSnapshotAt = 0;
   private lastHousekeeping = 0;
-  private lastBudgetFlush = 0;
+  /** The counter value stored in meta (>= the in-memory count; see persistBudget). */
+  private budgetReserved = 0;
+  /** Requests counted since this boot; sizes the persisted margin. */
+  private budgetSinceBoot = 0;
   private readonly burst = new Map<string, { start: Millis; count: number }>();
   private readonly messageTimes = new Map<string, Millis[]>();
 
@@ -98,7 +103,9 @@ export class Room extends DurableObject<Env> {
 
     const today = utcDate(this.now());
     this.budget = new BudgetCounter(this.now(), Number(this.meta.get(`budget:${today}`) ?? 0), today);
-    this.lastBudgetFlush = this.now();
+    this.budgetReserved = this.budget.requests;
+    this.budgetSinceBoot = 0;
+    this.dropOldBudgetKeys(`budget:${today}`);
     this.lastHousekeeping = this.now();
     this.eventSeq = Number(sql.exec('SELECT COALESCE(MAX(seq), 0) AS m FROM events').toArray()[0]?.m ?? 0);
 
@@ -275,7 +282,8 @@ export class Room extends DurableObject<Env> {
 
   /** Budget guard (§16): count the request, restore a guard-set mode after midnight, switch to warn at 95%. */
   private onRequest(): void {
-    this.budget.record(this.now());
+    const { rolledOver } = this.budget.record(this.now());
+    this.persistBudget(rolledOver);
     this.restoreModeIfNewDay();
     const today = this.budget.date;
     if (this.budget.level().warn && this.mode() === 'enforce' && this.meta.get('guard_switch_date') !== today) {
@@ -285,6 +293,29 @@ export class Room extends DurableObject<Env> {
       this.emit({ type: 'mode.guard', actor: null, text: 'Daily request budget is almost used: room switched to warn mode' });
       this.announce('Hivemind is close to its daily request budget. Heartbeats are off and the room switched to warn mode: locks are heads-up only until the budget resets at 00:00 UTC.');
     }
+  }
+
+  /**
+   * Persists the counter ahead of the in-memory count: when the count passes the stored value, store count plus a margin
+   * of min(BUDGET_PERSIST_EVERY, requests since boot). After an eviction the reload can overcount by at most the requests
+   * handled since the last boot (and never more than BUDGET_PERSIST_EVERY - 1), so repeated evictions don't compound,
+   * and a long-running Room writes the counter about once per BUDGET_PERSIST_EVERY requests. Never undercounts.
+   * Old days' keys are dropped on UTC rollover.
+   */
+  private persistBudget(rolledOver: boolean): void {
+    const key = `budget:${this.budget.date}`;
+    this.budgetSinceBoot += 1;
+    if (rolledOver) this.budgetReserved = 0;
+    if (this.budget.requests > this.budgetReserved) {
+      const reserve = this.budget.requests + Math.min(BUDGET_PERSIST_EVERY, Math.max(1, this.budgetSinceBoot)) - 1;
+      this.setMeta(key, String(reserve));
+      this.budgetReserved = reserve; // only after the write succeeded
+    }
+    if (rolledOver) this.dropOldBudgetKeys(key);
+  }
+
+  private dropOldBudgetKeys(keep: string): void {
+    for (const k of [...this.meta.keys()]) if (k.startsWith('budget:') && k !== keep) this.delMeta(k);
   }
 
   private restoreModeIfNewDay(): void {
@@ -302,13 +333,9 @@ export class Room extends DurableObject<Env> {
   private afterRequest(): void {
     const now = this.now();
     this.agents.flush();
-    if (now - this.lastBudgetFlush >= HOUSEKEEPING_EVERY_MS) {
-      this.lastBudgetFlush = now;
-      this.setMeta(`budget:${this.budget.date}`, String(this.budget.requests));
-      for (const k of [...this.meta.keys()]) if (k.startsWith('budget:') && k !== `budget:${this.budget.date}`) this.delMeta(k);
-    }
     if (now - this.lastHousekeeping >= HOUSEKEEPING_EVERY_MS) {
       this.lastHousekeeping = now;
+      this.dropOldBudgetKeys(`budget:${this.budget.date}`);
       for (const a of this.agents.reap().newlyEnded) this.cleanupEnded(a);
       this.pruneSettings();
     }
