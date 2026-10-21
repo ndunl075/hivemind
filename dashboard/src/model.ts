@@ -37,6 +37,22 @@ export interface AgentVM {
   /** "#4 Login page", or null. */
   taskLabel: string | null;
   lockCount: number;
+  /** Opaque checkout id, never shown. */
+  checkout: string | null;
+  /** "checkout 1/2" (first-seen order among the person's checkouts), or null when the person has only one. */
+  checkoutLabel: string | null;
+}
+
+/** One person's row in the team summary bar. Counts cover everything the snapshot shows for them. */
+export interface PersonVM {
+  person: string;
+  /** Agents that are not ended. */
+  live: number;
+  /** Ended agents still shown (they disappear 24 hours after ending). */
+  ended: number;
+  tasksInProgress: number;
+  locks: number;
+  checkouts: number;
 }
 
 export interface EdgeVM {
@@ -82,6 +98,7 @@ export interface ActivityItemVM {
   tone: ActivityTone;
   age: string;
   text: string;
+  actor: string | null;
 }
 
 export interface UsageVM {
@@ -97,6 +114,7 @@ export interface ViewModel {
   counts: { agents: number; tasks: number; locks: number };
   banners: Banner[];
   agents: AgentVM[];
+  people: PersonVM[];
   edges: EdgeVM[];
   tasks: { open: number; inProgress: number; done: number; items: TaskItemVM[] };
   locks: LockItemVM[];
@@ -184,6 +202,28 @@ function namesList(names: string[]): string {
   return names.length > 3 ? `${shown} and ${names.length - 3} more` : shown;
 }
 
+/**
+ * A short, stable name per checkout, per person: "checkout 1/2" in order of first sight (earliest agent start,
+ * then checkout id). Only people with more than one checkout get labels; ids and paths are never shown.
+ */
+export function checkoutLabels(agents: readonly Pick<AgentView, 'person' | 'checkout' | 'startedAt'>[]): Map<string, string> {
+  const first = new Map<string, Map<string, number>>();
+  for (const a of agents) {
+    if (a.checkout === null) continue;
+    const m = first.get(a.person) ?? new Map<string, number>();
+    m.set(a.checkout, Math.min(m.get(a.checkout) ?? Infinity, a.startedAt));
+    first.set(a.person, m);
+  }
+  const out = new Map<string, string>();
+  for (const [person, m] of first) {
+    if (m.size < 2) continue;
+    [...m]
+      .sort((x, y) => x[1] - y[1] || x[0].localeCompare(y[0]))
+      .forEach(([id], i) => out.set(`${person}|${id}`, `checkout ${i + 1}/${m.size}`));
+  }
+  return out;
+}
+
 const TASK_ORDER: Record<TaskStatus, number> = { in_progress: 0, open: 1, done: 2, dropped: 3 };
 
 export function buildViewModel(s: Snapshot, now: Millis): ViewModel {
@@ -197,6 +237,7 @@ export function buildViewModel(s: Snapshot, now: Millis): ViewModel {
   for (const l of s.locks) lockCounts.set(l.holder, (lockCounts.get(l.holder) ?? 0) + 1);
 
   const visible = s.agents.filter((a) => !isHidden(a, now));
+  const labels = checkoutLabels(s.agents);
   const agents: AgentVM[] = visible.map((a) => {
     const d = deriveState(a, now);
     const task = a.taskId === null ? undefined : tasksById.get(a.taskId);
@@ -212,6 +253,8 @@ export function buildViewModel(s: Snapshot, now: Millis): ViewModel {
       activityLine: activityLine(a, d.state, d.silenceMs),
       taskLabel: task ? `#${task.id} ${task.title}` : null,
       lockCount: lockCounts.get(a.callsign) ?? 0,
+      checkout: a.checkout ?? null,
+      checkoutLabel: a.checkout ? (labels.get(`${a.person}|${a.checkout}`) ?? null) : null,
     };
   });
 
@@ -288,7 +331,35 @@ export function buildViewModel(s: Snapshot, now: Millis): ViewModel {
 
   const activity: ActivityItemVM[] = [...s.activity]
     .sort((a, b) => b.seq - a.seq)
-    .map((a) => ({ seq: a.seq, type: a.type, tone: tone(a.type), age: ago(now - a.ts), text: a.text }));
+    .map((a) => ({ seq: a.seq, type: a.type, tone: tone(a.type), age: ago(now - a.ts), text: a.text, actor: a.actor }));
+
+  const personOf = new Map(s.agents.map((a) => [a.callsign, a.person]));
+  const byPerson = new Map<string, PersonVM>();
+  const checkoutsOf = new Map<string, Set<string>>();
+  const personRow = (person: string): PersonVM => {
+    let p = byPerson.get(person);
+    if (!p) {
+      p = { person, live: 0, ended: 0, tasksInProgress: 0, locks: 0, checkouts: 0 };
+      byPerson.set(person, p);
+    }
+    return p;
+  };
+  for (const a of agents) {
+    const p = personRow(a.person);
+    if (a.state === 'ended') p.ended++;
+    else p.live++;
+    if (a.checkout) checkoutsOf.set(a.person, (checkoutsOf.get(a.person) ?? new Set()).add(a.checkout));
+  }
+  for (const t of s.tasks) {
+    const person = t.status === 'in_progress' && t.owner ? personOf.get(t.owner) : undefined;
+    if (person !== undefined) personRow(person).tasksInProgress++;
+  }
+  for (const l of s.locks) {
+    const person = personOf.get(l.holder);
+    if (person !== undefined) personRow(person).locks++;
+  }
+  for (const [person, set] of checkoutsOf) personRow(person).checkouts = set.size;
+  const people = [...byPerson.values()].sort((a, b) => a.person.localeCompare(b.person));
 
   const fraction = s.usage.cap > 0 ? s.usage.requests / s.usage.cap : 0;
   const level: UsageVM['level'] =
@@ -306,6 +377,7 @@ export function buildViewModel(s: Snapshot, now: Millis): ViewModel {
     counts: { agents: live.length, tasks: activeTasks.length, locks: s.locks.length },
     banners,
     agents,
+    people,
     edges,
     tasks: {
       open: s.tasks.filter((t) => t.status === 'open').length,

@@ -8,6 +8,7 @@ import { truncate } from '../format';
 import {
   bowControl,
   forceLayout,
+  gridLayout,
   groupOutline,
   pointOnQuad,
   rectEdgePoint,
@@ -34,6 +35,18 @@ export interface GraphView {
   pulse(p: Pulse): void;
   /** Re-run the layout, e.g. after the container changed size. */
   resize(): void;
+}
+
+/** Card sizes by how many agents are drawn: full cards for a few agents, smaller ones for a big team. */
+const TIERS = {
+  full: { w: 236, h: 122, gap: 26 },
+  dense: { w: 204, h: 106, gap: 20 },
+  tight: { w: 176, h: 94, gap: 14 },
+} as const;
+type Tier = keyof typeof TIERS;
+
+function tierFor(count: number): Tier {
+  return count <= 6 ? 'full' : count <= 12 ? 'dense' : 'tight';
 }
 
 const BOW: Record<string, number> = { message: 18, blocked: 44, waiting: -18, nearby: 0 };
@@ -137,6 +150,9 @@ export function createGraph(): GraphView {
   let last: ViewModel | null = null;
   let dims = { w: 236, h: 122 };
   let hullPad = 20;
+  let nodeGap = 26;
+  /** Narrow screens use a plain grid; wider ones the force layout. */
+  let grid: { positions: Map<string, Point>; height: number } | null = null;
   let frame = { width: 1000, height: 600 };
   /** Cached container width (kept current by the ResizeObserver) so updates don't force layout. */
   let boxW = 0;
@@ -144,19 +160,36 @@ export function createGraph(): GraphView {
 
   function measure(vm: ViewModel): void {
     if (boxW === 0) boxW = el.clientWidth || 1000;
-    const key = `${boxW}|${vm.agents.length}`;
+    const count = vm.agents.length;
+    const tier = tierFor(count);
+    const key = `${boxW}|${count}|${vm.people.length}`;
     if (key === measuredKey) return;
     measuredKey = key;
     const width = boxW;
     const narrow = width < 700;
+    const t = TIERS[tier];
     hullPad = narrow ? 9 : 20;
-    dims = narrow ? { w: Math.min(168, Math.floor((width - 2 * (hullPad + 6) - 16) / 2)), h: 122 } : { w: 236, h: 122 };
+    nodeGap = narrow ? Math.min(t.gap, 14) : t.gap;
+    dims = narrow ? { w: Math.min(t.w, Math.floor((width - 2 * (hullPad + 6) - 16) / 2)), h: t.h } : { w: t.w, h: t.h };
+    setClass(stage, 'tier-dense', tier === 'dense');
+    setClass(stage, 'tier-tight', tier === 'tight');
+    let need = 0;
+    grid = null;
     if (narrow) {
-      const cols = Math.max(1, Math.floor((width - 2 * (hullPad + 6) + 16) / (dims.w + 16)));
-      const rows = Math.max(1, Math.ceil(vm.agents.length / cols));
-      stage.style.height = `${Math.max(380, rows * (dims.h + 56) + 60)}px`;
+      const nodes: LayoutNode[] = vm.agents.map((a) => ({ id: a.callsign, group: a.person, cluster: a.checkout ?? '', w: dims.w, h: dims.h }));
+      grid = gridLayout(nodes, width, { pad: hullPad + 4, gap: 14 });
+      need = Math.max(380, Math.ceil(grid.height));
     } else {
+      // Room for every card plus the gaps and outlines around each person; the page scrolls if it is more than the window.
+      const people = Math.max(1, vm.people.length);
+      const cell = (dims.w + nodeGap + 2 * hullPad) * (dims.h + nodeGap + 2 * hullPad);
+      need = Math.ceil((count * cell * 1.45 + people * 9000) / Math.max(1, width));
+      need = need > 460 ? need : 0;
+    }
+    if (narrow) stage.style.height = `${need}px`;
+    else {
       stage.style.height = '';
+      stage.style.minHeight = need > 0 ? `${need}px` : '';
     }
     frame = { width: stage.clientWidth || width, height: stage.clientHeight || 600 };
   }
@@ -184,12 +217,28 @@ export function createGraph(): GraphView {
     links.replaceChildren();
     labels.replaceChildren();
     const byPerson = new Map<string, { x: number; y: number; w: number; h: number }[]>();
+    const byCluster = new Map<string, { person: string; label: string; rects: { x: number; y: number; w: number; h: number }[] }>();
     for (const a of vm.agents) {
       const p = positions.get(a.callsign);
       if (!p) continue;
+      const rect = { x: p.x, y: p.y, w: dims.w, h: dims.h };
       const list = byPerson.get(a.person) ?? [];
-      list.push({ x: p.x, y: p.y, w: dims.w, h: dims.h });
+      list.push(rect);
       byPerson.set(a.person, list);
+      if (a.checkoutLabel) {
+        const ck = `${a.person}|${a.checkout}`;
+        const c = byCluster.get(ck) ?? { person: a.person, label: a.checkoutLabel, rects: [] };
+        c.rects.push(rect);
+        byCluster.set(ck, c);
+      }
+    }
+    for (const c of byCluster.values()) {
+      const outline = groupOutline(c.rects, 6);
+      if (outline.length < 3) continue;
+      // The checkout label sits under its outline, so it never meets the person's label above.
+      const bottom = outline.reduce((m, p) => (p.y > m.y || (p.y === m.y && p.x < m.x) ? p : m), outline[0]!);
+      hulls.append(s('path', { class: 'cluster', d: roundedPath(outline, 12) }));
+      labels.append(s('text', { class: 'cluster-label', x: bottom.x + 10, y: bottom.y + 11 }, c.label));
     }
     for (const [person, rects] of byPerson) {
       const outline = groupOutline(rects, hullPad);
@@ -267,6 +316,7 @@ export function createGraph(): GraphView {
       }
       setText(v.callsign, a.callsign);
       setText(v.sub, [a.person, a.branch].filter(Boolean).join(' · '));
+      v.sub.title = a.checkoutLabel ?? '';
       setText(v.state, a.stateLabel);
       setText(v.locks, a.lockCount > 0 ? `${a.lockCount} ${a.lockCount === 1 ? 'lock' : 'locks'}` : '');
       const flagText = [a.takeable ? 'takeable' : '', a.enforced ? '' : 'not enforced'].filter(Boolean).join(' · ');
@@ -275,19 +325,19 @@ export function createGraph(): GraphView {
       setClass(v.task, 'none', a.taskLabel === null);
       setText(v.activity, a.activityLine);
       v.el.className = `node state-${a.state}${a.enforced ? '' : ' unenforced'}${a.takeable ? ' takeable' : ''}${v.el.classList.contains('pulsed') ? ' pulsed' : ''}`;
-      v.el.setAttribute('aria-label', `${a.callsign}, ${a.person}, ${a.state}, ${a.stateLabel}${a.enforced ? '' : ', not enforced'}`);
+      v.el.setAttribute('aria-label', `${a.callsign}, ${a.person}${a.checkoutLabel ? `, ${a.checkoutLabel}` : ''}, ${a.state}, ${a.stateLabel}${a.enforced ? '' : ', not enforced'}`);
     }
 
     const key = JSON.stringify([
-      vm.agents.map((a) => [a.callsign, a.person]),
+      vm.agents.map((a) => [a.callsign, a.person, a.checkout]),
       layoutLinks(vm.edges).map((l) => [l.a, l.b]),
       frame,
       dims,
     ]);
     if (key !== layoutKey) {
       layoutKey = key;
-      const nodes: LayoutNode[] = vm.agents.map((a) => ({ id: a.callsign, group: a.person, w: dims.w, h: dims.h }));
-      positions = forceLayout(nodes, layoutLinks(vm.edges), frame, { previous: positions, pad: hullPad + 18, gap: dims.w < 200 ? 14 : 26, groupGap: 2 * hullPad + 8 });
+      const nodes: LayoutNode[] = vm.agents.map((a) => ({ id: a.callsign, group: a.person, cluster: a.checkout ?? '', w: dims.w, h: dims.h }));
+      positions = grid ? grid.positions : forceLayout(nodes, layoutLinks(vm.edges), frame, { previous: positions, pad: hullPad + 18, gap: nodeGap, groupGap: 2 * hullPad + 8 });
       drawKey = '';
     }
     place();

@@ -768,6 +768,16 @@ The dashboard is dark only `[DECIDED]`. The logo is `assets/logo.svg` (two overl
 
 Vanilla TypeScript and SVG, bundled with esbuild into Worker static assets, with no framework. A small custom force layout (about 100 lines) places the nodes; if time is short, a ring layout replaces it (§20.6). The page connects with a WebSocket, renders each snapshot, animates pulses, reconnects with backoff, and shows a "reconnecting" banner after 10 seconds without a connection. Text is always set with `textContent` (§13).
 
+### 14.6 Teams of several people
+
+Sized for about 6 people with 2-3 checkouts and 1-3 agents each (up to ~30 agents, most ended or idle).
+
+- **Team bar** under the top bar: one button per person with live agents, tasks in progress and locks held. Click (or Enter/Space) focuses that person: the graph, Tasks, Locks and Activity show only their agents and what they own or hold (unowned tasks are hidden while focused); Escape or "Show everyone" clears. The top-bar counts always cover the whole room.
+- **Checkouts:** a person with more than one checkout gets a dashed inner outline per checkout, labeled "checkout 1/2" in order of first sight (earliest agent start). Ids and paths are never shown.
+- **Ended agents** are not drawn by default; each person's "N ended" button in the team bar expands them (they still disappear after 24 hours).
+- **Density:** card size steps down with the number of drawn agents (full, dense, tight) and the graph area grows with it, so cards never overlap at 1366x768 and up; at phone width the graph is a plain grid, people stacked, two cards per row.
+- `?demo=team` runs a fake 6-person, 24-agent room for development and screenshots.
+
 ---
 
 ## 15. Reliability and failure modes
