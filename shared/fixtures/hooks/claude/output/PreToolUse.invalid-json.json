@@ -1,0 +1,11 @@
+{
+  "tool": "claude",
+  "event": "PreToolUse",
+  "case": "PreToolUse.invalid-json",
+  "verdict": "rejected",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
+  "effect": "Output that does not start with { is treated as plain text and has no effect; the tool runs.",
+  "exitCode": 0,
+  "stdout": "not json {",
+  "stderr": null
+}

@@ -1,0 +1,9 @@
+{
+  "session_id": "<session-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "C:\\proj",
+  "hook_event_name": "SessionStart",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "source": "resume"
+}

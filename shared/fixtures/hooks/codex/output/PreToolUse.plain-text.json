@@ -1,0 +1,11 @@
+{
+  "tool": "codex",
+  "event": "PreToolUse",
+  "case": "PreToolUse.plain-text",
+  "verdict": "rejected",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
+  "effect": "Plain text on stdout is ignored on PreToolUse; the tool runs.",
+  "exitCode": 0,
+  "stdout": "<text>",
+  "stderr": null
+}

@@ -1,0 +1,24 @@
+{
+  "session_id": "<session-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "C:\\proj",
+  "scratchpad_dir": "<scratchpad-dir>",
+  "prompt_id": "<prompt-id>",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Grep",
+  "tool_input": {
+    "pattern": "hello",
+    "path": "C:\\proj\\a.txt"
+  },
+  "tool_response": {
+    "mode": "files_with_matches",
+    "filenames": [
+      "a.txt"
+    ],
+    "numFiles": 1,
+    "totalFiles": 1
+  },
+  "tool_use_id": "<tool-use-id>",
+  "duration_ms": 44
+}

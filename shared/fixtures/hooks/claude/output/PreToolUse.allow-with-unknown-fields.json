@@ -1,0 +1,11 @@
+{
+  "tool": "claude",
+  "event": "PreToolUse",
+  "case": "PreToolUse.allow-with-unknown-fields",
+  "verdict": "accepted",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
+  "effect": "Unknown fields (top level and inside hookSpecificOutput) are ignored; the tool runs.",
+  "exitCode": 0,
+  "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"bogusField\":\"x\"},\"bogusTop\":1}",
+  "stderr": null
+}

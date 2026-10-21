@@ -1,0 +1,11 @@
+{
+  "tool": "claude",
+  "event": "PreToolUse",
+  "case": "PreToolUse.deny",
+  "verdict": "accepted",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
+  "effect": "Tool call is blocked; the reason is shown to the model.",
+  "exitCode": 0,
+  "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"<reason>\"}}",
+  "stderr": null
+}

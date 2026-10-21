@@ -1,0 +1,17 @@
+{
+  "session_id": "<session-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "C:\\proj",
+  "scratchpad_dir": "<scratchpad-dir>",
+  "prompt_id": "<prompt-id>",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "C:\\proj\\a.txt",
+    "old_string": "<old-string>",
+    "new_string": "<new-string>",
+    "replace_all": false
+  },
+  "tool_use_id": "<tool-use-id>"
+}

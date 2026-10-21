@@ -1,0 +1,14 @@
+{
+  "session_id": "<session-id>",
+  "turn_id": "<turn-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "C:\\proj",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "mcp__hivemind__status",
+  "tool_input": {
+    "me": "codex-test"
+  },
+  "tool_use_id": "<tool-use-id>"
+}

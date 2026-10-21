@@ -1,0 +1,21 @@
+{
+  "session_id": "<session-id>",
+  "transcript_path": "<transcript-path>",
+  "cwd": "C:\\proj",
+  "scratchpad_dir": "<scratchpad-dir>",
+  "prompt_id": "<prompt-id>",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "PowerShell",
+  "tool_input": {
+    "command": "Write-Output hi"
+  },
+  "tool_response": {
+    "stdout": "<stdout>",
+    "stderr": "<stderr>",
+    "interrupted": false,
+    "isImage": false
+  },
+  "tool_use_id": "<tool-use-id>",
+  "duration_ms": 1573
+}

@@ -1,0 +1,14 @@
+{
+  "session_id": "<session-id>",
+  "turn_id": "<turn-id>",
+  "transcript_path": "<transcript-path>",
+  "agent_transcript_path": "<agent-transcript-path>",
+  "cwd": "C:\\proj",
+  "hook_event_name": "SubagentStop",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "agent_id": "<agent-id>",
+  "agent_type": "default",
+  "last_assistant_message": "<last-assistant-message>"
+}

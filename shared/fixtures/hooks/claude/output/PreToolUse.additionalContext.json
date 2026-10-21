@@ -1,0 +1,11 @@
+{
+  "tool": "claude",
+  "event": "PreToolUse",
+  "case": "PreToolUse.additionalContext",
+  "verdict": "accepted",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
+  "effect": "Tool runs; the context reaches the model.",
+  "exitCode": 0,
+  "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"<context>\"}}",
+  "stderr": null
+}

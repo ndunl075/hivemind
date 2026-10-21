@@ -1,0 +1,11 @@
+{
+  "tool": "claude",
+  "event": "PreToolUse",
+  "case": "PreToolUse.exit1",
+  "verdict": "rejected",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
+  "effect": "Non-blocking hook error: the tool runs; stderr is only logged.",
+  "exitCode": 1,
+  "stdout": null,
+  "stderr": "<error>"
+}
