@@ -68,6 +68,20 @@ body {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-height: 100dvh;
 }
+/* Pin each region to its row. An empty .banners is display:none, which would otherwise shift every
+   later child up one row and hand the 1fr row to the footer. */
+#app > .topbar {
+  grid-row: 1;
+}
+#app > .banners {
+  grid-row: 2;
+}
+#app > .main {
+  grid-row: 3;
+}
+#app > .footer {
+  grid-row: 4;
+}
 
 h1,
 h2,
