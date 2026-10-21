@@ -75,6 +75,8 @@ async function admin(request: Request, env: Env, url: URL): Promise<Response> {
   const action = parts[3];
   const checkRoom = (r: unknown): string => {
     if (typeof r !== 'string' || !ROOM_NAME_RE.test(r)) throw new Reject(400, 'room names are lowercase letters, digits and hyphens (up to 40)');
+    // Reserved: fake test tokens use the room name "test", and the secret scanner allowlists them (.gitleaks.toml).
+    if (r === 'test') throw new Reject(400, 'the room name "test" is reserved');
     return r;
   };
 

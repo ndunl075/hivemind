@@ -136,6 +136,7 @@ describe('admin routes', () => {
     expect((await admin('POST', '/admin/rooms', { room: 'x1' }, 'wrong')).status).toBe(401);
     expect((await SELF.fetch(`${BASE}/admin/rooms`, { method: 'POST', body: '{"room":"x1"}' })).status).toBe(401);
     expect((await admin('POST', '/admin/rooms', { room: 'Bad Name' })).status).toBe(400);
+    expect((await admin('POST', '/admin/rooms', { room: 'test' })).status).toBe(400);
   });
 
   it('creates a room, invites, revokes, rotates and deletes', async () => {

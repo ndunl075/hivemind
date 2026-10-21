@@ -6,6 +6,8 @@ export interface LiveHandlers {
   onSnapshot(snapshot: Snapshot): void;
   onPulse(pulse: Pulse): void;
   onStatus(state: ConnectionState): void;
+  /** The server keeps refusing the token, or there is none: the app should ask for a new one. Optional until app.ts uses it. */
+  onAuthFailure?(): void;
 }
 
 export interface SourceOptions {
