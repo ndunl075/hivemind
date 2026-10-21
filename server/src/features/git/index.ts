@@ -5,7 +5,6 @@
  * `createPushes` implements PushesApi from shared/contracts.ts. The Room builds it as `features.pushes`.
  */
 import { LIMITS, type FeatureFactory, type LastPush } from '../../../../shared/contracts';
-import { deriveState } from '../../../../shared/state';
 import { cleanLine } from '../messages/sanitize';
 import { pushNotice } from './notice';
 
@@ -13,6 +12,11 @@ export { pushNotice } from './notice';
 
 /** A repo cannot report more than this many pushed files at once (the hook sends at most 500). */
 const MAX_FILES = LIMITS.maxDivergentPaths;
+/** The latest push per file is kept for at most this many files per repo; the oldest go first. */
+const MAX_ROWS_PER_REPO = 2_000;
+/** One agent's push notices per minute; the push itself is always recorded. */
+const NOTICES_PER_MINUTE = 6;
+const MINUTE_MS = 60_000;
 
 export const createPushes: FeatureFactory<'pushes'> = (ctx, features) => {
   ctx.sql.exec(`CREATE TABLE IF NOT EXISTS pushes (
@@ -28,6 +32,35 @@ export const createPushes: FeatureFactory<'pushes'> = (ctx, features) => {
     };
     latestByPath.set(k(p.repo, p.path), p);
   }
+
+  /** The last push each agent reported (repo, commit and files), so a retry of an old report can't replace newer pushes. */
+  const lastReported = new Map<string, string>();
+  /** When each agent's recent push notices went out. */
+  const noticeTimes = new Map<string, number[]>();
+
+  /** Keeps a repo's rows to the newest MAX_ROWS_PER_REPO. */
+  const capRows = (repo: string): void => {
+    const rows = [...latestByPath.entries()].filter(([, p]) => p.repo.toLowerCase() === repo.toLowerCase());
+    if (rows.length <= MAX_ROWS_PER_REPO) return;
+    rows.sort((a, b) => a[1].at - b[1].at);
+    for (const [key, p] of rows.slice(0, rows.length - MAX_ROWS_PER_REPO)) {
+      latestByPath.delete(key);
+      ctx.sql.exec('DELETE FROM pushes WHERE repo = ? AND path = ?', p.repo, p.path).toArray();
+    }
+  };
+
+  /** True when this agent may send another notice now (and counts it). */
+  const noticeAllowed = (callsign: string, now: number): boolean => {
+    const recent = (noticeTimes.get(callsign) ?? []).filter((t) => now - t < MINUTE_MS);
+    if (recent.length >= NOTICES_PER_MINUTE) {
+      noticeTimes.set(callsign, recent);
+      return false;
+    }
+    recent.push(now);
+    noticeTimes.set(callsign, recent);
+    if (noticeTimes.size > 500) for (const [cs, ts] of noticeTimes) if (ts.every((t) => now - t >= MINUTE_MS)) noticeTimes.delete(cs);
+    return true;
+  };
 
   /** Rows older than 24 hours go (§4 retention). */
   const expire = (): void => {
@@ -55,9 +88,15 @@ export const createPushes: FeatureFactory<'pushes'> = (ctx, features) => {
         return !!old && old.by === actor.callsign && old.sha === push.sha && old.blob === f.blob;
       });
       if (repeat) return;
+      // The same report again, after other agents pushed the same files since: not a new push.
+      const signature = `${repo}|${push.sha}|${files.map((f) => `${f.path}=${f.blob}`).join(',')}`;
+      if (lastReported.get(actor.callsign) === signature) return;
+      lastReported.set(actor.callsign, signature);
+      if (lastReported.size > 500) for (const key of lastReported.keys()) { lastReported.delete(key); if (lastReported.size <= 250) break; }
 
       for (const f of files) {
         const old = latestByPath.get(k(repo, f.path));
+        if (old && old.at > now) continue; // never replace a newer push with an older one
         if (old && old.path !== f.path) ctx.sql.exec('DELETE FROM pushes WHERE repo = ? AND path = ?', old.repo, old.path).toArray();
         latestByPath.set(k(repo, f.path), { repo, path: f.path, sha: push.sha, blob: f.blob, by: actor.callsign, branch: push.branch, at: now });
         ctx.sql.exec(
@@ -66,15 +105,18 @@ export const createPushes: FeatureFactory<'pushes'> = (ctx, features) => {
         ).toArray();
       }
 
-      // One notice to every other active agent of the repo. Agents in the pusher's own checkout share its
-      // working copy, so they already have what was pushed; ended agents will never read it.
-      const skip = ctx.agents()
-        .filter((a) => a.callsign !== actor.callsign && (
-          deriveState(a, now).state === 'ended' || (a.repo === repo && actor.checkout !== null && a.checkout === actor.checkout)))
+      capRows(repo);
+
+      // One notice to every other agent of the repo (an ended agent never reads it, so it isn't listed). Agents in the
+      // pusher's own checkout share its working copy, so they already have what was pushed.
+      const mates = ctx.agents()
+        .filter((a) => a.callsign !== actor.callsign && a.repo === repo && actor.checkout !== null && a.checkout === actor.checkout)
         .map((a) => a.callsign);
-      features.messages.notify('*', pushNotice(actor.callsign, push.branch, files.map((f) => f.path)), {
-        repo, exclude: [actor.callsign, ...skip],
-      });
+      if (noticeAllowed(actor.callsign, now)) {
+        features.messages.notify('*', pushNotice(actor.callsign, push.branch, files.map((f) => f.path)), {
+          repo, exclude: [actor.callsign, ...mates],
+        });
+      }
 
       const first = files[0]?.path;
       ctx.emit({

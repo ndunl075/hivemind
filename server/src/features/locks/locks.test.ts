@@ -191,6 +191,8 @@ describe('rule 4: shell edits are attributed afterward, with the baseline', () =
     await ana.hook({ git: git(['f.txt']), shellSinceHeartbeat: true });
     expect(await locks(room)).toEqual([]);
     // The next window is Ana's alone: Bea ran nothing since.
+    at(30_000);
+    await bea.hook({ git: git([]) });
     at(40_000);
     await ana.hook({ git: git(['f.txt', 'h.txt']), shellSinceHeartbeat: true });
     expect(await locks(room)).toEqual(['h.txt:claude-ana']);
@@ -271,7 +273,7 @@ describe('rules 4 and 5: conflicts across checkouts, checkout-mates', () => {
     expect(await unread(room, 'claude-ana')).toHaveLength(1);
   });
 
-  it('ignores files that were already divergent when the reporting agent started', async () => {
+  it('a file that was already divergent at start still conflicts with a lock held in another checkout', async () => {
     clock();
     const room = 'r4-conflict-base';
     const ana = await agent(room, 'ana', { checkout: 'c1' });
@@ -279,8 +281,8 @@ describe('rules 4 and 5: conflicts across checkouts, checkout-mates', () => {
     const ben = await agent(room, 'ben', { checkout: 'c2', baseline: ['shared.ts'] });
     at(20_000);
     await ben.hook({ git: git(['shared.ts']) });
-    expect(await unread(room, 'claude-ana')).toEqual([]);
-    expect(await events(room, 'lock.conflict')).toEqual([]);
+    expect(await unread(room, 'claude-ana')).toHaveLength(1);
+    expect(await events(room, 'lock.conflict')).toHaveLength(1);
   });
 
   it('also flags a file under a folder reservation, and not advisory or ignored paths', async () => {
@@ -292,7 +294,8 @@ describe('rules 4 and 5: conflicts across checkouts, checkout-mates', () => {
     await ana.call('reserve', { folders: ['src/'] });
     at(20_000);
     const text = (await ben.hook({ git: git(['src/a.ts', 'gen/x.ts', 'package.json']) })).context ?? '';
-    expect(text).toContain('Conflict: src/a.ts is also changed by claude-ana');
+    expect(text).toContain('Conflict: src/a.ts is inside a folder reserved by claude-ana in another checkout');
+    expect(text).not.toContain('also changed by');
     expect(text).not.toContain('gen/x.ts');
     expect(text).not.toContain('package.json');
   });
@@ -417,5 +420,19 @@ describe('"a lock you waited for was released"', () => {
     let told = 0;
     for (const n of names) if ((await unread(room, `claude-${n}`)).length > 0) told++;
     expect(told).toBe(10); // the ten most recent
+  });
+});
+
+describe('rule 4: a checkout-mate that has not reported makes the author ambiguous', () => {
+  it('locks for nobody while a mate has been silent since the previous report', async () => {
+    clock();
+    const room = 'r4-silent-mate';
+    const ana = await agent(room, 'ana', { checkout: 'c1', baseline: [] });
+    await agent(room, 'bea', { checkout: 'c1', baseline: [] });
+    at(10_000);
+    await ana.hook({ git: git([]) });
+    at(20_000);
+    await ana.hook({ git: git(['f.txt']), shellSinceHeartbeat: true });
+    expect(await locks(room)).toEqual([]);
   });
 });

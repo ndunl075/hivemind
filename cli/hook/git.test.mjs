@@ -31,7 +31,7 @@ afterAll(() => rmSync(base, { recursive: true, force: true }));
 
 describe('git.mjs', () => {
   it('runs every Git call with GIT_OPTIONAL_LOCKS=0', () => {
-    expect(GIT_ENV_OVERRIDES.GIT_OPTIONAL_LOCKS).toBe('0');
+    expect(GIT_ENV_OVERRIDES).toMatchObject({ GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' });
   });
 
   it('identity: root commit, toplevel, branch, head', async () => {
@@ -111,7 +111,7 @@ describe('git.mjs', () => {
     expect([...first.report.divergent].sort()).toEqual(['a.txt', 'b.txt', 'c.txt', 'dir/x.txt', 'new.txt']);
     expect(first.report.baseline).toEqual(first.report.divergent);
     expect(first.report.pushed).toBeNull();
-    expect(first.report.truncated).toBe(false);
+    expect(first.report.truncated).toBe(true); // no remote: committed work can't be told from pushed work
     expect(first.memory.divergent).toEqual(first.report.divergent);
 
     const next = await state(repo, first.memory);

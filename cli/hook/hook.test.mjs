@@ -186,7 +186,7 @@ describe('events: request and exact Claude output', () => {
     expect(headers.authorization).toBe(`Bearer ${FAKE_AGENT_CRED}`);
     expect(body).toMatchObject({
       v: 1, event: 'SessionStart', agent: 'claude', session: t.session, repo: rootSha, branch: 'main',
-      git: { upstream: null, truncated: false, pushed: null },
+      git: { upstream: null, truncated: true, pushed: null },
       shellSinceHeartbeat: false,
       settings: { requireTask: false, ignore: ['dist/'] },
     });
@@ -213,7 +213,7 @@ describe('events: request and exact Claude output', () => {
     expect(r.stdout).toBe(fixtureStdout('UserPromptSubmit.additionalContext'));
     const body = srv.requests[1].body;
     expect(body.event).toBe('UserPromptSubmit');
-    expect(body.git).toMatchObject({ truncated: false });
+    expect(body.git).toMatchObject({ truncated: true });
     expect(body.git).not.toHaveProperty('baseline');
   });
 

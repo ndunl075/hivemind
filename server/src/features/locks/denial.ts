@@ -2,11 +2,12 @@
 import type { AgentState, LockConflict, Millis, RepoPath } from '../../../../shared/contracts';
 import { ageText } from '../../util';
 import { cleanLine } from '../messages/sanitize';
+import { pathInQuotes, pathText } from './framing';
 
 /** Task titles are written by teammates' agents: show them as quoted data, never as instructions (§13). */
 const quoted = (s: string): string => `"${cleanLine(s, 200).replace(/"/g, "'")}"`;
-/** Paths come from teammates' agents too: one clean, bounded line. */
-const plain = (s: string, max = 300): string => cleanLine(s, max);
+/** Paths come from teammates' agents too: one clean, bounded line, quoted when they are not plain. */
+const plain = (s: string, max = 300): string => pathText(s, max);
 
 export interface DenialInput {
   /** Requested paths of the edit, to name the file that was blocked. */
@@ -58,7 +59,7 @@ export function denialText(input: DenialInput): string {
     const target = first.kind === 'folder' ? `this folder (${firstPath})` : 'this file';
     lines.push(`${first.holder} has been ${stateWord(first.holderState)} ${ageText(silence)}. You may \`take\` ${target} with a reason.`);
   } else {
-    lines.push(`- \`wait\` with for: "release:${firstPath}".`);
+    lines.push(`- \`wait\` with for: "release:${pathInQuotes(first.path, 300)}".`);
   }
   if (rest.length > 0) {
     const others = rest.map((c) => `${plain(blockedPathFor(c, input.paths))} (held by ${c.holder})`);

@@ -68,3 +68,29 @@ describe('glob matcher (§9 dialect)', () => {
     expect(Date.now() - t).toBeLessThan(500);
   });
 });
+
+describe('hostile globs are bounded', () => {
+  it('100 hostile patterns against 500 deep paths stay well under 200 ms', () => {
+    const hostile = [
+      '**/'.repeat(30) + 'x', '**/a/**/a/**/a/**/a/**/a/**/a/**/a/**/a/**/a/**/b', '*a*a*a*a*a*a*a*a*a*b', '**/**/**/**/**/**/**/**/**/**/x',
+      'a/'.repeat(40) + '**/z',
+    ];
+    const patterns = Array.from({ length: 100 }, (_, i) => `${hostile[i % hostile.length]}${i}`);
+    const paths = Array.from({ length: 500 }, (_, i) => `${'a/'.repeat(150 + (i % 50))}file${i}.ts`);
+    const t = performance.now();
+    for (const p of paths) expect(matchesAny(patterns, p)).toBe(false);
+    expect(performance.now() - t).toBeLessThan(200);
+  });
+
+  it('collapses runs of ** and refuses patterns with too many', () => {
+    expect(globMatch('src/**/**/**/x.ts', 'src/x.ts')).toBe(true);
+    expect(globMatch('src/**/**/**/x.ts', 'src/a/b/x.ts')).toBe(true);
+    expect(globMatch(Array.from({ length: 9 }, () => '**').join('/a/') + '/x', 'a/a/a/a/a/a/a/a/a/a/x')).toBe(false);
+    expect(globMatch(Array.from({ length: 8 }, () => '**').join('/a/') + '/x', 'a/a/a/a/a/a/a/a/a/a/x')).toBe(true);
+  });
+
+  it('matches the first 64 segments of a very deep path', () => {
+    expect(globMatch('deep/**', 'deep/' + 'd/'.repeat(500) + 'f.ts')).toBe(true);
+    expect(globMatch('other/**', 'deep/' + 'd/'.repeat(500) + 'f.ts')).toBe(false);
+  });
+});

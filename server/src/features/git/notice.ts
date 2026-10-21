@@ -1,5 +1,6 @@
 /** The push notice of ARCHITECTURE.md §12. Pure. */
 import { cleanLine } from '../messages/sanitize';
+import { pathText } from '../locks/framing';
 
 /** Paths named in a notice before it says "…". */
 const SHOWN = 3;
@@ -9,8 +10,8 @@ const SHOWN = 3;
  * Branch and paths are written by a teammate's agent: one clean, bounded line each.
  */
 export function pushNotice(by: string, branch: string, paths: string[]): string {
-  const shown = paths.slice(0, SHOWN).map((p) => cleanLine(p, 200));
+  const shown = paths.slice(0, SHOWN).map((p) => pathText(p, 200));
   const more = paths.length > SHOWN ? ', …' : '';
   const count = `${paths.length} file${paths.length === 1 ? '' : 's'}`;
-  return `${by} pushed ${cleanLine(branch, 100)} (${count}: ${shown.join(', ')}${more}). Pull before editing ${paths.length === 1 ? 'that file' : 'those'}.`;
+  return `${by} pushed ${pathText(branch, 100)} (${count}: ${shown.join(', ')}${more}). Pull before editing ${paths.length === 1 ? 'that file' : 'those'}.`;
 }

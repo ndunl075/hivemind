@@ -21,6 +21,7 @@ import {
 import { deriveState } from '../../../../shared/state';
 import { canonicalPath } from '../../util';
 import { cleanLine } from '../messages/sanitize';
+import { pathText } from './framing';
 import { matchesAny } from './glob';
 
 interface LockRow {
@@ -203,7 +204,7 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
       if (now - at > DENIED_TTL_MS || callsign === releasedBy || callsign === l.holder || !isActive(callsign)) continue;
       features.messages.notify(
         callsign,
-        `A lock you waited for was released: ${plain(l.path)} (was held by ${l.holder}). You can edit it now. If ${l.holder} pushed, pull first.`,
+        `A lock you waited for was released: ${pathText(l.path)} (was held by ${l.holder}). You can edit it now. If ${l.holder} pushed, pull first.`,
       );
     }
   };
@@ -290,7 +291,7 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
       if (others.length === 0) continue;
       const names = others.slice(0, 3).join(', ') + (others.length > 3 ? ` and ${others.length - 3} more` : '');
       notes.push(
-        `[Hivemind] Heads-up: ${plain(p)} is a shared file and ${names} also ${others.length === 1 ? 'has' : 'have'} unpushed changes to it. ` +
+        `[Hivemind] Heads-up: ${pathText(p)} is a shared file and ${names} also ${others.length === 1 ? 'has' : 'have'} unpushed changes to it. ` +
         "Your edit goes ahead; merge carefully and don't overwrite their changes.",
       );
     }
@@ -331,7 +332,7 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
         for (const c of conflicts) rememberDenied(lockKey(c.repo, c.path), actor.callsign);
         return { allow: false, conflicts, notes: [] };
       }
-      const notes = conflicts.map((c) => `[Hivemind] Heads-up: ${c.path} is held by ${c.holder} (${c.kind}). Room mode is warn, so the edit proceeds.`);
+      const notes = conflicts.map((c) => `[Hivemind] Heads-up: ${pathText(c.path)} is held by ${c.holder} (${c.kind}). Room mode is warn, so the edit proceeds.`);
       notes.push(...advisoryNotes(actor, repo, advisory));
       const taskId = currentTask(actor.callsign);
       for (const p of wanted) {
@@ -384,8 +385,18 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
 
       if (ctx.mode() !== 'off' && actor.checkout) {
         const settings = ctx.settings(repo);
-        const lockable = (lower: string, p: string): boolean =>
-          !baseline?.has(lower) && !matchesAny(settings.ignore, p) && !matchesAny(settings.advisory, p);
+        // Settings patterns are matched once per path, however many rules ask.
+        const managed = new Map<string, boolean>();
+        const isManaged = (lower: string, p: string): boolean => {
+          let m = managed.get(lower);
+          if (m === undefined) {
+            m = !matchesAny(settings.ignore, p) && !matchesAny(settings.advisory, p);
+            managed.set(lower, m);
+          }
+          return m;
+        };
+        /** Rule 4 only attributes files that were not already there when the agent started. */
+        const lockable = (lower: string, p: string): boolean => !baseline?.has(lower) && isManaged(lower, p);
 
         // Rule 4: a new divergent file nobody holds, that this agent's shell probably made, is locked for it.
         if (shellSinceHeartbeat && !state.truncated && !state.baseline && previous && baseline) {
@@ -396,9 +407,13 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
             fresh.push(p);
           }
           // "With no clear author, it's locked for nobody": another agent in this checkout ran a shell command since
-          // this agent's previous report, or a whole tree of files appeared at once (generated output).
-          const ambiguous = [...gits].some(([cs, o]) =>
-            cs !== actor.callsign && o.repo === r && o.checkout === checkout && isActive(cs) && o.shellAt > previousAt);
+          // this agent's previous report, or has not reported since then (so nobody knows whether it did), or a whole
+          // tree of files appeared at once (generated output).
+          const ambiguous = ctx.agents().some((a) => {
+            if (a.callsign === actor.callsign || (a.repo ?? '').toLowerCase() !== r || (a.checkout ?? '') !== checkout || !isActive(a.callsign)) return false;
+            const o = gits.get(a.callsign);
+            return !o || o.repo !== r || o.checkout !== checkout || o.reportedAt <= previousAt || o.shellAt > previousAt;
+          });
           if (!ambiguous && fresh.length > 0 && fresh.length <= MAX_ATTRIBUTED) {
             const taskId = currentTask(actor.callsign);
             for (const p of fresh) {
@@ -406,7 +421,7 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
             }
             ctx.emit({
               type: 'lock.shell', actor: actor.callsign,
-              text: `${actor.callsign} changed ${fresh.length} file(s) through the shell; locked (${fresh.slice(0, 3).map((p) => plain(p)).join(', ')}${fresh.length > 3 ? ', …' : ''})`,
+              text: `${actor.callsign} changed ${fresh.length} file(s) through the shell; locked (${fresh.slice(0, 3).map((p) => pathText(p)).join(', ')}${fresh.length > 3 ? ', …' : ''})`,
               data: { paths: fresh.slice(0, 20) },
             });
           }
@@ -414,41 +429,53 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
 
         // Rule 4 (second half) and rule 5: a divergent file held by an agent in a different checkout is a conflict.
         // Agents in the same checkout share these files and never conflict with each other.
-        const found = new Map<string, { paths: string[]; fresh: boolean }>();
+        // A file the reporter already had changed when it started still conflicts with a lock another checkout holds
+        // (the other agent is changing it now); only the attribution of rule 4 looks at the baseline.
+        // Per holder: files the holder has a lock on, and files that are only inside a folder it reserved.
+        const found = new Map<string, { holder: string; folder: boolean; paths: string[]; fresh: boolean }>();
         const current = new Set<string>();
         for (const [lower, p] of reported) {
-          if (!lockable(lower, p)) continue;
+          if (!isManaged(lower, p)) continue;
           for (const l of conflicting(repo, p, false, actor.callsign)) {
             if (l.checkout === checkout || !isActive(l.holder)) continue;
             const key = `${l.key}|${checkout}|${lower}`;
             current.add(key);
             const seen = seenConflicts.get(key);
-            const entry = found.get(l.holder) ?? { paths: [], fresh: false };
+            const group = `${l.holder}|${l.kind}`;
+            const entry = found.get(group) ?? { holder: l.holder, folder: l.kind === 'folder', paths: [], fresh: false };
             if (!seen) entry.fresh = true;
             if (!seen || now - seen.at >= EDGE_REFRESH_MS) {
               seenConflicts.set(key, { reporter: actor.callsign, checkout, repo: r, at: now });
               entry.paths.push(p);
             }
-            found.set(l.holder, entry);
+            found.set(group, entry);
           }
         }
-        for (const [holder, entry] of found) {
+        for (const entry of found.values()) {
           if (entry.paths.length === 0) continue;
-          const shown = entry.paths.slice(0, NOTICE_PATHS).map((p) => plain(p)).join(', ') + (entry.paths.length > NOTICE_PATHS ? `, +${entry.paths.length - NOTICE_PATHS} more` : '');
+          const holder = entry.holder;
+          const shown = entry.paths.slice(0, NOTICE_PATHS).map((p) => pathText(p)).join(', ') + (entry.paths.length > NOTICE_PATHS ? `, +${entry.paths.length - NOTICE_PATHS} more` : '');
+          const many = entry.paths.length === 1 ? 'is' : 'are';
           if (entry.fresh) {
             features.messages.notify(
               actor.callsign,
-              `Conflict: ${shown} ${entry.paths.length === 1 ? 'is' : 'are'} also changed by ${holder} in another checkout (unpushed). Nothing was blocked, because the edit had already happened. Coordinate with ${holder} (\`post\`) before you push, so one of you merges the other's work.`,
+              entry.folder
+                ? `Conflict: ${shown} ${many} inside a folder reserved by ${holder} in another checkout (unpushed). Nothing was blocked, because the edit had already happened. Coordinate with ${holder} (\`post\`) before you push, so one of you merges the other's work.`
+                : `Conflict: ${shown} ${many} also changed by ${holder} in another checkout (unpushed). Nothing was blocked, because the edit had already happened. Coordinate with ${holder} (\`post\`) before you push, so one of you merges the other's work.`,
             );
             features.messages.notify(
               holder,
-              `Conflict: ${actor.callsign} changed ${shown}, which you hold, in another checkout. Nothing was blocked, because the edit had already happened. Coordinate with ${actor.callsign} (\`post\`) before you push, so one of you merges the other's work.`,
+              entry.folder
+                ? `Conflict: ${actor.callsign} changed ${shown}, inside a folder you reserved, in another checkout. Nothing was blocked, because the edit had already happened. Coordinate with ${actor.callsign} (\`post\`) before you push, so one of you merges the other's work.`
+                : `Conflict: ${actor.callsign} changed ${shown}, which you hold, in another checkout. Nothing was blocked, because the edit had already happened. Coordinate with ${actor.callsign} (\`post\`) before you push, so one of you merges the other's work.`,
             );
           }
           const first = entry.paths[0] as string;
           ctx.emit({
             type: 'lock.conflict', actor: actor.callsign,
-            text: `${actor.callsign} and ${holder} both changed ${plain(first)}${entry.paths.length > 1 ? ` (+${entry.paths.length - 1})` : ''} in different checkouts`,
+            text: entry.folder
+              ? `${actor.callsign} changed ${pathText(first)}${entry.paths.length > 1 ? ` (+${entry.paths.length - 1})` : ''} inside a folder reserved by ${holder}, in a different checkout`
+              : `${actor.callsign} and ${holder} both changed ${pathText(first)}${entry.paths.length > 1 ? ` (+${entry.paths.length - 1})` : ''} in different checkouts`,
             data: { path: first, holder },
             pulse: { kind: 'denied', from: actor.callsign, to: holder, path: first },
             edge: { kind: 'blocked', from: actor.callsign, to: holder, label: plain(first.split('/').pop() ?? first, 80) },

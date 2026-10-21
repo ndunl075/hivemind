@@ -75,7 +75,9 @@ describe('push notices', () => {
     expect(await notices(room, 'claude-ana')).toEqual([]);
     expect(await notices(room, 'claude-bea')).toEqual([]);
     expect(await notices(room, 'claude-cat')).toEqual([]);
-    expect(await notices(room, 'claude-dan')).toEqual([]);
+    // An ended agent is not listed in the notice's exclusions (it can never read it anyway).
+    const stored = await inRoom(room, (_r, state) => state.storage.sql.exec('SELECT exclude FROM messages').toArray());
+    expect(JSON.stringify(stored)).not.toContain('claude-dan');
     expect(cat.cs).toBe('claude-cat');
     expect(bea.cs).toBe('claude-bea');
     expect(ben.cs).toBe('claude-ben');
@@ -170,5 +172,64 @@ describe('lastPush in /hook responses', () => {
     at(LIMITS.pushTtlMs + 1);
     await ana.hook({ git: pushed('main', ['z.ts']) });
     expect((await rows()).map((r) => r.path)).toEqual(['z.ts']);
+  });
+});
+
+describe('push notice framing', () => {
+  it('quotes odd paths and branches as data', () => {
+    expect(pushNotice('codex-ana', 'main', ['my docs/a "b".ts'])).toBe('codex-ana pushed main (1 file: "my docs/a \'b\'.ts"). Pull before editing that file.');
+  });
+});
+
+describe('push records are bounded', () => {
+  it('rate-limits notices per agent, but still records every push', async () => {
+    clock();
+    const room = 'push-rate';
+    await install(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    await agent(room, 'ben', { checkout: 'c2' });
+    for (let i = 0; i < 8; i++) {
+      at(i * 1000);
+      await ana.hook({ git: pushed('main', [`f${i}.ts`], `${i}`.repeat(12)) });
+    }
+    expect(await notices(room, 'claude-ben')).toHaveLength(6);
+    const rows = await inRoom(room, (_r, state) => state.storage.sql.exec('SELECT COUNT(*) AS n FROM pushes').toArray());
+    expect(Number(rows[0]?.n)).toBe(8);
+    at(70_000);
+    await ana.hook({ git: pushed('main', ['g.ts'], 'abababababab') });
+    expect(await notices(room, 'claude-ben')).toHaveLength(1);
+  });
+
+  it('keeps at most 2000 rows per repo, dropping the oldest', async () => {
+    clock();
+    const room = 'push-cap';
+    await install(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    for (let b = 0; b < 5; b++) {
+      at(b * 1000);
+      await ana.hook({ git: pushed('main', Array.from({ length: 500 }, (_, i) => `d${b}/f${i}.ts`), `${b}`.repeat(12)) });
+    }
+    at(6000);
+    await ana.hook({ git: pushed('main', ['last.ts'], 'cdcdcdcdcdcd') });
+    const rows = await inRoom(room, (_r, state) => state.storage.sql.exec('SELECT path FROM pushes').toArray());
+    expect(rows.length).toBe(2000);
+    expect(rows.map((r) => r.path)).toContain('last.ts');
+    expect(rows.map((r) => r.path)).not.toContain('d0/f0.ts');
+  });
+
+  it('a retried old report never replaces a newer push of the same file', async () => {
+    clock();
+    const room = 'push-retry';
+    await install(room);
+    const ana = await agent(room, 'ana', { checkout: 'c1' });
+    const cat = await agent(room, 'cat', { checkout: 'c3' });
+    const ben = await agent(room, 'ben', { checkout: 'c2' });
+    await ana.hook({ git: pushed('main', ['a.ts'], 'aaaaaaaaaaaa') });
+    at(60_000);
+    await cat.hook({ git: pushed('main', ['a.ts'], 'bbbbbbbbbbbb') });
+    at(120_000);
+    await ana.hook({ git: pushed('main', ['a.ts'], 'aaaaaaaaaaaa') }); // the first answer was lost; the hook reports again
+    const r = await ben.hook({ ...editBody('a.ts') });
+    expect(r.lastPush?.[0]).toMatchObject({ by: 'claude-cat', sha: 'bbbbbbbbbbbb' });
   });
 });

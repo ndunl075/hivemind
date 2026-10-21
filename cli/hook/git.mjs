@@ -14,7 +14,12 @@ import { stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { HOOK_LIMITS } from './limits.mjs';
 
-export const GIT_ENV_OVERRIDES = Object.freeze({ GIT_OPTIONAL_LOCKS: '0' });
+export const GIT_ENV_OVERRIDES = Object.freeze({
+  GIT_OPTIONAL_LOCKS: '0', // never take the index lock
+  GIT_NO_LAZY_FETCH: '1', // a partial clone must not fetch objects from the network on our behalf
+  GIT_TERMINAL_PROMPT: '0', // never wait for a credential prompt
+  GCM_INTERACTIVE: 'never',
+});
 const GIT_TIMEOUT_MS = 2_000;
 
 /**
@@ -28,21 +33,10 @@ function git(args, cwd, timeout = GIT_TIMEOUT_MS) {
   return new Promise((resolveRun, reject) => {
     execFile(
       'git', args,
-      { cwd, env: { ...process.env, ...GIT_ENV_OVERRIDES }, timeout, maxBuffer: 32 * 1024 * 1024, windowsHide: true, encoding: 'utf8' },
+      { cwd, env: { ...process.env, ...GIT_ENV_OVERRIDES }, timeout, killSignal: 'SIGKILL', maxBuffer: 32 * 1024 * 1024, windowsHide: true, encoding: 'utf8' },
       (err, stdout) => (err ? reject(err) : resolveRun(stdout)),
     );
   });
-}
-
-/**
- * True when the command exits 0 (for questions such as `merge-base --is-ancestor` and `cat-file -e`).
- * @param {string[]} args
- * @param {string} cwd
- * @param {number} [timeout]
- * @returns {Promise<boolean>}
- */
-function succeeds(args, cwd, timeout) {
-  return git(args, cwd, timeout).then(() => true, () => false);
 }
 
 /**
@@ -169,6 +163,17 @@ export function normalize(root, cwd, paths) {
 
 /** Git's all-zero object name: a file that doesn't exist at that side of a diff, or was deleted by a push. */
 const NULL_SHA = '0'.repeat(40);
+const STATE_BUDGET_MS = 1_200;
+
+/**
+ * True for failures that say nothing about the repository (a timeout, a kill, a spawn error), as opposed to Git
+ * exiting with a status.
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+function isHard(err) {
+  return !err || typeof (/** @type {{ code?: unknown }} */ (err)).code !== 'number';
+}
 
 /**
  * Paths from `status --porcelain=v1 -z`, including both sides of a rename.
@@ -233,17 +238,51 @@ function branchOfRef(name, remotes) {
 }
 
 /**
- * The comparison point of the current branch (§12), in order: its configured upstream; a remote-tracking branch
- * with the same name on any remote (`origin` first); the merge base with the remote's default branch.
- * @param {string} root
- * @param {{ branch: string | null; head: string | null; upstream: string | null; refs: Map<string, { sha: string; symref: string }>; remotes: string[] }} i
- * @returns {Promise<{ name: string; sha: string } | null>}
+ * Paths of a NUL-separated name list.
+ * @param {string | null} out
+ * @returns {string[]}
  */
-async function comparisonPoint(root, i) {
+function nulList(out) {
+  return (out ?? '').split('\0').filter(Boolean);
+}
+
+/**
+ * @typedef {(args: string[], cwd: string, timeout: number) => Promise<string>} GitExec
+ * @typedef {(args: string[], timeout?: number) => Promise<string>} Run  Git in the repo, inside the state() deadline.
+ * @typedef {GitMemory & { branch?: string | null; head?: string | null; mergeBase?: { head: string; target: string; base: string } | null }} Memory
+ */
+
+/**
+ * @param {Run} g
+ * @param {string[]} args
+ * @returns {Promise<boolean>} whether Git exited 0; a timeout or spawn failure throws
+ */
+function ok(g, args) {
+  return g(args).then(() => true, (e) => { if (isHard(e)) throw e; return false; });
+}
+
+/**
+ * @param {Run} g
+ * @param {string[]} args
+ * @returns {Promise<string | null>} trimmed output, null when Git exited with a status; a timeout or spawn failure throws
+ */
+function soft(g, args) {
+  return g(args).then((s) => s.trim() || null, (e) => { if (isHard(e)) throw e; return null; });
+}
+
+/**
+ * The comparison point of the current branch (§12), in order: its configured upstream; a remote-tracking branch
+ * with the same name on any remote (`origin` first); the merge base with the remote's default branch. Null only when
+ * there genuinely is none (no remote, no default branch, nothing in common); any other failure throws.
+ * @param {Run} g
+ * @param {{ branch: string | null; head: string | null; upstream: string | null; refs: Map<string, { sha: string; symref: string }>; remotes: string[]; previous: Memory | null }} i
+ * @returns {Promise<{ name: string; sha: string; mergeBase?: { head: string; target: string; base: string } } | null>}
+ */
+async function comparisonPoint(g, i) {
   if (!i.head) return null;
   if (i.upstream) {
     const tracked = i.refs.get(i.upstream);
-    const sha = tracked?.sha || await orNull(git(['rev-parse', '--verify', '-q', `${i.upstream}^{commit}`], root));
+    const sha = tracked?.sha || await soft(g, ['rev-parse', '--verify', '-q', '--end-of-options', `${i.upstream}^{commit}`]);
     if (sha) return { name: i.upstream, sha };
   }
   if (i.branch) {
@@ -257,42 +296,43 @@ async function comparisonPoint(root, i) {
     const target = i.refs.get(`${remote}/HEAD`)?.symref;
     const names = [target, `${remote}/main`, `${remote}/master`].filter((n) => !!n && i.refs.has(/** @type {string} */ (n)));
     for (const name of /** @type {string[]} */ (names)) {
-      const base = await orNull(git(['merge-base', 'HEAD', name], root));
-      if (base) return { name, sha: base };
+      const tip = i.refs.get(name)?.sha ?? '';
+      const cached = i.previous?.mergeBase;
+      if (cached && tip && cached.head === i.head && cached.target === tip) return { name, sha: cached.base, mergeBase: cached };
+      const base = await soft(g, ['merge-base', '--end-of-options', 'HEAD', name]);
+      if (base) return { name, sha: base, mergeBase: tip ? { head: i.head, target: tip, base } : undefined };
     }
   }
   return null;
 }
 
 /**
- * Paths of a NUL-separated name list.
- * @param {string | null} out
- * @returns {string[]}
- */
-function nulList(out) {
-  return (out ?? '').split('\0').filter(Boolean);
-}
-
-/**
- * Files that went out in a push (§12): in the previous divergent set, and changed between the old comparison point
- * and HEAD, with their blob SHAs in HEAD. Null when nothing was pushed.
- * @param {string} root
- * @param {GitMemory & { branch?: string | null }} previous
+ * Files that went out in a push (§12): in the previous divergent set, changed between the old comparison point and
+ * HEAD, not dirty now, with their blob SHAs in HEAD. Null when nothing was pushed.
+ * @param {Run} g
+ * @param {Memory} previous
  * @param {{ name: string; sha: string }} now
  * @param {string} head
  * @param {string | null} branch
  * @param {string[]} remotes
+ * @param {Set<string>} dirty
  * @returns {Promise<GitStateReport['pushed']>}
  */
-async function detectPush(root, previous, now, head, branch, remotes) {
+async function detectPush(g, previous, now, head, branch, remotes, dirty) {
   const before = previous.comparison;
-  if (!before || before.sha === now.sha || previous.divergent.length === 0) return null;
-  // A branch switch moves the comparison point without anything being pushed.
-  if (previous.branch !== undefined && previous.branch !== branch) return null;
+  if (!before || before.sha === now.sha || previous.divergent.length === 0 || !previous.head) return null;
   // HEAD must now be contained in the comparison point (a fetch alone leaves local commits outside it).
-  if (!(await succeeds(['merge-base', '--is-ancestor', head, now.sha], root))) return null;
-  const raw = await orNull(git(['diff', '--raw', '-z', '--no-renames', '--no-ext-diff', '--no-abbrev', before.sha, head], root));
+  if (!(await ok(g, ['merge-base', '--is-ancestor', '--end-of-options', head, now.sha]))) return null;
+  const raw = await soft(g, ['diff', '--raw', '-z', '--no-renames', '--no-ext-diff', '--no-abbrev', '--end-of-options', before.sha, head, '--']);
   if (!raw) return null;
+  // Our old HEAD is part of today's history (commit and push, pull, merge); when it is not (a rebase, or a reset to
+  // the remote) a file only counts if its content is unchanged since then. A reset onto teammates' work discards ours.
+  let changedSince = new Set();
+  if (!(await ok(g, ['merge-base', '--is-ancestor', '--end-of-options', previous.head, head]))) {
+    const diff = await soft(g, ['diff', '--name-only', '-z', '--no-renames', '--no-ext-diff', '--end-of-options', previous.head, head, '--']);
+    if (diff === null && !(await ok(g, ['cat-file', '-e', '--end-of-options', `${previous.head}^{commit}`]))) return null;
+    changedSince = new Set(nulList(diff));
+  }
   const mine = new Set(previous.divergent);
   /** @type {{ path: string; blob: string }[]} */
   const files = [];
@@ -301,7 +341,7 @@ async function detectPush(root, previous, now, head, branch, remotes) {
     // ':100644 100644 <old blob> <new blob> M', then the path.
     const meta = (parts[i] ?? '').split(' ');
     const path = parts[i + 1] ?? '';
-    if (mine.has(path)) files.push({ path, blob: meta[3] ?? NULL_SHA });
+    if (mine.has(path) && !dirty.has(path) && !changedSince.has(path)) files.push({ path, blob: meta[3] ?? NULL_SHA });
   }
   if (files.length === 0) return null;
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -309,44 +349,78 @@ async function detectPush(root, previous, now, head, branch, remotes) {
 }
 
 /**
+ * §12 Git state. Never reports an incomplete divergent list as complete: when the comparison point is missing, a
+ * lookup or the committed diff fails, or the time budget runs out, the report is marked `truncated` (and after a
+ * timeout it is status-only, with the previous memory kept so a later heartbeat can still see a push).
  * @param {string} root
  * @param {GitMemory | null} previous
+ * @param {{ budgetMs?: number; exec?: GitExec }} [options]
+ *   `exec` replaces the Git runner (tests slow it down).
  * @returns {Promise<{ report: GitStateReport; memory: GitMemory }>}
  */
-export async function state(root, previous) {
-  const [statusOut, branch, head, refsOut, remotesOut, upstream] = await Promise.all([
-    git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root),
-    orNull(git(['symbolic-ref', '--short', '-q', 'HEAD'], root)),
-    orNull(git(['rev-parse', '--verify', '-q', 'HEAD'], root)),
-    orNull(git(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(symref)', 'refs/remotes'], root)),
-    orNull(git(['remote'], root)),
-    orNull(git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], root)),
-  ]);
-  const refs = parseRemoteRefs(refsOut);
-  const remotes = parseRemotes(remotesOut);
-  const cp = await comparisonPoint(root, { branch, head, upstream, refs, remotes });
+export async function state(root, previous, options = {}) {
+  const prev = /** @type {Memory | null} */ (previous);
+  const exec = options.exec ?? git;
+  const deadline = Date.now() + (options.budgetMs ?? STATE_BUDGET_MS);
+  /** @type {Run} */
+  const g = (args, timeout = GIT_TIMEOUT_MS) => {
+    const left = deadline - Date.now();
+    if (left <= 0) return Promise.reject(Object.assign(new Error('git time budget exceeded'), { code: 'EDEADLINE' }));
+    return exec(args, root, Math.min(timeout, left));
+  };
 
-  // Divergent files: working tree and staged changes, plus commits not yet at the comparison point.
-  const all = new Set(parseStatus(statusOut));
-  if (cp && head && cp.sha !== head) {
-    const committed = await orNull(git(['diff', '--name-only', '-z', '--no-renames', '--no-ext-diff', `${cp.sha}...HEAD`], root));
-    for (const p of nulList(committed)) all.add(p);
+  const statusOut = await g(['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const dirtyFiles = parseStatus(statusOut);
+  try {
+    const [branch, head, refsOut, remotesOut, upstream] = await Promise.all([
+      soft(g, ['symbolic-ref', '--short', '-q', 'HEAD']),
+      soft(g, ['rev-parse', '--verify', '-q', 'HEAD']),
+      g(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(symref)', 'refs/remotes']),
+      g(['remote']),
+      soft(g, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
+    ]);
+    const refs = parseRemoteRefs(refsOut);
+    const remotes = parseRemotes(remotesOut);
+    const cp = await comparisonPoint(g, { branch, head, upstream, refs, remotes, previous: prev });
+
+    // Divergent files: working tree and staged changes, plus commits not yet at the comparison point.
+    const all = new Set(dirtyFiles);
+    let complete = cp !== null; // without a comparison point, committed work can't be told from pushed work
+    if (cp && head && cp.sha !== head) {
+      try {
+        const committed = await g(['diff', '--name-only', '-z', '--no-renames', '--no-ext-diff', '--end-of-options', `${cp.sha}...HEAD`, '--']);
+        for (const p of nulList(committed)) all.add(p);
+      } catch (e) {
+        if (isHard(e)) throw e;
+        complete = false; // e.g. a shallow clone: no merge base to compare against
+      }
+    }
+    const sorted = [...all].sort();
+    const capped = sorted.length > HOOK_LIMITS.maxDivergentPaths;
+    const divergent = capped ? sorted.slice(0, HOOK_LIMITS.maxDivergentPaths) : sorted;
+
+    /** @type {GitStateReport['pushed']} */
+    let pushed = null;
+    if (prev && cp && head) pushed = await detectPush(g, prev, cp, head, branch, remotes, new Set(dirtyFiles));
+
+    /** @type {GitStateReport} */
+    const report = { divergent, upstream: cp ? cp.name : null, truncated: capped || !complete, pushed };
+    if (previous === null) report.baseline = divergent;
+    // Branch, HEAD and the merge-base cache ride along in the session state.
+    /** @type {Memory} */
+    const memory = { comparison: cp ? { name: cp.name, sha: cp.sha } : null, divergent, branch, head, mergeBase: cp?.mergeBase ?? null };
+    return { report, memory };
+  } catch {
+    // Out of time, or Git failed in a way that makes the answer unreliable: what the working tree shows, flagged.
+    const sorted = [...new Set(dirtyFiles)].sort();
+    const divergent = sorted.slice(0, HOOK_LIMITS.maxDivergentPaths);
+    /** @type {GitStateReport} */
+    const report = { divergent, upstream: prev?.comparison?.name ?? null, truncated: true, pushed: null };
+    if (previous === null) report.baseline = divergent;
+    /** @type {Memory} */
+    const memory = prev ? { ...prev } : { comparison: null, divergent };
+    return { report, memory };
   }
-  const sorted = [...all].sort();
-  const truncated = sorted.length > HOOK_LIMITS.maxDivergentPaths;
-  const divergent = truncated ? sorted.slice(0, HOOK_LIMITS.maxDivergentPaths) : sorted;
-
-  /** @type {GitStateReport['pushed']} */
-  let pushed = null;
-  if (previous && cp && head) pushed = await detectPush(root, previous, cp, head, branch, remotes);
-
-  /** @type {GitStateReport} */
-  const report = { divergent, upstream: cp ? cp.name : null, truncated, pushed };
-  if (previous === null) report.baseline = divergent;
-  // `branch` rides along in the session state so a branch switch is never mistaken for a push.
-  /** @type {GitMemory & { branch: string | null }} */
-  const memory = { comparison: cp, divergent, branch };
-  return { report, memory };
 }
 
 // ---------------------------------------------------------------------------
@@ -356,17 +430,41 @@ export async function state(root, previous) {
 const STALE_TOTAL_MS = 900;
 const STALE_CALL_MS = 600;
 const STALE_MAX_FILES = 5;
-const STALE_MAX_BYTES = 8 * 1024 * 1024;
+const STALE_MAX_BYTES = 2 * 1024 * 1024;
 const PUSH_TTL_MS = 24 * 60 * 60_000;
 
 /**
- * Teammate-written text (callsigns, branch names, paths) made safe for one line of context.
+ * Teammate-written identifiers (callsigns, branch names) made safe for one line of context.
  * @param {unknown} s
  * @param {number} max
  * @returns {string}
  */
 function safeText(s, max) {
   return String(s).replace(/[^\w./@+\-]/g, '_').slice(0, max);
+}
+
+/**
+ * A teammate-written path as quoted data on one line: bare when it is plain, otherwise in double quotes with controls
+ * and quotes neutralised. Spaces stay spaces.
+ * @param {unknown} s
+ * @param {number} max
+ * @returns {string}
+ */
+export function quotePath(s, max = 200) {
+  const text = String(s).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/"/g, "'").slice(0, max);
+  return /^[\w./@+\-]+$/.test(text) ? text : `"${text}"`;
+}
+
+/**
+ * A repo-relative POSIX path from the server: not absolute, no drive or UNC form, no backslashes, no `..`.
+ * @param {string} p
+ * @returns {boolean}
+ */
+function isSafeRelPath(p) {
+  if (p === '' || p.length > 1024) return false;
+  if (/[\u0000-\u001f\u007f\\]/.test(p)) return false;
+  if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) return false;
+  return !p.split('/').some((seg) => seg === '' || seg === '..');
 }
 
 /**
@@ -382,12 +480,14 @@ function ago(ms) {
 }
 
 /**
- * The blob SHA Git would store for a working-tree file, NULL_SHA when the file doesn't exist, null when unknown.
+ * The blob SHA Git would store for a working-tree file, NULL_SHA when the file doesn't exist, null when unknown or
+ * too large to be worth hashing.
  * @param {string} root
  * @param {string} path
+ * @param {GitExec} run
  * @returns {Promise<string | null>}
  */
-async function workingBlob(root, path) {
+async function workingBlob(root, path, run) {
   const abs = resolve(root, path);
   try {
     const st = await stat(abs);
@@ -395,7 +495,7 @@ async function workingBlob(root, path) {
   } catch (e) {
     return /** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT' ? NULL_SHA : null;
   }
-  return orNull(git(['hash-object', `--path=${path}`, '--', abs], root, STALE_CALL_MS));
+  return run(['hash-object', `--path=${path}`, '--', abs], root, STALE_CALL_MS).then((o) => o.trim() || null, () => null);
 }
 
 /**
@@ -404,26 +504,33 @@ async function workingBlob(root, path) {
  * @param {string | null} branch
  * @param {LastPush} p
  * @param {number} now
+ * @param {GitExec} run
  * @returns {Promise<string | null>}
  */
-async function staleWarning(root, branch, p, now) {
+async function staleWarning(root, branch, p, now, run) {
+  /** @type {(args: string[]) => Promise<boolean>} */
+  const yes = (args) => run(args, root, STALE_CALL_MS).then(() => true, () => false);
+  /** @type {(args: string[]) => Promise<string | null>} */
+  const out = (args) => run(args, root, STALE_CALL_MS).then((o) => o.trim() || null, () => null);
   if (!p || typeof p.path !== 'string' || typeof p.sha !== 'string' || typeof p.blob !== 'string') return null;
-  if (p.path.startsWith('/') || p.path.split('/').includes('..') || /^[A-Za-z]:/.test(p.path)) return null;
+  if (!isSafeRelPath(p.path)) return null;
   if (!/^[0-9a-f]{4,64}$/i.test(p.sha)) return null;
   const age = Number.isFinite(p.at) ? now - p.at : 0;
   if (age > PUSH_TTL_MS) return null;
-  const [inHead, headBlob, local] = await Promise.all([
-    succeeds(['merge-base', '--is-ancestor', p.sha, 'HEAD'], root, STALE_CALL_MS),
-    orNull(git(['rev-parse', '--verify', '-q', `HEAD:${p.path}`], root, STALE_CALL_MS)),
-    workingBlob(root, p.path),
+  const [inHead, headBlob] = await Promise.all([
+    yes(['merge-base', '--is-ancestor', '--end-of-options', p.sha, 'HEAD']),
+    out(['rev-parse', '--verify', '-q', '--end-of-options', `HEAD:${p.path}`]),
   ]);
-  // Already have it: the pushed commit is in HEAD, or the content is the same (covers squash and rebase merges).
+  // Already have it: the pushed commit is in HEAD, or HEAD holds the same content (covers squash and rebase merges).
   if (inHead) return null;
-  if (local === p.blob || (headBlob ?? NULL_SHA) === p.blob) return null;
+  if ((headBlob ?? NULL_SHA) === p.blob) return null;
+  // The working copy only matters when it differs from HEAD, and only then is it worth hashing.
+  const dirty = await out(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', `:(literal)${p.path}`]);
+  if (dirty && (await workingBlob(root, p.path, run)) === p.blob) return null;
   const who = safeText(p.by, 64);
-  const file = safeText(p.path, 200);
+  const file = quotePath(p.path);
   const when = ago(age);
-  const known = await succeeds(['cat-file', '-e', `${p.sha}^{commit}`], root, STALE_CALL_MS);
+  const known = await yes(['cat-file', '-e', '--end-of-options', `${p.sha}^{commit}`]);
   if (!known) return `${who} pushed changes to ${file} ${when}. Fetch and pull first.`;
   if (branch !== null && p.branch === branch) return `${who} pushed changes to ${file} ${when}. Pull first.`;
   return `${file} was changed on \`${safeText(p.branch, 100)}\` by ${who} ${when}. Expect a conflict when these branches meet. Coordinate before editing.`;
@@ -435,15 +542,17 @@ async function staleWarning(root, branch, p, now) {
  * @param {string} root
  * @param {string | null} branch
  * @param {LastPush[]} lastPush
+ * @param {{ exec?: GitExec }} [options]  `exec` replaces the Git runner (tests watch which commands run).
  * @returns {Promise<string[]>}
  */
-export async function staleWarnings(root, branch, lastPush) {
+export async function staleWarnings(root, branch, lastPush, options = {}) {
+  const run = options.exec ?? git;
   try {
     if (!Array.isArray(lastPush) || lastPush.length === 0) return [];
     const now = Date.now();
     /** @type {string[]} */
     const lines = [];
-    const work = Promise.all(lastPush.slice(0, STALE_MAX_FILES).map((p) => staleWarning(root, branch, p, now).catch(() => null)))
+    const work = Promise.all(lastPush.slice(0, STALE_MAX_FILES).map((p) => staleWarning(root, branch, p, now, run).catch(() => null)))
       .then((found) => { for (const l of found) if (l) lines.push(l); });
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let timer;
