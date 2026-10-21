@@ -117,7 +117,9 @@ Done (npm run test:workers):
 - folder reservation, take on a takeable holder, and ended holders behave per §9;
 - state survives a Room restart;
 - a bad agent or viewer token is rejected without touching the Room;
-- the budget guard thresholds, including the switch to warn at 95%;
+- the budget guard thresholds, including the switch to warn at 95%, heartbeatMs 0, the restore after 00:00 UTC,
+  and a team-set mode clearing mode_by_guard;
+- per-repo settings received on /hook are stored and readable through the interfaces;
 - wait resolves on notify() and times out at 45 s (fake timers);
 - a viewer receives a snapshot on connect and after a change.
 After `npm run build` (the scaffold provides a placeholder dashboard), `npx wrangler deploy --dry-run -c server/wrangler.toml`
@@ -138,7 +140,8 @@ Task: build cli/hook/hook.mjs and cli/hook/claude.mjs per ARCHITECTURE.md §6.2�
 - HIVEMIND_HOME;
 - settings from .hivemind/project.json;
 - the SessionStart baseline and shellSinceHeartbeat;
-- heartbeat throttling (with the forced heartbeat after a shell command and Git state on UserPromptSubmit and Stop),
+- heartbeat throttling (with the forced heartbeat after a shell command and Git state on UserPromptSubmit and Stop,
+  all suppressed while the server returns heartbeatMs 0),
   the circuit breaker, the outage notice and hook.log;
 - calls into the git.mjs interface for push detection (sent as git.pushed) and the stale-copy check, which W5
   implements later behind the same interface;

@@ -313,7 +313,7 @@ One command handles every event; the script reads `hook_event_name` from stdin.
 | `UserPromptSubmit` | — | Mark working. Deliver unread messages. Carries Git state. | yes | no |
 | `PreToolUse` | edit tools: Claude `Edit\|Write\|MultiEdit\|NotebookEdit`, Codex `apply_patch\|Edit\|Write` | Lock check (§9), the task gate (§10), stale-copy check (§12). | yes | **yes** |
 | `PreToolUse` | `mcp__hivemind__.*` | Check that `me` matches the cached callsign (§5). | **no** | yes |
-| `PostToolUse` | all | Heartbeat, throttled to one request per `heartbeatMs` (default 15 s). It carries the checkout's **divergent files** (§12), which drive lock release, shell-edit detection and push detection. It delivers messages. | when due | no |
+| `PostToolUse` | all | Heartbeat, throttled to one request per `heartbeatMs` (default 15 s), and always sent right after a shell command. It carries the checkout's **divergent files** (§12), which drive lock release, shell-edit detection and push detection. It delivers messages. | when due, or after a shell command | no |
 | `Stop` | — | Always carries Git state (an unthrottled heartbeat), so a push made just before stopping releases its locks at once. Mark idle. If **direct** messages are unread and `stop_hook_active` is false, block the stop once, with the messages as the reason. | yes | yes (once) |
 | `SessionEnd` | — | If the reason is an exit (not clear or resume), mark ended and release holdings. Best effort: an 800 ms network timeout, because Codex's docs allow `SessionEnd` hooks at most 3 s `[VERIFY]`. | yes | no |
 
@@ -342,7 +342,7 @@ The `command` plus `args` form is expected to run without a shell, so it behaves
 
 **Coverage:**
 - Edits made through the edit tools are checked **before** they happen.
-- Edits made any other way (shell commands, formatters, code generators, `apply_patch` sent through a shell) are **detected after** they happen, at the next heartbeat, from the checkout's divergent files (§9, §12).
+- Edits made any other way (shell commands, formatters, code generators, `apply_patch` sent through a shell) are **detected after** they happen, at the heartbeat that follows the shell command (or the next regular heartbeat), from the checkout's divergent files (§9, §12).
 
 ### 6.3 `hook.mjs` behavior
 
@@ -805,7 +805,7 @@ At 16 agents and 3 edits a minute, the same rates come to about 88,000. That's w
 **Budget guard** `[DECIDED]`: the Room counts requests per UTC day in memory, flushed to `meta` once a minute, and raises `heartbeatMs` as the count climbs:
 - 30 s at 60% of the cap,
 - 60 s at 80%,
-- at 95%, the server returns `heartbeatMs: 0`, which tells hooks to stop heartbeats, and the room switches itself to `warn` mode, announced to every agent. Without heartbeats, locks can't be released by pushing, so denials would go stale; `warn` turns them into heads-ups. The switch is recorded in `meta` as `mode_by_guard`. At the first request after 00:00 UTC, if the mode is still the guard's `warn`, the previous mode is restored; a mode a teammate set in the meantime is left alone.
+- at 95%, the server returns `heartbeatMs: 0`, which tells hooks to stop heartbeats, and the room switches itself to `warn` mode, announced to every agent. Without heartbeats, locks can't be released by pushing, so denials would go stale; `warn` turns them into heads-ups. `heartbeatMs: 0` suppresses every heartbeat, including the forced one after a shell command and the Git state on `UserPromptSubmit` and `Stop`; edits, session events and tools are still served. The switch is recorded in `meta` as `mode_by_guard`, holding the mode it replaced. Any mode a teammate sets clears `mode_by_guard`. At the first request after 00:00 UTC, if `mode_by_guard` is still present, that previous mode is restored and normal heartbeats resume.
 
 The dashboard footer shows the day's usage. If a team outgrows the free plan, Workers Paid ($5 a month) lifts these limits. It's mentioned only as an option.
 
