@@ -2,13 +2,13 @@
   "session_id": "<session-id>",
   "turn_id": "<turn-id>",
   "transcript_path": "<transcript-path>",
-  "cwd": "<project-dir>",
+  "cwd": "C:\\proj",
   "hook_event_name": "PreToolUse",
   "model": "gpt-5.6-luna",
   "permission_mode": "bypassPermissions",
   "tool_name": "apply_patch",
   "tool_input": {
-    "command": "*** Begin Patch\n*** Add File: <project-dir>\\p.txt\n+x\n*** Update File: <project-dir>\\a.txt\n@@\n-hello\n+world\n*** Delete File: <project-dir>\\c.txt\n*** Update File: <project-dir>\\b.txt\n*** Move to: <project-dir>\\b2.txt\n@@\n-y\n+y\n*** End Patch"
+    "command": "*** Begin Patch\n*** Add File: C:\\proj\\p.txt\n+x\n*** Update File: C:\\proj\\a.txt\n@@\n-hello\n+world\n*** Delete File: C:\\proj\\c.txt\n*** Update File: C:\\proj\\b.txt\n*** Move to: C:\\proj\\b2.txt\n@@\n-y\n+y\n*** End Patch"
   },
   "tool_use_id": "<tool-use-id>"
 }

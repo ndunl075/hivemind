@@ -10,14 +10,14 @@ Results and verdicts are in [../spike-results.md](../spike-results.md). This fil
 - **Claude Code 2.1.287:** `claude -p ... --setting-sources project --settings <perm file> --mcp-config .mcp.json --strict-mcp-config --model haiku --output-format json`, with `--debug-file` where the hook outcome had to be read. The hooks came from the project's `.claude/settings.json`. `.mcp.json` was created with `claude mcp add-json --scope project`.
 - **Codex 0.159.3:** `codex exec -m gpt-5.6-luna -c model_reasoning_effort=low`, with `-s read-only|workspace-write`, `--dangerously-bypass-approvals-and-sandbox` or `--approve-for-me`, `--dangerously-bypass-hook-trust`, and `-c` overrides for `tool_timeout_sec` and `default_tools_approval_mode`. Hooks came from the project's `.codex/hooks.json`, the MCP server from `.codex/config.toml`. Hook outcomes were read from the `hook: <Event> Completed|Failed|Blocked` lines Codex prints and from whether the target file existed afterwards.
 - Documentation read for cross-checks: the Codex hooks, MCP and config-reference pages and the Claude Code hooks page (fetched as Markdown).
-- About 30 short real sessions in total (roughly 20 Claude, 25 Codex). Both models were told to keep to tiny prompts.
+- Roughly 45 short real sessions in total (about 20 Claude, 25 Codex), all non-interactive (`claude -p`, `codex exec`), so the fixtures reflect those modes and may differ in interactive use. Prompts were tiny.
 
 ## Observations behind each verdict
 
 | Item | Observation |
 |---|---|
 | 1 | Server log: Claude `server/discover` probe, `initialize`, `notifications/initialized`, `GET` (405), `tools/list`, `tools/call`; Codex `initialize`, `notifications/initialized`, `tools/list`, `tools/call`. Tool results reached the model in both. |
-| 2 | 43 payload fixtures from both tools; list in spike-results.md. |
+| 2 | 44 payload fixtures from both tools; list in spike-results.md. |
 | 3 | 34 output samples. Codex strictness shown by two runs of eight-file `apply_patch` sequences where each call received a different canned output; the files that were created show which outputs failed open. |
 | 4 | Deny canned for `apply_patch` and `Bash`, run under four Codex modes and four Claude permission modes; the target file never appeared or changed. |
 | 5 | A hook with `args` `["...rec.mjs","claude-bs","a b","$HOME","x&y","%PATH%"]` logged those exact argv strings; parent pid was Claude. The same hook with a single-string command logged an expanded `$HOME`. Launched from Git Bash and PowerShell. |
@@ -38,7 +38,9 @@ Results and verdicts are in [../spike-results.md](../spike-results.md). This fil
 
 ## Scrubbing
 
-The fixtures were produced by a script that replaces session, turn, prompt, tool-use and agent ids, transcript and scratch paths and the working directory with placeholders, and replaces prompt text, file contents and command output with short placeholders, keeping keys and their order. The script then searches the result for the user name, home path, repository folder names, e-mail-like strings and drive-letter paths and refuses to write on any hit. A final search of `shared/fixtures/hooks` and the three documents for the same terms found none.
+The fixtures are produced by a script that replaces session, turn, prompt, tool-use and agent ids, transcript and scratch paths with placeholders, maps the throwaway project's path to `C:\proj`, and replaces prompt text, file contents and command output with short placeholders while keeping keys, their order and the shape of tool responses (for example the `Exit code: 0 ... Output:` string of `apply_patch`, and `{content:[...]}` MCP results).
+
+The first version of the script only scrubbed values under known keys. A review found a real agent/thread UUID left in `tool_input.targets` of the Codex wait tool's payloads. The script now also replaces **any UUID found in any string** with `<agent-id>`, and it refuses to write a file when its output still contains a UUID-like string, the user name, the home path, repository folder names, e-mail-like strings or an unexpected drive-letter path. After the rebuild, a search of `shared/fixtures/hooks` and the three documents for UUIDs, the user name and those terms found nothing. The words `hello`, `world` and `x` that remain in `Grep` patterns, and patch text come from the test prompts and are synthetic.
 
 ## Not done / limits
 

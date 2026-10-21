@@ -3,13 +3,9 @@
   "event": "UserPromptSubmit",
   "case": "UserPromptSubmit.additionalContext",
   "verdict": "accepted",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
   "effect": "Text reaches the model with the prompt.",
   "exitCode": 0,
-  "stdout": {
-    "hookSpecificOutput": {
-      "hookEventName": "UserPromptSubmit",
-      "additionalContext": "<unread-messages>"
-    }
-  },
+  "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"<unread-messages>\"}}",
   "stderr": null
 }

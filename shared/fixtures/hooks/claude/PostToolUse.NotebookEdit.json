@@ -1,14 +1,14 @@
 {
   "session_id": "<session-id>",
   "transcript_path": "<transcript-path>",
-  "cwd": "<project-dir>",
+  "cwd": "C:\\proj",
   "scratchpad_dir": "<scratchpad-dir>",
   "prompt_id": "<prompt-id>",
   "permission_mode": "default",
   "hook_event_name": "PostToolUse",
   "tool_name": "NotebookEdit",
   "tool_input": {
-    "notebook_path": "<project-dir>\\n.ipynb",
+    "notebook_path": "C:\\proj\\n.ipynb",
     "cell_id": "c1",
     "new_source": "<new-source>"
   },
@@ -20,7 +20,7 @@
     "edit_mode": "replace",
     "cell_id": "c1",
     "error": "",
-    "notebook_path": "<project-dir>\\n.ipynb",
+    "notebook_path": "C:\\proj\\n.ipynb",
     "original_file": "{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"c1\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n",
     "updated_file": "{\n \"cells\": [\n  {\n   \"cell_type\": \"code\",\n   \"execution_count\": null,\n   \"id\": \"c1\",\n   \"metadata\": {},\n   \"outputs\": [],\n   \"source\": \"print(2)\"\n  }\n ],\n \"metadata\": {},\n \"nbformat\": 4,\n \"nbformat_minor\": 5\n}"
   },

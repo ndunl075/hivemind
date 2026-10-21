@@ -3,6 +3,7 @@
   "event": "PreToolUse",
   "case": "PreToolUse.exit2-without-propagation",
   "verdict": "rejected",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
   "effect": "Windows: Codex runs commandWindows through PowerShell, which turns the child exit code 2 into 1 unless the command ends with \"; exit $LASTEXITCODE\". The hook is then a failed (non-blocking) hook and the tool runs.",
   "exitCode": 1,
   "stdout": null,

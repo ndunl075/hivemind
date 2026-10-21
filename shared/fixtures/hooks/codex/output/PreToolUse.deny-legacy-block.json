@@ -3,11 +3,9 @@
   "event": "PreToolUse",
   "case": "PreToolUse.deny-legacy-block",
   "verdict": "accepted",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
   "effect": "The older {decision:\"block\"} shape also blocks.",
   "exitCode": 0,
-  "stdout": {
-    "decision": "block",
-    "reason": "<reason>"
-  },
+  "stdout": "{\"decision\":\"block\",\"reason\":\"<reason>\"}",
   "stderr": null
 }

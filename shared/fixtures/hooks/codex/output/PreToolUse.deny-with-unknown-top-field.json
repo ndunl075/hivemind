@@ -3,15 +3,9 @@
   "event": "PreToolUse",
   "case": "PreToolUse.deny-with-unknown-top-field",
   "verdict": "rejected",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
   "effect": "Hook marked \"Failed\" and the tool RUNS: an unknown top-level field turns a deny into an allow.",
   "exitCode": 0,
-  "stdout": {
-    "hookSpecificOutput": {
-      "hookEventName": "PreToolUse",
-      "permissionDecision": "deny",
-      "permissionDecisionReason": "<reason>"
-    },
-    "bogusTop": true
-  },
+  "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"<reason>\"},\"bogusTop\":true}",
   "stderr": null
 }

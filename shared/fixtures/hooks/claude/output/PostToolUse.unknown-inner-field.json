@@ -3,15 +3,9 @@
   "event": "PostToolUse",
   "case": "PostToolUse.unknown-inner-field",
   "verdict": "accepted",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
   "effect": "Unknown field ignored; systemMessage and additionalContext accepted.",
   "exitCode": 0,
-  "stdout": {
-    "systemMessage": "<message>",
-    "hookSpecificOutput": {
-      "hookEventName": "PostToolUse",
-      "additionalContext": "<context>",
-      "bogus": 1
-    }
-  },
+  "stdout": "{\"systemMessage\":\"<message>\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"<context>\",\"bogus\":1}}",
   "stderr": null
 }

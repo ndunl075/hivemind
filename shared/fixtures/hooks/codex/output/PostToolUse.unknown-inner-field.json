@@ -3,14 +3,9 @@
   "event": "PostToolUse",
   "case": "PostToolUse.unknown-inner-field",
   "verdict": "rejected",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
   "effect": "Hook \"Failed\": the additionalContext is NOT delivered.",
   "exitCode": 0,
-  "stdout": {
-    "hookSpecificOutput": {
-      "hookEventName": "PostToolUse",
-      "additionalContext": "<context>",
-      "bogus": 1
-    }
-  },
+  "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"<context>\",\"bogus\":1}}",
   "stderr": null
 }

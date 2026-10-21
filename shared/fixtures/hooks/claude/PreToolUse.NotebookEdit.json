@@ -1,14 +1,14 @@
 {
   "session_id": "<session-id>",
   "transcript_path": "<transcript-path>",
-  "cwd": "<project-dir>",
+  "cwd": "C:\\proj",
   "scratchpad_dir": "<scratchpad-dir>",
   "prompt_id": "<prompt-id>",
   "permission_mode": "default",
   "hook_event_name": "PreToolUse",
   "tool_name": "NotebookEdit",
   "tool_input": {
-    "notebook_path": "<project-dir>\\n.ipynb",
+    "notebook_path": "C:\\proj\\n.ipynb",
     "cell_id": "c1",
     "new_source": "<new-source>"
   },

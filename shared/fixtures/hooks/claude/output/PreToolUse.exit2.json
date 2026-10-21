@@ -3,6 +3,7 @@
   "event": "PreToolUse",
   "case": "PreToolUse.exit2",
   "verdict": "accepted",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
   "effect": "Exit code 2 blocks the tool; stderr is shown to the model.",
   "exitCode": 2,
   "stdout": null,

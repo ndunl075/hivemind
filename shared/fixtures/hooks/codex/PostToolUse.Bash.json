@@ -2,7 +2,7 @@
   "session_id": "<session-id>",
   "turn_id": "<turn-id>",
   "transcript_path": "<transcript-path>",
-  "cwd": "<project-dir>",
+  "cwd": "C:\\proj",
   "hook_event_name": "PostToolUse",
   "model": "gpt-5.6-luna",
   "permission_mode": "bypassPermissions",
@@ -10,6 +10,6 @@
   "tool_input": {
     "command": "echo hi"
   },
-  "tool_response": "<tool-response>",
+  "tool_response": "<stdout>\r\n",
   "tool_use_id": "<tool-use-id>"
 }

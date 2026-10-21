@@ -1,7 +1,7 @@
 {
   "session_id": "<session-id>",
   "transcript_path": "<transcript-path>",
-  "cwd": "<project-dir>",
+  "cwd": "C:\\proj",
   "scratchpad_dir": "<scratchpad-dir>",
   "hook_event_name": "SessionStart",
   "source": "resume",

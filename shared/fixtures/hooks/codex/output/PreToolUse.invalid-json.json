@@ -3,6 +3,7 @@
   "event": "PreToolUse",
   "case": "PreToolUse.invalid-json",
   "verdict": "rejected",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
   "effect": "Malformed JSON is ignored (hook \"Completed\"); the tool runs.",
   "exitCode": 0,
   "stdout": "not json {",

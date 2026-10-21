@@ -129,7 +129,7 @@ Claude Code (`claude` in `proj`):
 1. Start `claude`, type `hi`, then `/clear`. Expected files: `SessionEnd.clear` for the old session and a new `SessionStart.clear`.
 2. Type a few short messages, then `/compact`. Expected: `SessionStart.compact` (and any pre-compact events, which are not in §6.2).
 3. Quit with `/exit`. Expected: `SessionEnd.prompt_input_exit`.
-4. Run `claude --resume` and pick the session you just left. Expected: `SessionStart.resume` and, when you leave, a `SessionEnd` with the reason shown. (Do not run `/logout`; that would sign you out.)
+4. Run `claude --resume` and pick the session you just left. Expected: `SessionStart.resume` and, when you leave, a `SessionEnd` with the reason shown. Then, inside a running session, type `/resume` and pick a different session: expected `SessionEnd.resume` for the one you left and `SessionStart.resume` for the new one. (Do not run `/logout`; that would sign you out.)
 
 Codex (`codex` in `proj`):
 
@@ -157,7 +157,7 @@ Part A: hooks in `proj` (project config from 0.3 is enough).
    Expected: the edit is refused and the model quotes the reason; `a.txt` still says `hello`. Record yes/no.
 4. Repeat steps 1 to 3 in the **IDE extension** (VS Code and/or JetBrains, whichever you use) with `proj` open. Reset `behavior.json` to `{}` afterwards.
 
-Part B: user-scope `headersHelper` server. This **writes to `~/.claude.json`**. Take the `user-config` lock first, copy `~/.claude.json` to `~/.claude.json.spike-backup`, and restore it at the end.
+Part B: user-scope `headersHelper` server. This **writes to `~/.claude.json`** (through `claude mcp add-json`) and to `~/.claude/settings.json`. Take the `user-config` lock first and copy `~/.claude/settings.json` to `~/.claude/settings.json.spike-backup`. Do not hand-edit or restore `~/.claude.json`; Claude Code rewrites that file constantly, so undo the server with `claude mcp remove` instead (step 10).
 
 5. Save `SPIKE/mcp.mjs` (a stateless JSON-only MCP server; it needs no packages):
 
@@ -186,11 +186,19 @@ Part B: user-scope `headersHelper` server. This **writes to `~/.claude.json`**. 
 
    Save `SPIKE/headers.mjs`: `process.stdout.write(JSON.stringify({ Authorization: 'Bearer hm_a.test.nobody.1.AAAA', 'X-Spike': 'helper' }));`
 
+   Paths: on Windows `NODE` is something like `C:/Program Files/nodejs/node.exe` and `SPIKE` like `C:/Users/<you>/hm-spike`; on a Mac `NODE` is the output of `which node` (for example `/opt/homebrew/bin/node` or an nvm path) and `SPIKE` is `/Users/<you>/hm-spike`. Use the **absolute** `NODE` path in the helper so the GUI apps do not depend on `PATH`, and quote both paths because the helper is a shell command line.
+
 6. Start the server in a terminal: `node SPIKE/mcp.mjs`.
-7. Register it at user scope: `claude mcp add-json --scope user hivemind '{"type":"http","url":"http://127.0.0.1:8791/mcp","headersHelper":"node SPIKE/headers.mjs"}'` and add `"permissions": {"allow": ["mcp__hivemind"]}` to `~/.claude/settings.json` (back it up too).
-8. In the desktop app, in `proj`, ask: "Call the hivemind status tool with me=nico." Expected: it runs with no permission prompt, and `mcp-requests.jsonl` shows `auth: "present"` and `xspike: "helper"`. Record yes/no for: tool listed, no prompt, headers present.
+7. Register it at user scope (Windows example; on a Mac use the Mac paths):
+
+   ```sh
+   claude mcp add-json --scope user hivemind '{"type":"http","url":"http://127.0.0.1:8791/mcp","headersHelper":"\"NODE\" \"SPIKE/headers.mjs\""}'
+   ```
+
+   and add `"permissions": { "allow": ["mcp__hivemind"] }` to `~/.claude/settings.json` (merge into any existing `permissions.allow`).
+8. In the desktop app, in `proj`, ask: "Call the hivemind status tool with me=claude-test." Expected: it runs with no permission prompt, and `mcp-requests.jsonl` shows `auth: "present"` and `xspike: "helper"`. Record yes/no for: tool listed, no prompt, headers present.
 9. Repeat in the IDE extension.
-10. **Undo:** `claude mcp remove --scope user hivemind`, restore `~/.claude/settings.json` and confirm `~/.claude.json` has no `hivemind` entry, then release the lock.
+10. **Undo:** `claude mcp remove --scope user hivemind` (check with `claude mcp list` that it is gone), restore `~/.claude/settings.json` from the backup, then release the lock.
 
 ## M3. Codex desktop app and IDE extension, and what Codex hashes for hook trust (§21 item 12)
 
@@ -201,7 +209,13 @@ Part B: user-scope `headersHelper` server. This **writes to `~/.claude.json`**. 
    { "codex:PreToolUse.apply_patch": { "stdout": { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "locked by someone else" } } } }
    ```
 
-   Expected: the patch is refused and `p.txt` is not created. Record yes/no. Reset `behavior.json` to `{}`.
+   Expected: the patch is refused and `p.txt` is not created. Record yes/no. For a shell command use this instead (then ask it to run `echo hi > q.txt`; `q.txt` must not appear):
+
+   ```json
+   { "codex:PreToolUse.Bash": { "stdout": { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "locked by someone else" } } } }
+   ```
+
+   Reset `behavior.json` to `{}` afterwards.
 3. Repeat in the **Codex IDE extension**.
 4. **What is hashed for hook trust.** In the CLI, open `/hooks` and confirm the hooks show as trusted. Then change one thing at a time in `proj/.codex/hooks.json`, restart `codex`, and note whether `/hooks` asks for re-review each time:
    a. change only `"timeout"` (5 to 6);
@@ -210,6 +224,7 @@ Part B: user-scope `headersHelper` server. This **writes to `~/.claude.json`**. 
    d. change the command string (add a trailing space-and-argument);
    e. change a **different** file the command points to (append a comment line to `rec.mjs`).
    Record which of a to e triggered a re-review. (The architect needs to know whether a changed `hook.mjs` on disk, with an unchanged registration, forces re-approval.) Restore the original file afterwards.
+5. **User-level hooks in an untrusted project (not tested by the spike).** `join` writes `~/.codex/hooks.json`, not a project file. Take the `user-config` lock and back up `~/.codex/hooks.json` (it may not exist) and `~/.codex/config.toml`. Remove the project `proj/.codex/hooks.json`, put the same hooks in `~/.codex/hooks.json`, and create a second, never-opened folder `proj2` (`git init`). Run `codex` in `proj2`, send `hi`, and record: did a warning say hooks need review, did hooks run before you approved them with `/hooks`, did they run after approving, and did Codex ask to trust the folder. Then restore both files exactly (delete `~/.codex/hooks.json` if it did not exist), remove any `[projects...]` entry the run added to `config.toml`, and release the lock.
 
 ## M4. Session ids across resume, clear, compaction and subagents (§21 items 15 and 9)
 
@@ -237,10 +252,13 @@ Codex:
    process.exit(2);
    ```
 
-2. In `proj/.claude/settings.json` add to the `SessionStart` array a second handler (keep the recorder):
+2. In `proj/.claude/settings.json` give `SessionStart` a second handler next to the recorder, so the entry reads:
 
    ```json
-   { "type": "command", "command": "NODE", "args": ["SPIKE/rewake.mjs"], "asyncRewake": true, "timeout": 60 }
+   "SessionStart": [{ "hooks": [
+     { "type": "command", "command": "NODE", "args": ["SPIKE/rec.mjs", "claude"], "timeout": 5 },
+     { "type": "command", "command": "NODE", "args": ["SPIKE/rewake.mjs"], "asyncRewake": true, "timeout": 60 }
+   ] }],
    ```
 
    (Claude Code 2.1.287 documents `asyncRewake` as: runs in the background and wakes Claude on exit code 2.)
@@ -252,7 +270,14 @@ Codex:
 
 The spike proved a hook deny blocks `apply_patch` and shell commands in `codex exec` under `workspace-write`, `read-only`, full access and `--approve-for-me`. Check the interactive TUI too.
 
-1. Put the deny sample from M3 step 2 (for both `apply_patch` and `Bash`) in `behavior.json`.
+1. Put both deny samples in `behavior.json` (merge them into one object):
+
+   ```json
+   {
+     "codex:PreToolUse.apply_patch": { "stdout": { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "locked by someone else" } } },
+     "codex:PreToolUse.Bash": { "stdout": { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "locked by someone else" } } }
+   }
+   ```
 2. Start `codex` in `proj` with each of these approval/sandbox choices in turn (use `/approvals` or `/permissions`, or the flags `-a on-request`, `-a never`, `--dangerously-bypass-approvals-and-sandbox`): default; auto/automatic review; full access.
 3. In each, ask: "Create p.txt containing x with apply_patch." Record: blocked yes/no, and whether you were shown an approval prompt before or after the hook's refusal.
 4. Reset `behavior.json` to `{}`.

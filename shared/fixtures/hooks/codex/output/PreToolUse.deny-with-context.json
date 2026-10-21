@@ -3,15 +3,9 @@
   "event": "PreToolUse",
   "case": "PreToolUse.deny-with-context",
   "verdict": "accepted",
+  "verdictMeaning": "accepted = the tool honoured the output as intended; rejected = the tool ignored it or flagged the hook as failed (and carried on).",
   "effect": "Blocked, and the additionalContext also reaches the model.",
   "exitCode": 0,
-  "stdout": {
-    "hookSpecificOutput": {
-      "hookEventName": "PreToolUse",
-      "permissionDecision": "deny",
-      "permissionDecisionReason": "<reason>",
-      "additionalContext": "<context>"
-    }
-  },
+  "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"<reason>\",\"additionalContext\":\"<context>\"}}",
   "stderr": null
 }
