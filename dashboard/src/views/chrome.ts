@@ -6,7 +6,8 @@ import { looksLikeViewerToken, tokenFromFragment } from '../token';
 
 export interface Topbar {
   el: HTMLElement;
-  update(vm: ViewModel | null, conn: ConnectionState, room: string): void;
+  /** `focused` is true while one person is focused; the counts then say they cover the whole room. */
+  update(vm: ViewModel | null, conn: ConnectionState, room: string, focused?: boolean): void;
 }
 
 export function createTopbar(): Topbar {
@@ -26,7 +27,7 @@ export function createTopbar(): Topbar {
   );
   return {
     el,
-    update(vm, conn, roomName) {
+    update(vm, conn, roomName, focused = false) {
       setText(room, vm?.room ?? roomName);
       setText(live, conn === 'open' ? 'Live' : conn === 'connecting' ? 'Connecting' : 'Offline');
       liveWrap.className = `live conn-${conn}`;
@@ -34,7 +35,7 @@ export function createTopbar(): Topbar {
       mode.className = `chip chip-mode mode-${vm?.mode ?? 'none'}`;
       setText(
         counts,
-        vm ? `${plural(vm.counts.agents, 'agent')} · ${plural(vm.counts.tasks, 'task')} · ${plural(vm.counts.locks, 'lock')}` : '',
+        vm ? `${focused ? 'Whole room: ' : ''}${plural(vm.counts.agents, 'agent')} · ${plural(vm.counts.tasks, 'task')} · ${plural(vm.counts.locks, 'lock')}` : '',
       );
     },
   };

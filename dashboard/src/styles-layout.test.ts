@@ -20,8 +20,9 @@ describe('#app grid rows', () => {
   it.each([
     ['topbar', 1],
     ['banners', 2],
-    ['main', 3],
-    ['footer', 4],
+    ['team', 3],
+    ['main', 4],
+    ['footer', 5],
   ])('pins .%s to row %i', (name, row) => {
     expect(rule(`#app > .${name}`)).toContain(`grid-row: ${row};`);
   });

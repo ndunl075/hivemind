@@ -314,7 +314,7 @@ One command handles every event; the script reads `hook_event_name` from stdin.
 | `PreToolUse` | edit tools: Claude `Edit\|Write\|MultiEdit\|NotebookEdit`, Codex `apply_patch\|Edit\|Write` | Lock check (§9), the task gate (§10), stale-copy check (§12). | yes | **yes** |
 | `PreToolUse` | `mcp__hivemind__.*` | Check that `me` matches the cached callsign (§5). | **no** | yes |
 | `PostToolUse` | all | Heartbeat, throttled to one request per `heartbeatMs` (default 15 s), and sent right after a shell command; none while heartbeats are off (§16), so messages then arrive only through `UserPromptSubmit`, `Stop` and the tools. It carries the checkout's **divergent files** (§12), which drive lock release, shell-edit detection and push detection. It delivers messages. | when due, or after a shell command | no |
-| `Stop` | — | Carries Git state (an unthrottled heartbeat) unless heartbeats are off, so a push made just before stopping releases its locks at once. Mark idle. If **direct** messages are unread and `stop_hook_active` is false, block the stop once, with the messages as the reason. | yes | yes (once) |
+| `Stop` | — | Carries Git state (an unthrottled heartbeat) unless heartbeats are off, so a push made just before stopping releases its locks at once. Mark idle. If **direct** messages are unread and `stop_hook_active` is false, block the stop once, with the messages as the reason. Otherwise, if the agent pushed since it took an in-progress task, holds no file locks and hasn't been reminded in this ownership period, block once with a short reminder to `task_update` it or keep working (§11). | yes | yes (once) |
 | `SessionEnd` | — | If the reason is an exit (not clear or resume), mark ended and release holdings. Best effort: an 800 ms network timeout, because the spike measured Codex cutting `SessionEnd` hooks at about 3 s including PowerShell startup (about 1.5–1.9 s usable on Windows); registration sets `timeout` 3, since the documented 1 s default would kill it. | yes | no |
 
 Recorded payloads and accepted output shapes for every event are in `shared/fixtures/hooks/`, and the findings are in `docs/spike-results.md`. Both tools use nearly identical hook contracts: JSON on stdin with `session_id`, `cwd`, `tool_name` and `tool_input`; `hookSpecificOutput.permissionDecision: "deny"` with a reason in `PreToolUse`; `hookSpecificOutput.additionalContext`; and `decision: "block"` on `Stop`. **Output must exactly match each tool's schema.** Codex treats unknown output fields as a failed hook and lets the tool call continue, which would silently turn a deny into an allow. So `hook.mjs` builds output per tool, and tests assert the exact shape for each (§19).
@@ -588,6 +588,7 @@ If A holds X and wants Y while B holds Y and wants X, both are denied and both a
 - **To** one callsign, or `"all"`.
 - **Delivered once per recipient** through whichever comes first: a deny reason, a heartbeat (`PostToolUse`), `UserPromptSubmit`, `Stop`, `inbox`, or `wait`.
 - **Stop blocking is limited** `[DECIDED]`. Only **direct** messages can block an agent's `Stop`, at most once per turn, and never while `stop_hook_active` is true. Broadcasts never block, so one message to everyone can't trigger a round of extra turns.
+- **Unfinished-task reminder** `[DECIDED]`. A plain turn end is not a signal (the agent may be asking its person something), so the reminder fires only on a real "forgot to close it" sign: the agent has pushed since it took an in-progress task, holds no file locks (its work landed), and the task is still in progress. Then its `Stop` is blocked once with a fixed reminder to mark the task done, drop it with a short note, or keep working, which ends with "If you're waiting for your person, say so in one line and stop." Up to three such tasks are listed in one reminder; titles are quoted as teammate-written data, with typographic quotes and backticks flattened and cut by code points (§13). Unread direct messages take precedence (one block per `Stop`). Never while `stop_hook_active` is true, in mode `off`, or at any slowed budget level (§16). The reminder is recorded in `meta` (`stop_reminded:<task id>` = callsign) and cleared whenever ownership changes (claim, take, give-back, drop, done, owner ended) or the task is pruned, so a restart doesn't repeat it and a re-claim gets a fresh one.
 - **Latency:** a working agent sees a message at its next heartbeat, typically within 15 to 30 seconds. **An idle agent sees it only when its person next prompts it.** `[VERIFY]` whether Claude Code's `asyncRewake` hook option can wake an idle session. If it can, use it for direct messages to idle Claude agents.
 - **Injected format,** always quoted and attributed:
 
@@ -767,6 +768,16 @@ The dashboard is dark only `[DECIDED]`. The logo is `assets/logo.svg` (two overl
 ### 14.5 Tech
 
 Vanilla TypeScript and SVG, bundled with esbuild into Worker static assets, with no framework. A small custom force layout (about 100 lines) places the nodes; if time is short, a ring layout replaces it (§20.6). The page connects with a WebSocket, renders each snapshot, animates pulses, reconnects with backoff, and shows a "reconnecting" banner after 10 seconds without a connection. Text is always set with `textContent` (§13).
+
+### 14.6 Teams of several people
+
+Sized for about 6 people with 2-3 checkouts and 1-3 agents each (up to ~30 agents, most ended or idle).
+
+- **Team bar** under the top bar: one button per person with live agents, tasks in progress and locks held. Click (or Enter/Space) focuses that person: the graph, Tasks, Locks and Activity show only their agents and what they own or hold (unowned tasks are hidden while focused); Escape or "Show everyone" clears. The top-bar counts always cover the whole room.
+- **Checkouts:** a person with more than one checkout gets a dashed inner outline per checkout, labeled "checkout 1/2" in order of first sight (earliest agent start). Ids and paths are never shown.
+- **Ended agents** are not drawn by default; each person's "N ended" button in the team bar expands them (they still disappear after 24 hours).
+- **Density:** card size steps down with the number of drawn agents (full, dense, tight) and the graph area grows with it, so cards never overlap at 1366x768 and up; at phone width the graph is a plain grid, people stacked, two cards per row.
+- `?demo=team` runs a fake 6-person, 24-agent room for development and screenshots.
 
 ---
 
