@@ -6,7 +6,9 @@
  *  2. Internal feature interfaces: how server features talk to each other, so Wave 2 slices
  *     can be built in parallel against Wave 1's basic implementations.
  *
- * Types only. Nothing in this file may import a runtime (Node, Workers, DOM).
+ * Types plus a few plain constants (LIMITS, DEFAULT_SETTINGS). Nothing in this file may import a runtime
+ * (Node, Workers, DOM). The hook (plain JS, copied to ~/.hivemind/hook/) can't import this file: it keeps its
+ * own copy of the LIMITS values it uses, and a test in cli/hook asserts they match.
  */
 
 // ---------------------------------------------------------------------------
@@ -48,11 +50,18 @@ export interface ProjectSettings {
   ignore?: string[];
 }
 
-export const DEFAULT_SETTINGS: Required<ProjectSettings> = {
+/** Settings with defaults applied. Read-only so a consumer can't change the defaults for everyone. */
+export interface ResolvedSettings {
+  readonly requireTask: boolean;
+  readonly advisory: readonly string[];
+  readonly ignore: readonly string[];
+}
+
+export const DEFAULT_SETTINGS: ResolvedSettings = Object.freeze({
   requireTask: true,
-  advisory: ['package.json', '**/package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock*'],
-  ignore: [],
-};
+  advisory: Object.freeze(['package.json', '**/package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock*']),
+  ignore: Object.freeze([] as string[]),
+});
 
 // ---------------------------------------------------------------------------
 // Tuning constants (§5, §6, §8, §11, §16). Change only through the architect.
@@ -92,11 +101,25 @@ export const LIMITS = {
   maxDivergentPaths: 500,
   /** §8.2: dashboard snapshots per second, at most. */
   snapshotsPerSecond: 4,
-  /** §16: budget guard thresholds, as a fraction of the daily cap. */
+  /** §16: budget guard thresholds, as a fraction of the daily cap, and the heartbeat intervals they set. */
   dailyRequestCap: 100_000,
   guardSlowAt: 0.6,
+  guardSlowHeartbeatMs: 30_000,
   guardSlowerAt: 0.8,
+  guardSlowerHeartbeatMs: 60_000,
   guardWarnAt: 0.95,
+  /** §6.6 briefing caps. */
+  briefingAgents: 8,
+  briefingTasks: 5,
+  briefingLocks: 8,
+  /** §10 duplicates. */
+  duplicateJaccard: 0.8,
+  similarTasksShown: 3,
+  /** §7 inbox(recent: true). */
+  inboxRecent: 20,
+  /** §14.2: how long message and blocked edges stay on the dashboard. */
+  messageEdgeMs: 60_000,
+  blockedEdgeMs: 2 * 60_000,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -212,10 +235,21 @@ export interface ModeRequest {
   mode: RoomMode;
 }
 
-export interface UnlockRequest {
-  /** Exactly one of these. */
-  path?: { repo: RepoId; path: RepoPath };
-  agent?: Callsign;
+export interface ModeResponse {
+  mode: RoomMode;
+}
+
+/** Exactly one target. */
+export type UnlockRequest =
+  | { path: { repo: RepoId; path: RepoPath }; agent?: never }
+  | { agent: Callsign; path?: never };
+
+export interface UnlockResponse {
+  released: LockView[];
+}
+
+export interface AdminCreateRoomRequest {
+  room: string;
 }
 
 export interface AdminCreateRoomResponse {
@@ -256,7 +290,9 @@ export interface AgentView {
   person: string;
   repo: RepoId | null;
   repoName: string | null;
+  checkout: CheckoutId | null;
   branch: string | null;
+  head: string | null;
   hooked: boolean;
   activity: string | null;
   startedAt: Millis;
@@ -317,6 +353,10 @@ export interface ActivityView {
 
 export type EdgeKind = 'message' | 'broadcast' | 'blocked' | 'waiting' | 'nearby';
 
+/**
+ * Edge direction (§14.2): message A to B is from A to B; blocked A to B means A was denied a file B holds;
+ * waiting means A's task depends on B's in-progress task and is drawn from B to A; nearby is undirected.
+ */
 export interface EdgeView {
   kind: EdgeKind;
   from: Callsign;
@@ -361,32 +401,123 @@ export const DASHBOARD_SUBPROTOCOL = 'hivemind';
 // MCP tools (§7). Arguments; `me` is required everywhere except register.
 // ---------------------------------------------------------------------------
 
+/**
+ * Paths in tool arguments are plain repo-relative paths. `repo` is optional everywhere: it defaults to the
+ * caller's current repo (known from its hooks). It may be the repo's display name (origin basename) or its
+ * root commit SHA, and is required only when the caller has no repo yet (an MCP-registered agent).
+ */
 export interface NewTask {
   title: string;
   description?: string;
-  areas?: { repo: RepoId; folder: RepoPath }[];
+  /** Folders, e.g. 'src/auth/'. */
+  areas?: RepoPath[];
   dependsOn?: number[];
 }
 
 export interface ToolArgs {
   status: { me: Callsign };
-  task_add: { me: Callsign; tasks: NewTask[]; claim?: boolean; force?: boolean };
+  task_add: { me: Callsign; tasks: NewTask[]; claim?: boolean; force?: boolean; repo?: string };
   task_claim: { me: Callsign; id: number; take?: boolean; reason?: string };
   task_update: { me: Callsign; id: number; status: 'in_progress' | 'open' | 'done' | 'dropped'; note?: string };
-  reserve: { me: Callsign; folders: { repo: RepoId; folder: RepoPath }[]; reason?: string };
-  release: { me: Callsign; paths?: { repo: RepoId; path: RepoPath }[] };
-  take: { me: Callsign; repo: RepoId; path: RepoPath; reason: string };
+  reserve: { me: Callsign; folders: RepoPath[]; reason?: string; repo?: string };
+  release: { me: Callsign; paths?: RepoPath[]; repo?: string };
+  take: { me: Callsign; path: RepoPath; reason: string; repo?: string };
+  /** 'all' is stored as recipient '*'. */
   post: { me: Callsign; to: Callsign | 'all'; text: string };
   inbox: { me: Callsign; recent?: boolean };
   wait: { me: Callsign; seconds: number; for?: string };
-  register: { kind: AgentKind; note?: string };
+  register: { kind: AgentKind; note?: string; repo?: string };
 }
 
 export type ToolName = keyof ToolArgs;
 
+/** Structured results (§7). The MCP layer returns them as JSON text content. */
+export interface ToolResults {
+  status: {
+    you: AgentView;
+    mode: RoomMode;
+    agents: (AgentView & { state: AgentState; takeable: boolean })[];
+    tasks: TaskView[];
+    heldByOthers: LockView[];
+    yours: LockView[];
+    unread: number;
+  };
+  task_add: {
+    created: { id: number; title: string; similar: { id: number; title: string }[] }[];
+    duplicates: { title: string; existing: TaskView }[];
+    claim?: ToolResults['task_claim'];
+  };
+  task_claim:
+    | { result: 'ok'; task: TaskView; reserved: LockView[] }
+    | { result: 'taken'; owner: Callsign; ownerState: AgentState; takeable: boolean }
+    | { result: 'waiting'; unfinished: number[] };
+  task_update: { task: TaskView };
+  reserve: { granted: boolean; conflicts: LockConflict[] };
+  release: { released: LockView[]; stillDivergent: RepoPath[] };
+  take: { ok: true; lock: LockView } | { ok: false; error: string };
+  post: { id: number } | { bounced: true; reason: string };
+  inbox: { unread: MessageView[]; recent?: MessageView[] };
+  wait: { event: 'message' | 'release' | 'task' | 'timeout'; messages?: MessageView[] };
+  register: { callsign: Callsign; enforced: false };
+}
+
 // ---------------------------------------------------------------------------
 // Internal feature interfaces (§8.2 "Feature boundaries", §20.2)
+//
+// The Room builds one RoomContext and calls each feature's factory once:
+//   export const createLocks: FeatureFactory<'locks'> = (ctx, features) => ({ ... });
+// `features` is the same object for every factory; it's complete before the first request, so a factory may
+// keep the reference but must not call other features while constructing. Each feature creates its own
+// tables (CREATE TABLE IF NOT EXISTS) in its factory through ctx.sql. The Room owns `agents`, `meta`, `events`.
 // ---------------------------------------------------------------------------
+
+/** The subset of Durable Object SQL storage that features use, kept runtime-neutral. */
+export interface SqlLike {
+  exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
+}
+
+/** An agent as the server holds it: the view plus its session. */
+export interface AgentRecord extends AgentView {
+  session: string | null;
+}
+
+/** Wake-up keys for `wait` (§7): 'message:<callsign>', 'release:<repo>:<path>', 'task:<id>'. */
+export type WakeKey = string;
+
+/** Something worth showing or waking on. The Room logs it to `events`, broadcasts it and resolves waits. */
+export interface RoomEvent {
+  type: string;
+  actor: Callsign | null;
+  /** One-line summary for the activity feed. */
+  text: string;
+  data?: Record<string, unknown>;
+  pulse?: Omit<Pulse, 'type' | 'at'>;
+  edge?: Omit<EdgeView, 'at'>;
+  wake?: WakeKey[];
+}
+
+export interface RoomContext {
+  now(): Millis;
+  mode(): RoomMode;
+  /** Settings for a repo with defaults applied (§9). */
+  settings(repo: RepoId | null): ResolvedSettings;
+  agent(callsign: Callsign): AgentRecord | null;
+  agents(): AgentRecord[];
+  /** Resolves a tool's `repo` argument (display name or root SHA) for a caller; null if unknown. */
+  resolveRepo(actor: Actor, repo: string | undefined): RepoId | null;
+  sql: SqlLike;
+  emit(event: RoomEvent): void;
+}
+
+export interface Features {
+  locks: LocksApi;
+  tasks: TasksApi;
+  messages: MessagesApi;
+  pushes: PushesApi;
+  snapshot: SnapshotApi;
+}
+
+export type FeatureFactory<K extends keyof Features> = (ctx: RoomContext, features: Features) => Features[K];
 
 /** What a feature sees of the agent making a request. */
 export interface Actor {
@@ -439,7 +570,7 @@ export interface LocksApi {
 
 export interface TasksApi {
   /** §10 task gate, called on edits before LocksApi.checkEdit. */
-  gate(actor: Actor, settings: Required<ProjectSettings>): { allow: true } | { allow: false; reason: string };
+  gate(actor: Actor, settings: ResolvedSettings): { allow: true } | { allow: false; reason: string };
   inProgressFor(callsign: Callsign): TaskView | null;
   /** §10: tasks of ended owners return to open. */
   onAgentEnded(callsign: Callsign): void;
@@ -454,7 +585,10 @@ export interface NotifyOptions {
 }
 
 export interface MessagesApi {
-  /** A notice from 'hivemind' to one agent, or '*' for every other active agent. */
+  /**
+   * A notice from 'hivemind' to one agent, or '*' for every active agent (filtered by options).
+   * Notices have no agent sender; put the agent the notice is about in options.exclude.
+   */
   notify(to: Callsign | '*', text: string, options?: NotifyOptions): void;
   /** Unread messages for a callsign, marked delivered (§11). */
   takeUnread(callsign: Callsign, options?: { directOnly?: boolean }): MessageView[];
@@ -465,6 +599,14 @@ export interface MessagesApi {
 
 export interface SnapshotApi {
   build(): Snapshot;
+}
+
+/** §12 pushes. */
+export interface PushesApi {
+  /** Record a push and send the push notice. */
+  record(actor: Actor, repo: RepoId, push: PushReport): void;
+  /** Latest push per path within 24 hours by someone other than the actor. */
+  latest(actor: Actor, repo: RepoId, paths: RepoPath[]): LastPush[];
 }
 
 /** Called by the Room so features can contribute lines to the briefing (§6.6). */

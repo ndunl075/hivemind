@@ -7,7 +7,7 @@
 - Configs: root `vitest.config.ts` (shared, cli), `server/vitest.config.ts` (Workers runtime), `dashboard/vitest.config.ts` (happy-dom), `test/vitest.config.ts` (e2e, smoke).
 - Placeholders: `server/src/{worker,room,env}.ts`, `dashboard/{build.mjs,src/}`, `cli/hivemind.mjs`.
 - `shared/`: `contracts.ts` (wire types, limits and internal interfaces), `hook-modules.d.ts`, `state.ts` with tests, `protocol.md`, `fixtures/snapshot.json`.
-- CI: Ubuntu (typecheck, all tests, build, `wrangler deploy --dry-run`, e2e), Windows (Node tests: shared and cli), gitleaks with an `hm_` token rule and a `hm_[av].test.` allowlist.
+- CI: Ubuntu (typecheck, all tests, build, `wrangler deploy --dry-run`, e2e), Windows (Node tests: shared and cli), gitleaks with an `hm_` token rule and a `hm_[av].test.` allowlist. Actions are pinned by commit SHA; jobs have timeouts and cancel superseded runs.
 
 ## Checks run locally
 - `npm run typecheck`: pass.
@@ -16,4 +16,4 @@
 
 ## §21 items 13 and 14
 - **13 (Cloudflare limits):** from the Durable Objects pricing and limits pages: 100,000 Durable Object requests a day, 13,000 GB-s a day, 5 million rows read and 100,000 rows written a day, reset at 00:00 UTC; Workers Free allows 100,000 requests a day with 10 ms CPU each. Static asset requests don't invoke the Worker. Still to measure after the first deploy: how index writes and deletes count.
-- **14:** the CLI and hook are plain ESM JavaScript with a root `bin`, so `npx github:` needs no build step. The Workers test pool isn't run on Windows CI (fallback taken: Room tests are Ubuntu-only); Windows CI runs the shared and cli tests.
+- **14:** the CLI and hook are plain ESM JavaScript with a root `bin`, so `npx github:` needs no build step. Running the Workers test pool on Windows CI wasn't attempted; Room tests run on Ubuntu only, as the §21 fallback allows. Windows CI runs the shared and cli tests, which include the hook.

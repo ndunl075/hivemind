@@ -1,6 +1,9 @@
 /**
  * Agent state from timestamps (ARCHITECTURE.md §5). Pure; used by the server and the dashboard
  * so they can never disagree. Architect-owned.
+ *
+ * Server rule: the next hook event after Stop clears idle_since, and idle_since is persisted together with
+ * last_event, so a reload after eviction can never pair a fresh idle mark with a stale last event.
  */
 import { LIMITS, type AgentState, type Millis } from './contracts';
 

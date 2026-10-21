@@ -901,7 +901,7 @@ hivemind/
 ├── shared/                     architect-owned
 │   ├── contracts.ts            wire types (/hook, MCP tool I/O, dashboard snapshot and pulses) and the
 │   │                           internal feature interfaces (LocksApi, TasksApi, MessagesApi, SnapshotApi)
-│   ├── hook-modules.d.ts       interfaces of the hook's modules (claude, codex, git)
+│   ├── hook-modules.ts       interfaces of the hook's modules (claude, codex, git)
 │   ├── state.ts                agent state and takeability from timestamps (§5), used by server and dashboard
 │   ├── protocol.md             the protocol text in §6.5, the single source
 │   └── fixtures/               sample snapshot; recorded hook payloads (scrubbed)
@@ -976,7 +976,7 @@ Rules every worker follows are in [`docs/parallel-sessions.md`](docs/parallel-se
 
 - No two workers own the same file. Each brief lists exactly what it owns, including its own `docs/evidence/<task>.md`. Owning a file includes its colocated tests (§18).
 - **Architect-only hotspots:** everything in `shared/` (except `shared/fixtures/hooks/`, which W0 writes), root `package.json` and lockfile, `.github/`, `docs/parallel-sessions.md`, `docs/worker-briefs.md`, and after Wave 1 also `server/src/worker.ts`, `server/src/room.ts`, `server/src/pipeline.ts`, `server/wrangler.toml`, `cli/hook/hook.mjs` and `cli/hook/claude.mjs`. A worker that needs a change there asks for it under **Requests for the architect** in its PR description.
-- **Features meet only through frozen interfaces.** The internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi`, `SnapshotApi`) and the hook module interfaces in `shared/hook-modules.d.ts` are written in Wave 0. Wave 1 provides a working basic implementation behind every one of them, so each Wave 2 slice can be built and tested on its own against the others' basic versions.
+- **Features meet only through frozen interfaces.** The internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi`, `SnapshotApi`) and the hook module interfaces in `shared/hook-modules.ts` are written in Wave 0. Wave 1 provides a working basic implementation behind every one of them, so each Wave 2 slice can be built and tested on its own against the others' basic versions.
 - All dependencies each worker needs are installed in Wave 0 (listed in `docs/worker-briefs.md`).
 - **Contract checkpoint:** between waves, the architect folds approved contract requests into `shared/`, then launches the next wave.
 
@@ -997,7 +997,7 @@ The architect then folds the results into this document and `shared/`, and freez
 | Worker | Owns | Builds | Effort | Tier |
 |---|---|---|---|---|
 | W1 server-core | `server/**` (this wave only) | Every route in §8.1, token verification, the Room (§8.2: storage, memory, pipeline, WebSocket plumbing with viewer auth, the `wait` registry, limits, budget guard, room modes, unlock, per-repo project settings), and basic implementations behind every internal interface: file locks (§9 rules 1–3, 6–8, 11), `notify()` with delivery on heartbeats, a task stub (gate off), a minimal snapshot. The briefing and the `status` tool. A deployable `server/wrangler.toml`. | Sonnet high | 2 |
-| W2 hook-core | `cli/hook/**` (this wave only) | `hook.mjs` and `claude.mjs`: every event in §6.2 for Claude Code, the local `me` check, dynamic module loading, `HIVEMIND_HOME`, settings, the baseline, `shellSinceHeartbeat`, the circuit breaker and outage notice, `hook.log`; basic `git.mjs` (divergent files from `git status` only) and a `codex.mjs` stub, both behind `shared/hook-modules.d.ts` | Sonnet high | 2 |
+| W2 hook-core | `cli/hook/**` (this wave only) | `hook.mjs` and `claude.mjs`: every event in §6.2 for Claude Code, the local `me` check, dynamic module loading, `HIVEMIND_HOME`, settings, the baseline, `shellSinceHeartbeat`, the circuit breaker and outage notice, `hook.log`; basic `git.mjs` (divergent files from `git status` only) and a `codex.mjs` stub, both behind `shared/hook-modules.ts` | Sonnet high | 2 |
 | W3 dashboard | `dashboard/**` (this wave only) | The full view-only dashboard from §14, with its data source isolated in `dashboard/src/live/`, which reads `shared/fixtures/snapshot.json` and a fake pulse stream for now | Sonnet medium | 1 |
 
 Then the architect deploys the skeleton, creates a room for this repo, and **turns Hivemind on for all later work**. Wave 2 workers coordinate through it.

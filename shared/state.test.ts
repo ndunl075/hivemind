@@ -11,7 +11,7 @@ describe('deriveState', () => {
     });
   });
 
-  it('stays working between 2 and 10 minutes of silence', () => {
+  it('stays working until 10 minutes of silence', () => {
     expect(deriveState({ lastEvent: now - 9 * MIN, idleSince: null, endedAt: null }, now).state).toBe('working');
   });
 

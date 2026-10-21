@@ -1,7 +1,7 @@
 {
   "name": "hivemind",
   "version": "0.0.0",
-  "private": false,
+  "private": true,
   "description": "Live coordination for AI coding agents (Claude Code and Codex) working in the same repo.",
   "license": "UNLICENSED",
   "type": "module",
@@ -46,6 +46,7 @@
     "test:smoke": "vitest run --config test/vitest.config.ts --dir test/smoke",
     "build": "node dashboard/build.mjs",
     "dev": "npm run build && wrangler dev -c server/wrangler.toml",
-    "deploy": "npm run build && wrangler deploy -c server/wrangler.toml"
+    "deploy": "npm run build && wrangler deploy -c server/wrangler.toml",
+    "dev:dashboard": "node dashboard/build.mjs --serve"
   }
 }
