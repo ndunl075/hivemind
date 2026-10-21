@@ -8,10 +8,15 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { staleWarnings, state } from './git.mjs';
+import { staleWarnings, state as gitState } from './git.mjs';
 
 // Each test runs a dozen or more Git processes; a Windows runner needs more than the default 5 s.
 vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
+
+// state() has a 1.2 s Git budget in production and falls back to a truncated status-only report when it runs out.
+// A slow Windows runner can exceed that in tests that are not about the budget, so every call here gets a generous one.
+// The budget tests pass their own budgetMs.
+const state = (root, previous, options = {}) => gitState(root, previous, { budgetMs: 60_000, ...options });
 
 let base;
 let counter = 0;
@@ -583,4 +588,82 @@ describe('stale check: Git calls and hostile paths', () => {
 
 const realExec = (args, cwd, timeout) => new Promise((resolveRun, reject) => {
   execFile('git', args, { cwd, timeout, encoding: 'utf8', windowsHide: true }, (err, out) => (err ? reject(err) : resolveRun(out)));
+});
+
+describe('push detection and other people\'s work pulled over our edit (reflog)', () => {
+  /** The agent has a.txt edited (dirty); a teammate pushes the same path. Returns the world and the first report. */
+  async function editedWhileMatePushes() {
+    const w = world();
+    write(w.agent, 'a.txt', 'mine\n');
+    const first = await state(w.agent, null);
+    expect(first.report.divergent).toEqual(['a.txt']);
+    commit(w.mate, 'a.txt', 'theirs\n');
+    git(['push', '-q', 'origin', 'main'], w.mate);
+    return { w, first };
+  }
+
+  it('discarding the edit and a fast-forward pull is not our push', async () => {
+    const { w, first } = await editedWhileMatePushes();
+    git(['checkout', '--', 'a.txt'], w.agent);
+    git(['pull', '-q', '--ff-only'], w.agent);
+    expect((await state(w.agent, first.memory)).report.pushed).toBeNull();
+  });
+
+  it('a plain fetch and rebase with no commits of our own is not our push', async () => {
+    const { w, first } = await editedWhileMatePushes();
+    git(['checkout', '--', 'a.txt'], w.agent);
+    git(['fetch', '-q', 'origin'], w.agent);
+    git(['rebase', '-q', 'origin/main'], w.agent);
+    expect((await state(w.agent, first.memory)).report.pushed).toBeNull();
+  });
+
+  it('pull --rebase with no commits of our own is not our push', async () => {
+    const { w, first } = await editedWhileMatePushes();
+    git(['checkout', '--', 'a.txt'], w.agent);
+    git(['pull', '-q', '--rebase'], w.agent);
+    expect((await state(w.agent, first.memory)).report.pushed).toBeNull();
+  });
+
+  it('a commit made after the previous report and pushed is detected', async () => {
+    const w = world();
+    write(w.agent, 'a.txt', 'mine\n');
+    const first = await state(w.agent, null);
+    git(['commit', '-q', '-am', 'mine'], w.agent);
+    git(['push', '-q', 'origin', 'main'], w.agent);
+    expect((await state(w.agent, first.memory)).report.pushed.files.map((f) => f.path)).toEqual(['a.txt']);
+  });
+
+  it('a commit made with plumbing (no reflog message) is detected', async () => {
+    const w = world();
+    write(w.agent, 'a.txt', 'mine\n');
+    const first = await state(w.agent, null);
+    git(['add', '-A'], w.agent);
+    const tree = git(['write-tree'], w.agent);
+    const sha = git(['commit-tree', tree, '-p', 'HEAD', '-m', 'plumbing'], w.agent);
+    git(['update-ref', 'HEAD', sha], w.agent);
+    git(['push', '-q', 'origin', 'main'], w.agent);
+    expect((await state(w.agent, first.memory)).report.pushed.files.map((f) => f.path)).toEqual(['a.txt']);
+  });
+
+  it('work committed in another worktree and fast-forward merged here is detected', async () => {
+    const w = world();
+    write(w.agent, 'a.txt', 'mine\n');
+    const first = await state(w.agent, null);
+    const other = join(w.dir, 'wt');
+    git(['worktree', 'add', '-q', '-b', 'side', other], w.agent);
+    commit(other, 'a.txt', 'mine\n');
+    git(['checkout', '--', 'a.txt'], w.agent);
+    git(['merge', '-q', '--ff-only', 'side'], w.agent);
+    git(['push', '-q', 'origin', 'main'], w.agent);
+    expect((await state(w.agent, first.memory)).report.pushed.files.map((f) => f.path)).toEqual(['a.txt']);
+  });
+
+  it('a reflog that does not exist leaves the old behaviour', async () => {
+    const { w, first } = await editedWhileMatePushes();
+    git(['config', 'core.logAllRefUpdates', 'false'], w.agent);
+    rmSync(join(w.agent, '.git', 'logs'), { recursive: true, force: true });
+    git(['checkout', '--', 'a.txt'], w.agent);
+    git(['pull', '-q', '--ff-only'], w.agent);
+    expect((await state(w.agent, first.memory)).report.pushed.files.map((f) => f.path)).toEqual(['a.txt']);
+  });
 });

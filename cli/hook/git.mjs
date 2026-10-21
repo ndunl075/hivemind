@@ -48,13 +48,22 @@ function orNull(p) {
 }
 
 /**
- * Display name from an origin URL (https or scp-like), or null.
+ * Display name from an origin URL (https, scp-like) or a local path (Windows drive or UNC path, POSIX absolute path,
+ * file:// URL): the last path segment without `.git`. Null when there is none.
  * @param {string | null} url
  * @returns {string | null}
  */
-function repoNameOf(url) {
+export function repoNameOf(url) {
   if (!url) return null;
-  const last = url.replace(/\/+$/, '').replace(/\.git$/, '').split(/[/:]/).pop();
+  const text = url.trim();
+  const local = /^[A-Za-z]:[\\/]/.test(text) || text.startsWith('\\\\') || text.startsWith('/') || /^file:/i.test(text);
+  // A local path may contain `:` (a drive letter); only a remote URL treats it as a separator.
+  const separators = local ? /[\\/]/ : /[\\/:]/;
+  const trimmed = text.replace(/[\\/]+$/, '');
+  if (/^[a-z][a-z0-9+.-]*:\/\/[^/\\]*$/i.test(trimmed)) return null; // host (and port) only: no repository in it
+  const parts = trimmed.split(separators).filter(Boolean);
+  if (parts.length > 1 && (parts[parts.length - 1] ?? '').toLowerCase() === '.git') parts.pop(); // a work tree's .git directory
+  const last = (parts.pop() ?? '').replace(/\.git$/i, '');
   return last ? last.slice(0, 200) : null;
 }
 
@@ -306,6 +315,9 @@ async function comparisonPoint(g, i) {
   return null;
 }
 
+/** Reflog subjects of HEAD movements that create no commit of ours (see detectPush). */
+const NON_COMMIT_MOVE = /^\S+ (?:(?:pull|rebase)[^:]*: fast-forward|reset: |checkout: |(?:pull(?: --rebase)?|rebase) \((?:start|finish|abort)\))/i;
+
 /**
  * Files that went out in a push (§12): in the previous divergent set, changed between the old comparison point and
  * HEAD, not dirty now, with their blob SHAs in HEAD. Null when nothing was pushed.
@@ -321,6 +333,25 @@ async function comparisonPoint(g, i) {
 async function detectPush(g, previous, now, head, branch, remotes, dirty) {
   const before = previous.comparison;
   if (!before || before.sha === now.sha || previous.divergent.length === 0 || !previous.head) return null;
+  // When every HEAD movement since the previous report is a recognised non-commit action (a fast-forward pull, a reset,
+  // a checkout, the start, finish or abort of a rebase), HEAD only moved onto other people's work: files
+  // that were merely edited then are not ours to report, even if a teammate pushed the same path (§12), and only what
+  // was already committed ahead of the old comparison point can have gone out. Anything else (a commit, an empty or
+  // unknown entry, a reflog that is missing, unreadable or does not reach the previous HEAD, a failed diff) keeps
+  // every previously divergent file eligible.
+  /** @type {Set<string> | null} */
+  let committedBefore = null;
+  const log = await soft(g, ['reflog', 'show', '--format=%H %gs', '-n', '200', 'HEAD', '--']);
+  if (log !== null) {
+    const entries = log.split('\n');
+    const seen = entries.findIndex((l) => l.startsWith(previous.head ?? '\0'));
+    const moves = seen > 0 ? entries.slice(0, seen) : [];
+    if (moves.length > 0 && moves.every((l) => NON_COMMIT_MOVE.test(l))) {
+      const out = await g(['diff', '--name-only', '-z', '--no-renames', '--no-ext-diff', '--end-of-options', `${before.sha}...${previous.head}`, '--'])
+        .then(nulList, (e) => { if (isHard(e)) throw e; return null; });
+      if (out !== null) committedBefore = new Set(out);
+    }
+  }
   // HEAD must now be contained in the comparison point (a fetch alone leaves local commits outside it).
   if (!(await ok(g, ['merge-base', '--is-ancestor', '--end-of-options', head, now.sha]))) return null;
   const raw = await soft(g, ['diff', '--raw', '-z', '--no-renames', '--no-ext-diff', '--no-abbrev', '--end-of-options', before.sha, head, '--']);
@@ -333,7 +364,7 @@ async function detectPush(g, previous, now, head, branch, remotes, dirty) {
     if (diff === null && !(await ok(g, ['cat-file', '-e', '--end-of-options', `${previous.head}^{commit}`]))) return null;
     changedSince = new Set(nulList(diff));
   }
-  const mine = new Set(previous.divergent);
+  const mine = new Set(committedBefore ? previous.divergent.filter((p) => committedBefore.has(p)) : previous.divergent);
   /** @type {{ path: string; blob: string }[]} */
   const files = [];
   const parts = raw.split('\0');
@@ -361,7 +392,8 @@ async function detectPush(g, previous, now, head, branch, remotes, dirty) {
 export async function state(root, previous, options = {}) {
   const prev = /** @type {Memory | null} */ (previous);
   const exec = options.exec ?? git;
-  const deadline = Date.now() + (options.budgetMs ?? STATE_BUDGET_MS);
+  // HIVEMIND_GIT_BUDGET_MS is test-only: it lets slow CI runners finish Git work that production would cut off.
+  const deadline = Date.now() + (options.budgetMs ?? (Number(process.env.HIVEMIND_GIT_BUDGET_MS) || STATE_BUDGET_MS));
   /** @type {Run} */
   const g = (args, timeout = GIT_TIMEOUT_MS) => {
     const left = deadline - Date.now();
