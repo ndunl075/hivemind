@@ -1,0 +1,13 @@
+title = "Hivemind gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "hivemind-token"
+description = "Hivemind agent or viewer token"
+regex = '''hm_[av]\.[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]{8,}'''
+
+[[rules.allowlists]]
+description = "Obviously fake test tokens"
+regexes = ['''hm_[av]\.test\.''']

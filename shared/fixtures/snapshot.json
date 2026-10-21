@@ -1,0 +1,327 @@
+{
+  "type": "snapshot",
+  "room": "demo",
+  "mode": "enforce",
+  "now": 1761000000000,
+  "usage": {
+    "requests": 12840,
+    "cap": 100000
+  },
+  "agents": [
+    {
+      "callsign": "claude-nico",
+      "kind": "claude",
+      "person": "nico",
+      "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "repoName": "demo-app",
+      "branch": "main",
+      "hooked": true,
+      "activity": "Edit src/app/page.tsx",
+      "startedAt": 1760994600000,
+      "lastEvent": 1760999996000,
+      "idleSince": null,
+      "endedAt": null,
+      "outageAt": null,
+      "outageMs": null,
+      "taskId": 3
+    },
+    {
+      "callsign": "codex-ana",
+      "kind": "codex",
+      "person": "ana",
+      "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "repoName": "demo-app",
+      "branch": "main",
+      "hooked": true,
+      "activity": "apply_patch src/auth/login.ts",
+      "startedAt": 1760994600000,
+      "lastEvent": 1760999988000,
+      "idleSince": null,
+      "endedAt": null,
+      "outageAt": null,
+      "outageMs": null,
+      "taskId": 4
+    },
+    {
+      "callsign": "claude-nico-2",
+      "kind": "claude",
+      "person": "nico",
+      "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "repoName": "demo-app",
+      "branch": "main",
+      "hooked": true,
+      "activity": "Stop",
+      "startedAt": 1760994600000,
+      "lastEvent": 1760999820000,
+      "idleSince": 1760999820000,
+      "endedAt": null,
+      "outageAt": null,
+      "outageMs": null,
+      "taskId": 7
+    },
+    {
+      "callsign": "codex-sam",
+      "kind": "codex",
+      "person": "sam",
+      "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "repoName": "demo-app",
+      "branch": "feature/deploy",
+      "hooked": true,
+      "activity": "Bash npm run build",
+      "startedAt": 1760994600000,
+      "lastEvent": 1760999160000,
+      "idleSince": null,
+      "endedAt": null,
+      "outageAt": null,
+      "outageMs": null,
+      "taskId": 9
+    },
+    {
+      "callsign": "claude-sam",
+      "kind": "claude",
+      "person": "sam",
+      "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "repoName": "demo-app",
+      "branch": "main",
+      "hooked": false,
+      "activity": null,
+      "startedAt": 1760994600000,
+      "lastEvent": 1760997600000,
+      "idleSince": 1760997600000,
+      "endedAt": null,
+      "outageAt": null,
+      "outageMs": null,
+      "taskId": null
+    }
+  ],
+  "tasks": [
+    {
+      "id": 3,
+      "title": "Landing page hero",
+      "description": null,
+      "status": "in_progress",
+      "owner": "claude-nico",
+      "createdBy": "claude-nico",
+      "dependsOn": [],
+      "areas": [],
+      "note": null,
+      "createdAt": 1760995200000,
+      "updatedAt": 1760998200000
+    },
+    {
+      "id": 4,
+      "title": "Login page",
+      "description": "Email and password, with errors",
+      "status": "in_progress",
+      "owner": "codex-ana",
+      "createdBy": "codex-ana",
+      "dependsOn": [],
+      "areas": [
+        {
+          "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          "folder": "src/auth/"
+        }
+      ],
+      "note": null,
+      "createdAt": 1760995800000,
+      "updatedAt": 1760998800000
+    },
+    {
+      "id": 7,
+      "title": "Seed data",
+      "description": null,
+      "status": "in_progress",
+      "owner": "claude-nico-2",
+      "createdBy": "claude-nico",
+      "dependsOn": [
+        4
+      ],
+      "areas": [],
+      "note": "Waiting on the User type",
+      "createdAt": 1760996400000,
+      "updatedAt": 1760999820000
+    },
+    {
+      "id": 9,
+      "title": "Deploy config",
+      "description": null,
+      "status": "in_progress",
+      "owner": "codex-sam",
+      "createdBy": "codex-sam",
+      "dependsOn": [],
+      "areas": [],
+      "note": null,
+      "createdAt": 1760997000000,
+      "updatedAt": 1760999160000
+    },
+    {
+      "id": 10,
+      "title": "Settings page",
+      "description": null,
+      "status": "open",
+      "owner": null,
+      "createdBy": "claude-nico",
+      "dependsOn": [
+        4
+      ],
+      "areas": [],
+      "note": null,
+      "createdAt": 1760997600000,
+      "updatedAt": 1760997600000
+    },
+    {
+      "id": 11,
+      "title": "Empty states",
+      "description": null,
+      "status": "open",
+      "owner": null,
+      "createdBy": "codex-ana",
+      "dependsOn": [],
+      "areas": [],
+      "note": null,
+      "createdAt": 1760997900000,
+      "updatedAt": 1760997900000
+    },
+    {
+      "id": 2,
+      "title": "Project setup",
+      "description": null,
+      "status": "done",
+      "owner": "claude-nico",
+      "createdBy": "claude-nico",
+      "dependsOn": [],
+      "areas": [],
+      "note": null,
+      "createdAt": 1760992800000,
+      "updatedAt": 1760994900000
+    }
+  ],
+  "locks": [
+    {
+      "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "path": "src/auth/",
+      "kind": "folder",
+      "holder": "codex-ana",
+      "checkout": "c-ana-1",
+      "taskId": 4,
+      "reason": "Login page",
+      "acquiredAt": 1760998800000
+    },
+    {
+      "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "path": "src/auth/login.ts",
+      "kind": "file",
+      "holder": "codex-ana",
+      "checkout": "c-ana-1",
+      "taskId": 4,
+      "reason": null,
+      "acquiredAt": 1760998920000
+    },
+    {
+      "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "path": "src/app/page.tsx",
+      "kind": "file",
+      "holder": "claude-nico",
+      "checkout": "c-nico-1",
+      "taskId": 3,
+      "reason": null,
+      "acquiredAt": 1760998500000
+    },
+    {
+      "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "path": "src/app/layout.tsx",
+      "kind": "file",
+      "holder": "claude-nico",
+      "checkout": "c-nico-1",
+      "taskId": 3,
+      "reason": null,
+      "acquiredAt": 1760998560000
+    },
+    {
+      "repo": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "path": "infra/wrangler.toml",
+      "kind": "file",
+      "holder": "codex-sam",
+      "checkout": "c-sam-1",
+      "taskId": 9,
+      "reason": null,
+      "acquiredAt": 1760998200000
+    }
+  ],
+  "edges": [
+    {
+      "kind": "message",
+      "from": "claude-nico",
+      "to": "codex-ana",
+      "at": 1760999980000
+    },
+    {
+      "kind": "blocked",
+      "from": "claude-nico-2",
+      "to": "codex-ana",
+      "label": "login.ts",
+      "at": 1760999940000
+    },
+    {
+      "kind": "waiting",
+      "from": "codex-ana",
+      "to": "claude-nico-2",
+      "at": 1761000000000
+    },
+    {
+      "kind": "nearby",
+      "from": "claude-nico",
+      "to": "codex-ana",
+      "at": 1761000000000
+    },
+    {
+      "kind": "broadcast",
+      "from": "codex-sam",
+      "at": 1760999950000
+    }
+  ],
+  "activity": [
+    {
+      "seq": 118,
+      "ts": 1760999988000,
+      "type": "lock.taken",
+      "actor": "codex-ana",
+      "text": "codex-ana is editing src/auth/login.ts"
+    },
+    {
+      "seq": 117,
+      "ts": 1760999980000,
+      "type": "message",
+      "actor": "claude-nico",
+      "text": "claude-nico → codex-ana: Can you export the User type from src/types.ts?"
+    },
+    {
+      "seq": 116,
+      "ts": 1760999950000,
+      "type": "message",
+      "actor": "codex-sam",
+      "text": "codex-sam → everyone: Deploy preview is up on the feature branch."
+    },
+    {
+      "seq": 115,
+      "ts": 1760999940000,
+      "type": "lock.denied",
+      "actor": "claude-nico-2",
+      "text": "claude-nico-2 was blocked from src/auth/login.ts (held by codex-ana)"
+    },
+    {
+      "seq": 114,
+      "ts": 1760999760000,
+      "type": "push",
+      "actor": "claude-nico",
+      "text": "claude-nico pushed main (2 files)"
+    },
+    {
+      "seq": 113,
+      "ts": 1760998800000,
+      "type": "task.claimed",
+      "actor": "codex-ana",
+      "text": "codex-ana claimed #4 Login page"
+    }
+  ]
+}

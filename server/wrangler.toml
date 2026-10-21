@@ -1,0 +1,24 @@
+# Hivemind server. No secrets here: ADMIN_TOKEN and TOKEN_SECRET are set with `wrangler secret put`.
+name = "hivemind"
+main = "src/worker.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "../dashboard/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/hook", "/mcp", "/whoami", "/mode", "/unlock", "/health", "/admin/*", "/r/*/ws"]
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+fallthrough = true

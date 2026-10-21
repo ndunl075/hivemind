@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "types": ["node"]
+  },
+  "include": ["shared/**/*.ts", "cli/**/*.mjs", "cli/**/*.ts", "test/**/*.ts", "test/**/*.mjs", "*.config.ts"]
+}

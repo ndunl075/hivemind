@@ -15,7 +15,7 @@ The Wave 0 scaffold installs these and defines these scripts, so no worker touch
 | Package | Used by |
 |---|---|
 | `typescript`, `vitest`, `@types/node` | everyone |
-| `wrangler`, `@cloudflare/workers-types`, `@cloudflare/vitest-pool-workers` | W1, W4, W5, W7, W8 |
+| `wrangler`, `@cloudflare/workers-types`, `@cloudflare/vitest-plugin` | W1, W4, W5, W7, W8 |
 | `esbuild`, `happy-dom` (DOM for dashboard tests), `@playwright/test` | W3, W7 |
 | `@fontsource-variable/inter`, `@fontsource/geist-mono` (self-hosted fonts) | W3 |
 | `smol-toml` (a runtime dependency of the CLI) | W6 |
@@ -33,8 +33,8 @@ Scripts, defined in Wave 0:
 | `test:hook` | `cli/hook` |
 | `test:cli` | `cli/commands` |
 | `test:dashboard` | `dashboard/src` |
-| `test:e2e` | `test/e2e` |
-| `test:smoke` | `test/smoke` (manual) |
+| `test:e2e` | `test/e2e` (config `test/vitest.config.ts`) |
+| `test:smoke` | `test/smoke` (manual; same config) |
 | `build` | the dashboard into `dashboard/dist` |
 | `dev` | `wrangler dev` plus the dashboard in watch mode |
 | `deploy` | `build`, then `wrangler deploy -c server/wrangler.toml` |
@@ -43,7 +43,7 @@ Scripts, defined in Wave 0:
 
 ```text
 Repo: https://github.com/ndunl075/hivemind  (main at <main-sha>)
-Stack: server and dashboard in TypeScript (npm workspaces, Vitest, @cloudflare/vitest-pool-workers, esbuild, Wrangler);
+Stack: server and dashboard in TypeScript (one root package.json, Vitest 4, @cloudflare/vitest-plugin, esbuild, Wrangler);
 CLI and hook in plain ESM JavaScript with JSDoc types (checked by tsc), no build step.
 Read first: ARCHITECTURE.md (the design) and docs/parallel-sessions.md (rules for parallel sessions; follow them exactly).
 Work in your own worktree on branch w/<task>, then run `npm ci` there. Auto mode on.

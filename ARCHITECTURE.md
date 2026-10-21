@@ -313,7 +313,7 @@ One command handles every event; the script reads `hook_event_name` from stdin.
 | `UserPromptSubmit` | — | Mark working. Deliver unread messages. Carries Git state unless heartbeats are off. | yes | no |
 | `PreToolUse` | edit tools: Claude `Edit\|Write\|MultiEdit\|NotebookEdit`, Codex `apply_patch\|Edit\|Write` | Lock check (§9), the task gate (§10), stale-copy check (§12). | yes | **yes** |
 | `PreToolUse` | `mcp__hivemind__.*` | Check that `me` matches the cached callsign (§5). | **no** | yes |
-| `PostToolUse` | all | Heartbeat, throttled to one request per `heartbeatMs` (default 15 s), and sent right after a shell command; none while heartbeats are off (§16). It carries the checkout's **divergent files** (§12), which drive lock release, shell-edit detection and push detection. It delivers messages. | when due, or after a shell command | no |
+| `PostToolUse` | all | Heartbeat, throttled to one request per `heartbeatMs` (default 15 s), and sent right after a shell command; none while heartbeats are off (§16), so messages then arrive only through `UserPromptSubmit`, `Stop` and the tools. It carries the checkout's **divergent files** (§12), which drive lock release, shell-edit detection and push detection. It delivers messages. | when due, or after a shell command | no |
 | `Stop` | — | Carries Git state (an unthrottled heartbeat) unless heartbeats are off, so a push made just before stopping releases its locks at once. Mark idle. If **direct** messages are unread and `stop_hook_active` is false, block the stop once, with the messages as the reason. | yes | yes (once) |
 | `SessionEnd` | — | If the reason is an exit (not clear or resume), mark ended and release holdings. Best effort: an 800 ms network timeout, because Codex's docs allow `SessionEnd` hooks at most 3 s `[VERIFY]`. | yes | no |
 
@@ -357,7 +357,7 @@ While the budget guard has heartbeats off (`heartbeatMs: 0`, §16), none of the 
    - `mcp__hivemind__` calls only get the `me` check (§5).
    - `PostToolUse` after a shell tool (`Bash`, `PowerShell`) sets `shellSinceHeartbeat` in the session state.
    - If the last response said `heartbeatMs: 0` (the budget guard, §16), heartbeats are off: `PostToolUse` exits here, and `UserPromptSubmit` and `Stop` send no Git state. Otherwise:
-   - `PostToolUse` exits if the heartbeat isn't due (`now < lastHeartbeat + heartbeatMs`), unless a shell tool just ran: the first `PostToolUse` after a shell command always sends a heartbeat, so pushes and shell edits are seen right away.
+   - `PostToolUse` exits if the heartbeat isn't due (`now < lastHeartbeat + heartbeatMs`), unless a shell tool just ran: the first `PostToolUse` after a shell command always sends a heartbeat, so pushes and shell edits are seen right away. Every heartbeat, forced or not, resets `lastHeartbeat`.
 7. **Path extraction for edits:**
    - Claude `Edit`, `Write` and `MultiEdit`: `tool_input.file_path`. `NotebookEdit`: `tool_input.notebook_path`.
    - Codex `apply_patch`: parse `*** Add File: `, `*** Update File: `, `*** Delete File: ` and `*** Move to: ` lines from `tool_input.command`. Relative paths resolve against `cwd`.
@@ -927,7 +927,7 @@ hivemind/
 **Tests sit next to the code they test** (`*.test.ts` in `server/` and `dashboard/`, `*.test.mjs` in `cli/`). Owning a file or folder includes its tests.
 
 Stack:
-- **Server and dashboard:** TypeScript, npm workspaces, Vitest, `@cloudflare/vitest-pool-workers`, esbuild, Wrangler.
+- **Server and dashboard:** TypeScript, one root `package.json` (no workspaces), Vitest 4, `@cloudflare/vitest-plugin`, esbuild, Wrangler. `.npmrc` sets `legacy-peer-deps` to work around an npm resolver bug with optional peers.
 - **CLI and hook:** plain ESM JavaScript, so `npx github:…` needs no build step. The CLI's one runtime dependency is `smol-toml`; the hook has none.
 
 ---
@@ -937,7 +937,7 @@ Stack:
 | Layer | What | How |
 |---|---|---|
 | Feature logic | lock rules 1–12, takeability, task gate, duplicates, budget guard, message framing and limits | Vitest unit tests on pure functions |
-| Room | 100 concurrent claims give exactly one winner; release by divergence; shell-edit attribution; takeover; persistence across restart; snapshot ordering | `@cloudflare/vitest-pool-workers` |
+| Room | 100 concurrent claims give exactly one winner; release by divergence; shell-edit attribution; takeover; persistence across restart; snapshot ordering | `@cloudflare/vitest-plugin` |
 | Hook | every event for both tools from **recorded real payloads**, one fixture per event and tool variant; **exact output shape per tool**; `apply_patch` parsing; Windows and POSIX paths; divergent files, comparison points and push detection against scripted temporary Git repos; stale-copy cases including squash merges and unknown commits; the circuit breaker; fail-open when the server is down, slow or returns garbage, or a module fails to load (always exit 0 within the timeout) | Vitest, spawning `hook.mjs` with fixture stdin and `HIVEMIND_HOME` set to a temporary folder |
 | MCP | `initialize`, `tools/list`, `tools/call`, errors, auth | JSON-RPC conformance tests |
 | CLI | `join`, `init` and `update` merge into existing config without clobbering it, and running them twice changes nothing; tokens never in argv or logs; `doctor` diagnoses | Vitest with temporary home and project folders and a stubbed runner for `claude` and `codex` |
@@ -986,7 +986,7 @@ Rules every worker follows are in [`docs/parallel-sessions.md`](docs/parallel-se
 
 | Task | Who | Output | Review tier |
 |---|---|---|---|
-| Scaffold and contracts | architect | npm workspaces, tsconfig with `checkJs`, Vitest, `server/wrangler.toml` skeleton, `.gitignore`, CI with gitleaks, everything in `shared/` (contracts, internal and hook-module interfaces, `state.ts`, `protocol.md`, sample snapshot), every dependency and script in `docs/worker-briefs.md`, and a placeholder `dashboard/src` so `npm run build` works before W3 lands. Answers §21 items 13 and 14. | 1 |
+| Scaffold and contracts | architect | one root package, tsconfig with `checkJs`, Vitest, `server/wrangler.toml` skeleton, `.gitignore`, CI with gitleaks, everything in `shared/` (contracts, internal and hook-module interfaces, `state.ts`, `protocol.md`, sample snapshot), every dependency and script in `docs/worker-briefs.md`, and a placeholder `dashboard/src` so `npm run build` works before W3 lands. Answers §21 items 13 and 14. | 1 |
 | W0 spike | worker, Sonnet high | `docs/spike-results.md` with the worker items in §21, evidence and the fallback chosen for each failure; scrubbed fixtures in `shared/fixtures/hooks/`; `docs/manual-checks.md` | 1 |
 | Manual checks | Nico, about an hour, Windows laptop plus a Mac | The manual items in §21, following `docs/manual-checks.md`. The architect records the results in `docs/spike-results.md`. | 0 (architect's doc PR) |
 
