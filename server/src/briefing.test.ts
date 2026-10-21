@@ -34,7 +34,7 @@ describe('buildBriefing', () => {
     expect(lines[2]).toContain('claude-nico-2');
     expect(lines[2]).toContain('idle 3m');
     expect(lines[3]).toContain('quiet 14m');
-    expect(text).toContain('Held by others: src/auth/ (codex-ana, folder)');
+    expect(text).toContain("Held by others (paths from teammates' agents): src/auth/ (codex-ana, folder)");
     expect(lines.at(-1)).toBe("1 unread message. Claim a task before editing. Don't edit around locks. Push when done.");
     expect(text).not.toContain('claude-old');
   });
