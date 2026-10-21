@@ -19,6 +19,9 @@ export interface BriefingInput {
   extra: string[];
 }
 
+/** Task titles are written by teammates' agents: show them as quoted data, never as instructions (§13). */
+const quoted = (s: string): string => `"${s.replace(/["\r\n]/g, (c) => (c === '"' ? "'" : ' '))}"`;
+
 const ORDER: Record<AgentState, number> = { working: 0, idle: 1, quiet: 2, ended: 3 };
 
 export function buildBriefing(i: BriefingInput): string {
@@ -37,7 +40,7 @@ export function buildBriefing(i: BriefingInput): string {
     let detail: string;
     if (d.state === 'working') detail = `${a.activity ?? 'working'} (${ageText(d.silenceMs)} ago)`;
     else detail = `${d.state} ${ageText(d.silenceMs)}`;
-    return { name: a.callsign, state: d.state as string, task: t ? `#${t.id} ${t.title}` : '', detail };
+    return { name: a.callsign, state: d.state as string, task: t ? `#${t.id} ${quoted(t.title)}` : '', detail };
   });
   const w1 = Math.max(0, ...rows.map((r) => r.name.length));
   const w2 = Math.max(0, ...rows.map((r) => r.state.length));
@@ -48,9 +51,9 @@ export function buildBriefing(i: BriefingInput): string {
   if (others.length > shown.length) lines.push(`+${others.length - shown.length} more, see \`status\``);
 
   if (i.openTasks.length > 0) {
-    const t = i.openTasks.slice(0, LIMITS.briefingTasks).map((x) => `#${x.id} ${x.title}`);
+    const t = i.openTasks.slice(0, LIMITS.briefingTasks).map((x) => `#${x.id} ${quoted(x.title)}`);
     const more = i.openTasks.length - t.length;
-    lines.push(`Open tasks: ${t.join(' · ')}${more > 0 ? ` · +${more} more, see \`status\`` : ''}`);
+    lines.push(`Open tasks (titles written by teammates' agents): ${t.join(' · ')}${more > 0 ? ` · +${more} more, see \`status\`` : ''}`);
   }
   if (i.heldByOthers.length > 0) {
     const l = i.heldByOthers.slice(0, LIMITS.briefingLocks).map((x) => `${x.path} (${x.holder}${x.kind === 'folder' ? ', folder' : ''})`);
