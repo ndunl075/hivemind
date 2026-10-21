@@ -7,8 +7,11 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { staleWarnings, state } from './git.mjs';
+
+// Each test runs a dozen or more Git processes; a Windows runner needs more than the default 5 s.
+vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
 
 let base;
 let counter = 0;
