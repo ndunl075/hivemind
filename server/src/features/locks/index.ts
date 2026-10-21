@@ -30,9 +30,12 @@ export function normalizePath(path: string): string {
   return canonicalPath(path) ?? '';
 }
 
-export function normalizeFolder(path: string): string {
-  const p = normalizePath(path);
-  return p.endsWith('/') ? p : `${p}/`;
+/** A canonical folder ending in '/', or null for anything invalid, empty ('.'), escaping the repo, or inside .git. */
+export function normalizeFolder(path: string): string | null {
+  const p = canonicalPath(path);
+  if (!p) return null;
+  const folder = p.endsWith('/') ? p : `${p}/`;
+  return isGitPath(folder) ? null : folder;
 }
 
 export function lockKey(repo: RepoId, path: RepoPath): string {
@@ -190,7 +193,8 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
       const wanted = new Map<string, { repo: RepoId; folder: string }>();
       for (const f of folders) {
         const folder = normalizeFolder(f.folder);
-        if (folder === '/' || isGitPath(folder)) continue;
+        // Never reserve the whole repo by accident: any invalid folder refuses the whole request.
+        if (folder === null) return { granted: false, conflicts: [] };
         wanted.set(lockKey(f.repo, folder), { repo: f.repo, folder });
       }
       const conflicts: LockConflict[] = [];
@@ -203,7 +207,7 @@ export const createLocks: FeatureFactory<'locks'> = (ctx: RoomContext, features)
           }
         }
       }
-      if (conflicts.length > 0 || wanted.size === 0) return { granted: conflicts.length === 0, conflicts };
+      if (conflicts.length > 0 || wanted.size === 0) return { granted: false, conflicts };
       for (const [key, w] of wanted) {
         const existing = locks.get(key);
         save({

@@ -254,3 +254,21 @@ describe('13: waits', () => {
     expect(await p).toEqual({ event: 'task', key: 'task:7' });
   });
 });
+
+describe('round 2: invalid folders are never reserved', () => {
+  it('refuses ., .., absolute, escaping and .git folders instead of reserving the whole repo', async () => {
+    const room = 'bad-folders';
+    await hook(await agentToken(room, 'ana'), 'sa', { event: 'SessionStart' });
+    const out = await inRoom(room, (r) => {
+      const me = { callsign: 'claude-ana', person: 'ana', kind: 'claude' as const, repo: REPO, checkout: 'c' };
+      const results = ['.', '', '..', '../x/', '/abs/', 'a/../..', '.git/', 'C:/x/'].map((folder) => r.features.locks.reserve(me, [{ repo: REPO, folder }], null, null));
+      const mixed = r.features.locks.reserve(me, [{ repo: REPO, folder: 'ok/' }, { repo: REPO, folder: '..' }], null, null);
+      const good = r.features.locks.reserve(me, [{ repo: REPO, folder: './src/x/../auth' }], null, null);
+      return { results, mixed, good, held: r.features.locks.list().map((l) => l.path) };
+    });
+    for (const res of out.results) expect(res).toEqual({ granted: false, conflicts: [] });
+    expect(out.mixed.granted).toBe(false);
+    expect(out.good.granted).toBe(true);
+    expect(out.held).toEqual(['src/auth/']);
+  });
+});
