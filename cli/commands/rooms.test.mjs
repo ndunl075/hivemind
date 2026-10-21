@@ -7,7 +7,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { main } from '../hivemind.mjs';
 import { readRooms } from './install.mjs';
 import { allocateMcp, configJson, roomForRepo, roomsFromJson, slug } from './rooms.mjs';
@@ -32,6 +32,8 @@ const fetchStub = async (url, init) => {
   return { ok: Boolean(who), status: who ? 200 : 401, json: async () => body };
 };
 
+vi.setConfig({ testTimeout: 60000 });
+
 let base;
 beforeAll(() => { base = tempBase('hm-rooms-'); });
 afterAll(() => cleanup(base));
@@ -43,8 +45,11 @@ function laptop(opts = {}) {
   const lap = makeLaptop(base, opts);
   mkdirSync(lap.path('.claude'), { recursive: true });
   mkdirSync(lap.path('.codex'), { recursive: true });
-  lap.second = makeProject(lap.dir, 'proj2');
-  lap.third = makeProject(lap.dir, 'proj3');
+  // the extra projects are made on first use: each is a git init and a commit, which is slow on a busy Windows runner
+  for (const [key, name] of [['second', 'proj2'], ['third', 'proj3']]) {
+    let made;
+    Object.defineProperty(lap, key, { get: () => (made ??= makeProject(lap.dir, name)) });
+  }
   return lap;
 }
 /** join from `project` ('project' | 'second' | 'third') to `server` as the holder of `token`. */

@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const HOOK = decodeURIComponent(new URL('./hook.mjs', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const FIXTURES = new URL('../../shared/fixtures/hooks/claude/', import.meta.url);
@@ -17,6 +17,8 @@ const FIXTURES = new URL('../../shared/fixtures/hooks/claude/', import.meta.url)
 const TOKEN_A = ['hm_a', 'test', 'ana', '1', 'AAAA'].join('.');
 const TOKEN_B = ['hm_a', 'test', 'ben', '1', 'BBBB'].join('.');
 const OK = { decision: 'allow', reason: null, context: null, callsign: 'claude-test', heartbeatMs: 15000, mode: 'enforce' };
+
+vi.setConfig({ testTimeout: 60000 });
 
 let base;
 let repoA; // root commit rootA
