@@ -1,5 +1,5 @@
 /**
- * hivemind join / update / leave (ARCHITECTURE.md §17 steps 5 and "After the hackathon").
+ * hivemind join / update / leave (ARCHITECTURE.md §17 step 5 and "When you're done with a room").
  * @typedef {import('./context.mjs').Context} Context
  * @typedef {import('./install.mjs').Report} Report
  */

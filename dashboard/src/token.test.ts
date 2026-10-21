@@ -5,7 +5,7 @@ beforeEach(() => localStorage.clear());
 
 describe('viewer token', () => {
   it('reads the room from the path', () => {
-    expect(roomFromPath('/r/hackathon')).toBe('hackathon');
+    expect(roomFromPath('/r/my-team')).toBe('my-team');
     expect(roomFromPath('/r/a%20b/extra')).toBe('a b');
     expect(roomFromPath('/')).toBe('demo');
   });

@@ -35,7 +35,7 @@ Once per laptop, inside the project:
                                            in a terminal; or add --token-stdin and pipe it in)
   hivemind doctor                          check the setup and print the self-test prompt for each app
 
-During the event:
+While working:
   hivemind mode enforce|warn|off           change the room's enforcement
   hivemind unlock <path>                   emergency release of a file or folder
   hivemind unlock --agent <callsign>       emergency release of everything an agent holds

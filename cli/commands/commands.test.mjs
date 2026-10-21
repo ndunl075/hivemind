@@ -402,18 +402,18 @@ describe('no token in argv, logs or output', () => {
 describe('admin commands', () => {
   it('room create prints the dashboard link, once, and asks for the admin secret with hidden input', async () => {
     const lap = makeLaptop(base, { secrets: [ADMIN_SECRET] });
-    const r = await lap.run(main, ['room', 'create', 'hackathon', '--server', SERVER]);
+    const r = await lap.run(main, ['room', 'create', 'my-team', '--server', SERVER]);
     expect(r.code, r.err).toBe(0);
     expect(count(r.out, VIEWER_TOKEN)).toBe(1);
-    expect(r.out).toContain(`${SERVER}/r/hackathon#v=${VIEWER_TOKEN}`);
+    expect(r.out).toContain(`${SERVER}/r/my-team#v=${VIEWER_TOKEN}`);
     expect(r.out + r.err).not.toContain(ADMIN_SECRET);
     expect(lap.prompts.some((p) => /admin/i.test(p) && /hidden/i.test(p))).toBe(true);
-    expect(srv.requests).toEqual([{ method: 'POST', url: '/admin/rooms', auth: `Bearer ${ADMIN_SECRET}`, body: { room: 'hackathon' } }]);
+    expect(srv.requests).toEqual([{ method: 'POST', url: '/admin/rooms', auth: `Bearer ${ADMIN_SECRET}`, body: { room: 'my-team' } }]);
   });
 
   it('reads the admin secret from HIVEMIND_ADMIN_TOKEN without prompting', async () => {
     const lap = makeLaptop(base, { env: { HIVEMIND_ADMIN_TOKEN: ADMIN_SECRET, HIVEMIND_SERVER: SERVER } });
-    const r = await lap.run(main, ['invite', 'hackathon', 'ana']);
+    const r = await lap.run(main, ['invite', 'my-team', 'ana']);
     expect(r.code, r.err).toBe(0);
     expect(lap.prompts).toEqual([]);
     expect(srv.requests[0].auth).toBe(`Bearer ${ADMIN_SECRET}`);
@@ -421,47 +421,47 @@ describe('admin commands', () => {
 
   it('invite prints the agent token once and nothing else secret', async () => {
     const lap = makeLaptop(base, { secrets: [ADMIN_SECRET] });
-    const r = await lap.run(main, ['invite', 'hackathon', 'ana', '--server', SERVER]);
+    const r = await lap.run(main, ['invite', 'my-team', 'ana', '--server', SERVER]);
     expect(r.code, r.err).toBe(0);
     expect(count(r.out, AGENT_TOKEN)).toBe(1);
     expect(r.err).toBe('');
     expect(r.out + r.err).not.toContain(ADMIN_SECRET);
-    expect(srv.requests[0]).toMatchObject({ method: 'POST', url: '/admin/rooms/hackathon/invite', body: { person: 'ana' } });
+    expect(srv.requests[0]).toMatchObject({ method: 'POST', url: '/admin/rooms/my-team/invite', body: { person: 'ana' } });
   });
 
   it('rotate --viewer prints the new link once; rotate --agents prints no token', async () => {
     const lap = makeLaptop(base, { secrets: [ADMIN_SECRET, ADMIN_SECRET] });
-    const v = await lap.run(main, ['rotate', 'hackathon', '--viewer', '--server', SERVER]);
+    const v = await lap.run(main, ['rotate', 'my-team', '--viewer', '--server', SERVER]);
     expect(v.code, v.err).toBe(0);
     expect(count(v.out, VIEWER_TOKEN_2)).toBe(1);
-    expect(v.out).toContain(`${SERVER}/r/hackathon#v=${VIEWER_TOKEN_2}`);
-    const a = await lap.run(main, ['rotate', 'hackathon', '--agents', '--server', SERVER]);
+    expect(v.out).toContain(`${SERVER}/r/my-team#v=${VIEWER_TOKEN_2}`);
+    const a = await lap.run(main, ['rotate', 'my-team', '--agents', '--server', SERVER]);
     expect(a.code, a.err).toBe(0);
     expect(a.out).not.toMatch(/hm_[av]\./);
     expect(srv.requests.map((q) => q.body)).toEqual([{ rotate: 'viewer' }, { rotate: 'agents' }]);
-    expect((await lap.run(main, ['rotate', 'hackathon', '--server', SERVER])).err).toContain('exactly one of');
+    expect((await lap.run(main, ['rotate', 'my-team', '--server', SERVER])).err).toContain('exactly one of');
   });
 
   it('revoke and room delete', async () => {
     const lap = makeLaptop(base, { secrets: [ADMIN_SECRET, ADMIN_SECRET, ADMIN_SECRET] });
-    expect((await lap.run(main, ['revoke', 'hackathon', 'ben', '--server', SERVER])).code).toBe(0);
-    expect(srv.requests[0]).toMatchObject({ url: '/admin/rooms/hackathon/revoke', body: { person: 'ben' } });
+    expect((await lap.run(main, ['revoke', 'my-team', 'ben', '--server', SERVER])).code).toBe(0);
+    expect(srv.requests[0]).toMatchObject({ url: '/admin/rooms/my-team/revoke', body: { person: 'ben' } });
     // No terminal and no --yes: refuses before asking for anything.
-    const refused = await lap.run(main, ['room', 'delete', 'hackathon', '--server', SERVER]);
+    const refused = await lap.run(main, ['room', 'delete', 'my-team', '--server', SERVER]);
     expect(refused.code).toBe(1);
     expect(refused.err).toContain('--yes');
-    expect((await lap.run(main, ['room', 'delete', 'hackathon', '--yes', '--server', SERVER])).code).toBe(0);
-    expect(srv.requests.at(-1)).toMatchObject({ method: 'DELETE', url: '/admin/rooms/hackathon' });
+    expect((await lap.run(main, ['room', 'delete', 'my-team', '--yes', '--server', SERVER])).code).toBe(0);
+    expect(srv.requests.at(-1)).toMatchObject({ method: 'DELETE', url: '/admin/rooms/my-team' });
     // With a terminal, the room name must be typed.
     lap.answers.lines.push('wrong');
-    const wrong = await lap.run(main, ['room', 'delete', 'hackathon', '--server', SERVER], { interactive: true });
+    const wrong = await lap.run(main, ['room', 'delete', 'my-team', '--server', SERVER], { interactive: true });
     expect(wrong.code).toBe(1);
     expect(wrong.err).toContain('did not match');
   });
 
   it('shows the server error for a wrong admin secret without echoing it', async () => {
     const lap = makeLaptop(base, { secrets: ['wrong-secret-value'] });
-    const r = await lap.run(main, ['invite', 'hackathon', 'ana', '--server', SERVER]);
+    const r = await lap.run(main, ['invite', 'my-team', 'ana', '--server', SERVER]);
     expect(r.code).toBe(1);
     expect(r.err).toContain('invalid admin token');
     expect(r.err).not.toContain('wrong-secret-value');

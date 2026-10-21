@@ -14,7 +14,7 @@ describe('buildBriefing', () => {
   const now = 1_000_000 + 12_000;
   it('lists other agents, working first, and ignores ended ones', () => {
     const text = buildBriefing({
-      room: 'hackathon', mode: 'enforce', you: 'claude-nico', now,
+      room: 'my-team', mode: 'enforce', you: 'claude-nico', now,
       agents: [
         agent('claude-nico'),
         agent('codex-sam', { lastEvent: now - 14 * 60_000 }),
@@ -28,7 +28,7 @@ describe('buildBriefing', () => {
       unread: 1, extra: [],
     });
     const lines = text.split('\n');
-    expect(lines[0]).toBe('[Hivemind] You are claude-nico. Room "hackathon", mode: enforce. 3 other agents.');
+    expect(lines[0]).toBe('[Hivemind] You are claude-nico. Room "my-team", mode: enforce. 3 other agents.');
     expect(lines[1]).toContain('codex-ana');
     expect(lines[1]).toContain('"Edit src/auth/login.ts" (12s ago)');
     expect(lines[2]).toContain('claude-nico-2');
