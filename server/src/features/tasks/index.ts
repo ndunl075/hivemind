@@ -63,6 +63,11 @@ export interface TaskOps {
   add(actor: Actor, specs: NewTask[], options: { force: boolean; repo?: string }): AddOutcome;
   claim(actor: Actor, id: number, options: { take?: boolean; reason?: string }): ClaimResult;
   update(actor: Actor, id: number, status: TaskStatus, note?: string): TaskView;
+  /**
+   * §6.2 Stop: the one-time reminder for an agent that stops while it owns an in-progress task, or null (no such task,
+   * or already reminded for it). Calling it records the reminder, so call it only when the Stop will really be blocked.
+   */
+  stopReminder(callsign: Callsign): string | null;
 }
 
 export type FullTasks = TasksApi & TaskOps & BriefingContributor;
@@ -166,6 +171,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
     for (const t of closed.slice(0, Math.max(0, closed.length - KEEP_CLOSED))) {
       tasks.delete(t.id);
       ctx.sql.exec('DELETE FROM tasks WHERE id = ?', t.id).toArray();
+      ctx.sql.exec('DELETE FROM meta WHERE key = ?', `stop_reminded:${t.id}`).toArray();
     }
   };
 
@@ -363,6 +369,18 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
         data: { id, status }, wake: [`task:${id}`],
       });
       return clone(t);
+    },
+
+    stopReminder(callsign) {
+      const t = inProgressFor(callsign);
+      if (!t) return null;
+      const key = `stop_reminded:${t.id}`;
+      const seen = ctx.sql.exec('SELECT value FROM meta WHERE key = ?', key).toArray()[0]?.value;
+      if (seen === callsign) return null;
+      ctx.sql.exec('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', key, callsign).toArray();
+      return `[Hivemind] You still own task #${t.id}, in progress (title written by a teammate's agent): ${quoted(cleanLine(t.title, 80))}. `
+        + 'Before you stop, update it with `task_update`: done if the work is finished or already exists, dropped with a short note if it is not needed, '
+        + 'or keep working. If you have unpushed changes, push them so your locks release. This reminder appears once for this task.';
     },
 
     briefingLines(actor: Actor): string[] {

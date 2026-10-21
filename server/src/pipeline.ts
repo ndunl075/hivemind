@@ -9,6 +9,7 @@ import {
   type Actor, type AgentRecord, type BriefingContributor, type HookRequest, type HookResponse, type Millis,
 } from '../../shared/contracts';
 import { buildBriefing } from './briefing';
+import type { FullTasks } from './features/tasks';
 import { denialText } from './features/locks/denial';
 import { RoomFullError } from './agents';
 import { actorOf, HttpError, type RoomServices } from './services';
@@ -216,6 +217,15 @@ export class Pipeline {
           if (msgs.length > 0) {
             decision = 'block';
             call.denied = features.messages.format(msgs, now);
+          }
+        }
+        // One block per Stop: unread direct messages come first. The task reminder is once per task (recorded by the
+        // board), never in mode off, never while stop_hook_active, and not while the budget guard has heartbeats off.
+        if (decision !== 'block' && req.stopActive !== true && ctx.mode() !== 'off' && this.svc.heartbeatMs() > 0) {
+          const reminder = (features.tasks as FullTasks).stopReminder(agent.callsign);
+          if (reminder) {
+            decision = 'block';
+            call.denied = reminder;
           }
         }
         break;
