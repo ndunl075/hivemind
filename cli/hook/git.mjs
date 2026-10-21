@@ -62,7 +62,7 @@ export function repoNameOf(url) {
   const trimmed = text.replace(/[\\/]+$/, '');
   if (/^[a-z][a-z0-9+.-]*:\/\/[^/\\]*$/i.test(trimmed)) return null; // host (and port) only: no repository in it
   const parts = trimmed.split(separators).filter(Boolean);
-  if (parts.length > 1 && parts[parts.length - 1].toLowerCase() === '.git') parts.pop(); // a work tree's .git directory
+  if (parts.length > 1 && (parts[parts.length - 1] ?? '').toLowerCase() === '.git') parts.pop(); // a work tree's .git directory
   const last = (parts.pop() ?? '').replace(/\.git$/i, '');
   return last ? last.slice(0, 200) : null;
 }
