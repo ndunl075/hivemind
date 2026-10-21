@@ -71,9 +71,10 @@ Task: answer every §21 item whose "Who" is W0, with evidence, and record the fa
 - Spike scripts, hooks and servers stay in that throwaway folder and are never committed.
 - Record the stdin payload of every hook event in §6.2 from both tools as shared/fixtures/hooks/<tool>/<file>.json,
   where <file> is <event>, <event>.<tool_name> for tool events (MCP tools as <event>.mcp__hivemind__status), or
-  SessionEnd.<reason>. Scrub each fixture: replace usernames, home paths, hostnames, emails, session ids and transcript
+  SessionEnd.<reason>. Also record the output samples you tested as shared/fixtures/hooks/<tool>/output/<case>.json,
+  each marked accepted or rejected by the tool. Events that need an interactive session go into docs/manual-checks.md. Scrub each fixture: replace usernames, home paths, hostnames, emails, session ids and transcript
   paths with placeholders; replace prompt text and file contents with short placeholders; keep the structure exact.
-- Write docs/manual-checks.md: step-by-step instructions for every §21 item whose "Who" is Nico, including the full
+- Write docs/manual-checks.md: step-by-step instructions for every §21 item (or part of one) assigned to Nico, including the full
   text of any throwaway hook script or config needed (inline, since nothing else is committed), and what to record.
 - Note the exact claude and codex versions.
 You own: docs/spike-results.md, docs/manual-checks.md, shared/fixtures/hooks/**, docs/evidence/spike.md.
@@ -96,7 +97,8 @@ Task: build the server half of the walking skeleton (ARCHITECTURE.md §20.3 Wave
   upgrade with the viewer token as a subprotocol.
 - server/src/room.ts: §8.2 completely: schema in code, memory load, atomic mutations, memory-first writes, the
   WebSocket plumbing (snapshot on connect and on change, debounced, pulses) calling SnapshotApi, the wait registry,
-  limits, the budget guard (§16), room modes and emergency unlock.
+  limits, the budget guard (§16) including its midnight restore, room modes, emergency unlock, and per-repo project
+  settings received on /hook (stored in meta as settings:<repo>, read by other features through the interfaces).
 - server/src/pipeline.ts: the hook and tool pipeline with extension points.
 - Basic implementations behind every interface in shared/contracts.ts, each in its feature folder:
   - locks: §9 rules 1–3, 6, 7, 8 and 11, plus modes;
@@ -118,7 +120,8 @@ Done (npm run test:workers):
 - the budget guard thresholds, including the switch to warn at 95%;
 - wait resolves on notify() and times out at 45 s (fake timers);
 - a viewer receives a snapshot on connect and after a change.
-`npx wrangler deploy --dry-run -c server/wrangler.toml` succeeds (the architect does the real deploy after merging).
+After `npm run build` (the scaffold provides a placeholder dashboard), `npx wrangler deploy --dry-run -c server/wrangler.toml`
+succeeds. The architect does the real deploy after merging.
 ```
 
 ## W2: hook-core (Wave 1)
@@ -128,24 +131,29 @@ Done (npm run test:workers):
 Model: Sonnet, high effort (permissions, fail-open).
 <common block>, task = hook-core
 Task: build cli/hook/hook.mjs and cli/hook/claude.mjs per ARCHITECTURE.md §6.2–§6.4:
-- every event in §6.2 for Claude Code, with exact output shapes from shared/fixtures/hooks/claude/*;
+- every event in §6.2 for Claude Code, with exact output shapes from shared/fixtures/hooks/claude/output/* and
+  docs/spike-results.md;
 - the local me check;
 - dynamic loading of modules inside the top-level try;
 - HIVEMIND_HOME;
 - settings from .hivemind/project.json;
 - the SessionStart baseline and shellSinceHeartbeat;
-- heartbeat throttling, the circuit breaker, the outage notice and hook.log;
+- heartbeat throttling (with the forced heartbeat after a shell command and Git state on UserPromptSubmit and Stop),
+  the circuit breaker, the outage notice and hook.log;
+- calls into the git.mjs interface for push detection (sent as git.pushed) and the stale-copy check, which W5
+  implements later behind the same interface;
 - GIT_OPTIONAL_LOCKS=0 on every Git call.
 Also build basic cli/hook/git.mjs (repo identity; divergent files from `git status` only) and a cli/hook/codex.mjs stub,
 both implementing shared/hook-modules.d.ts.
 You own (this wave only): cli/hook/**, docs/evidence/hook-core.md.
 Stay out of: server/**, dashboard/**, cli/hivemind.mjs, cli/commands/**, shared/**, test/**.
-Done (npm run test:hook, using a fake server and HIVEMIND_HOME in a temporary folder):
+Done (npm run test:hook, using a fake server on an ephemeral port and HIVEMIND_HOME in a temporary folder):
 - exact Claude output for every fixture;
 - the me check denies a wrong callsign without any network call;
 - server down, slow or returning garbage, or a module that fails to load → exit 0 within the timeout;
 - the circuit breaker opens after 3 failures and skips the network for 60 s;
-- the outage notice and outageMs reporting;
+- the outage notice (once per outage) and outageMs reporting;
+- a stubbed git.mjs returning a push and a stale copy produces git.pushed and the warning text;
 - an unmapped repo or the off file → exit 0 with no output and no network.
 The first real-session check (a real `claude -p` blocked by the deployed skeleton) is done by the architect after W1 and
 W2 merge.
@@ -168,7 +176,7 @@ Task: build dashboard/ per ARCHITECTURE.md §14:
 Render all agent-supplied text with textContent. Build into dashboard/dist (npm run build). Isolate the data source in
 dashboard/src/live/: for now it reads shared/fixtures/snapshot.json and a fake pulse stream in dashboard/src/live/fake.ts.
 W7 replaces it with the live socket later.
-You own: dashboard/** (except dashboard/dist, which is gitignored), docs/evidence/dashboard.md,
+You own (this wave only): dashboard/** (except dashboard/dist, which is gitignored), docs/evidence/dashboard.md,
 docs/evidence/dashboard/*.png.
 Stay out of: server/**, cli/**, shared/**, assets/**.
 Port: 5173 for the dev server.
@@ -242,7 +250,7 @@ Model: Sonnet, high effort (credentials, config files).
 <common block>, task = codex-and-install
 Task:
 - cli/hook/codex.mjs: Codex payload parsing (apply_patch paths) and output builders with the exact Codex shapes from
-  shared/fixtures/hooks/codex/*. Codex ignores a hook whose output has unknown fields, so test exact shapes. Keep the
+  shared/fixtures/hooks/codex/output/* and docs/spike-results.md. Codex ignores a hook whose output has unknown fields, so test exact shapes. Keep the
   shared/hook-modules.d.ts interface.
 - cli/hivemind.mjs and cli/commands/: every command in ARCHITECTURE.md §17: room create/delete, invite, revoke,
   rotate, init, join, doctor (with the per-app self-test prompt), mode, unlock, off/on, update, leave.
@@ -252,7 +260,7 @@ Task:
   - Copy cli/hook/ to $HIVEMIND_HOME/hook/. Record the absolute node path; write command and commandWindows for Codex.
   - Register the Claude MCP server with `claude mcp add-json --scope user` using headersHelper.
   - Hidden input for the agent token and the admin secret (or HIVEMIND_ADMIN_TOKEN); owner-only file permissions.
-  - A token appears on screen only once, when room create or invite issues it, and never in argv or logs.
+  - A token appears on screen only once, when room create, invite or rotate issues it, and never in argv or logs.
 You own: cli/hook/codex.mjs, cli/hivemind.mjs, cli/commands/**, docs/evidence/codex-and-install.md.
 Stay out of: every other path.
 Port: 8790 for any fake server in tests.
@@ -263,7 +271,7 @@ Done:
   - running join twice changes nothing;
   - existing hooks and MCP servers survive;
   - leave removes only what join added;
-  - no token appears in any argv or log, and only once in stdout for room create and invite.
+  - no token appears in any argv or log, and only once in stdout for room create, invite and rotate.
 - npm run test:hook passes for every codex fixture.
 ```
 
@@ -307,7 +315,8 @@ Task:
 - File GitHub issues for anything broken outside test/. Don't fix it.
 You own: test/**, docs/evidence/e2e-and-hardening.md.
 Stay out of: everything else.
-Locks: "real-agents" for the smoke run.
+Locks: "real-agents" for the smoke run, and "user-config" if Codex records the throwaway project as trusted
+(back up ~/.codex/config.toml first and restore it).
 Done:
 - npm run test:e2e passes locally and in CI.
 - npm run test:smoke passes once, recorded in the evidence file.

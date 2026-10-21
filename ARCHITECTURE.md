@@ -60,7 +60,7 @@ It is **agent-only** `[DECIDED]`. People keep prompting Claude Code and Codex in
 1. **Enforce with hooks, inform with tools.** Agents forget to call tools, but hooks run every time. Anything that must happen (registration, locks, message delivery) is driven by hooks. Tools are for things an agent chooses to do.
 2. **Fail open, visibly.** If Hivemind is down, slow or misconfigured, agents keep working as they would without it. Hivemind is never the reason an agent is stuck. But a failure is never silent: the agent is told coordination is paused (§15), and the dashboard shows who isn't covered.
 3. **One room, one thread, one truth.** Each room is a single-threaded Cloudflare Durable Object. Every claim and lock is decided there one request at a time, so races can't happen.
-4. **Silence is not absence.** An agent that hasn't been heard from may be running a long build, or its person may be thinking. Silence never takes anything away from an agent; after 15 minutes its holdings become *takeable*, with notice (§9, §10). Only after 12 hours of silence is an agent considered ended and its holdings released.
+4. **Silence is not absence.** An agent that hasn't been heard from may be running a long build, or its person may be thinking. After 15 minutes of silence its holdings become *takeable* by another agent, with notice (§9, §10), but nothing is released automatically until 12 hours of silence, when the agent is considered ended.
 5. **When blocked, say exactly what to do next.** Every denial names who holds the thing, why, and the agent's options.
 6. **Escape hatches exist.** A team can switch enforcement to warnings or off in seconds (§17).
 7. **Stay inside the free tier** (§16).
@@ -298,7 +298,7 @@ Why it's laid out this way:
 - **Hooks are registered at user level, with absolute paths.** `join` records the absolute path of the `node` that ran it, so GUI-launched apps don't depend on `PATH` (a macOS app opened from the Dock often can't see nvm or fnm). Every clone, branch and worktree is covered, including branches created before Hivemind was set up. Project files never change hook definitions, so Codex never asks for re-approval because a teammate merged something. Codex's docs say it records hook trust against a hash of the hook definition and skips changed hooks until they're approved again `[VERIFY]`.
 - **The hook script ships with Hivemind, not with the project.** A pull request to a project repo can't change code that runs on every teammate's laptop.
 - **Repos are mapped to the room by root commit.** `join` runs inside the project and records its root commit. On a laptop where the current repo isn't mapped, the hook exits immediately and does nothing.
-- **Tokens never appear in command lines, shell history or project files.** Claude Code gets the token through `headersHelper`. Codex gets a static header in its user-level config. `[VERIFY]` that Codex accepts a static `Authorization` in `http_headers`. If not, fall back to `bearer_token_env_var` with a user-level environment variable, and document how to set it so the Codex app can see it on each OS.
+- **Tokens never appear in command lines, shell history or project files.** Claude Code gets the token through `headersHelper` `[VERIFY]` (§21 item 8). Codex gets a static header in its user-level config. `[VERIFY]` that Codex accepts a static `Authorization` in `http_headers`. If not, fall back to `bearer_token_env_var` with a user-level environment variable, and document how to set it so the Codex app can see it on each OS.
 - **Hivemind's tools don't prompt.** Without the Claude allow rule and the Codex approval mode, every `status` or `post` would wait for a person to click approve. `[VERIFY]` the exact allow-rule syntax `mcp__hivemind`.
 - **One room per laptop at a time** `[DECIDED]`. Fine for a hackathon.
 - **`HIVEMIND_HOME` overrides `~/.hivemind`** for the hook and the CLI. Tests and smoke runs point it at a temporary folder, together with project-level hook registration in a throwaway project, so they never touch a real laptop's setup.
@@ -310,11 +310,11 @@ One command handles every event; the script reads `hook_event_name` from stdin.
 | Event | Matcher | What Hivemind does | Network | Can block? |
 |---|---|---|---|---|
 | `SessionStart` | all | Register the session, assign a callsign, return the **briefing** (§6.6) as `additionalContext`. | yes | no |
-| `UserPromptSubmit` | — | Mark working. Deliver unread messages. | yes | no |
+| `UserPromptSubmit` | — | Mark working. Deliver unread messages. Carries Git state. | yes | no |
 | `PreToolUse` | edit tools: Claude `Edit\|Write\|MultiEdit\|NotebookEdit`, Codex `apply_patch\|Edit\|Write` | Lock check (§9), the task gate (§10), stale-copy check (§12). | yes | **yes** |
 | `PreToolUse` | `mcp__hivemind__.*` | Check that `me` matches the cached callsign (§5). | **no** | yes |
 | `PostToolUse` | all | Heartbeat, throttled to one request per `heartbeatMs` (default 15 s). It carries the checkout's **divergent files** (§12), which drive lock release, shell-edit detection and push detection. It delivers messages. | when due | no |
-| `Stop` | — | Mark idle. If **direct** messages are unread and `stop_hook_active` is false, block the stop once, with the messages as the reason. | yes | yes (once) |
+| `Stop` | — | Always carries Git state (an unthrottled heartbeat), so a push made just before stopping releases its locks at once. Mark idle. If **direct** messages are unread and `stop_hook_active` is false, block the stop once, with the messages as the reason. | yes | yes (once) |
 | `SessionEnd` | — | If the reason is an exit (not clear or resume), mark ended and release holdings. Best effort: an 800 ms network timeout, because Codex's docs allow `SessionEnd` hooks at most 3 s `[VERIFY]`. | yes | no |
 
 Both tools use nearly identical hook contracts: JSON on stdin with `session_id`, `cwd`, `tool_name` and `tool_input`; `hookSpecificOutput.permissionDecision: "deny"` with a reason in `PreToolUse`; `hookSpecificOutput.additionalContext`; and `decision: "block"` on `Stop`. **Output must exactly match each tool's schema.** Codex treats unknown output fields as a failed hook and lets the tool call continue, which would silently turn a deny into an allow. So `hook.mjs` builds output per tool, and tests assert the exact shape for each (§19). Every field is `[VERIFY]` against recorded payloads (§21).
@@ -354,17 +354,17 @@ The `command` plus `args` form is expected to run without a shell, so it behaves
 6. **Local fast paths, no network:**
    - `mcp__hivemind__` calls only get the `me` check (§5).
    - `PostToolUse` after a shell tool (`Bash`, `PowerShell`) sets `shellSinceHeartbeat` in the session state.
-   - `PostToolUse` then exits if the heartbeat isn't due (`now < lastHeartbeat + heartbeatMs`).
+   - `PostToolUse` then exits if the heartbeat isn't due (`now < lastHeartbeat + heartbeatMs`), unless a shell tool just ran: the first `PostToolUse` after a shell command always sends a heartbeat, so pushes and shell edits are seen right away.
 7. **Path extraction for edits:**
    - Claude `Edit`, `Write` and `MultiEdit`: `tool_input.file_path`. `NotebookEdit`: `tool_input.notebook_path`.
    - Codex `apply_patch`: parse `*** Add File: `, `*** Update File: `, `*** Delete File: ` and `*** Move to: ` lines from `tool_input.command`. Relative paths resolve against `cwd`.
 8. **Normalization:** convert to repo-relative POSIX paths. Drop paths outside the checkout and anything under `.git/`.
-9. **Git state** (on `SessionStart` and heartbeats only): divergent files, upstream position and pushed files are computed locally (§12). On `SessionStart`, the divergent files are saved as the session's **baseline**: changes that existed before this agent started are never attributed to it (§9 rule 4).
+9. **Git state** (on `SessionStart`, `UserPromptSubmit`, `Stop` and heartbeats): divergent files, upstream position and pushed files are computed locally (§12). On `SessionStart`, the divergent files are saved as the session's **baseline**: changes that existed before this agent started are never attributed to it (§9 rule 4).
 10. **Settings:** the hook reads `.hivemind/project.json` from the checkout, if present, and sends it on `SessionStart` and whenever its hash changes. The server keeps the latest settings per repo in `meta`.
 11. Send **one** request to `POST /hook` (§6.4), with a network timeout of 1,500 ms (800 ms for `SessionEnd`).
 12. **Stale-copy check** (on edits, after the server answers): for each `lastPush` returned, compare the local copy against the pushed version (§12) and compose a warning. A failure in this step drops only the warning. It never changes the lock decision.
 13. Build output in the exact schema of the calling tool and print it.
-14. **On any error** (network, timeout, bad JSON, Git failure, a module that won't load): exit 0, increment the consecutive-failure counter, and append one line to `$HIVEMIND_HOME/hook.log`. When the counter reaches 3, the circuit breaker opens, and the hook's next output (built locally) tells the agent: `[Hivemind] Can't reach the server (3 failed attempts). Coordination is paused and edits aren't being checked. Retrying every minute.` The first success afterwards resets the counter and reports the outage's length (`outageMs`), which the dashboard shows.
+14. **On any error** (network, timeout, bad JSON, Git failure, a module that won't load): exit 0, increment the consecutive-failure counter, and append one line to `$HIVEMIND_HOME/hook.log`. When the counter reaches 3, the circuit breaker opens, and the hook's next output (built locally, once per outage, not on every call) tells the agent: `[Hivemind] Can't reach the server (3 failed attempts). Coordination is paused and edits aren't being checked. Retrying every minute.` The first success afterwards resets the counter and reports the outage's length (`outageMs`), which the dashboard shows.
 
 **`hook.log` format:** JSON lines `{ "ts", "event", "tool", "ok", "ms", "error" }`. It never contains tokens or message text. It rotates at 1 MB.
 
@@ -387,7 +387,7 @@ The `command` plus `args` form is expected to run without a shell, so it behaves
   "branch": "main",
   "head": "a1b2c3d",
   "paths": ["src/auth/login.ts"],   // edits only, repo-relative
-  "git": null,                      // SessionStart and heartbeats only:
+  "git": null,                      // SessionStart, UserPromptSubmit, Stop and heartbeats:
                                     // { "divergent": [...], "baseline": [...] (SessionStart only),
                                     //   "upstream": "origin/main" | null, "truncated": false,
                                     //   "pushed": null | { "branch": "main", "sha": "…",
@@ -462,7 +462,7 @@ The server name is `hivemind`, so tools appear as `mcp__hivemind__<name>`. Every
 | `task_claim` | `me`, `id`, `take?`, `reason?` | `ok` (and reserves the task's `areas`), `taken` (owner, state, whether takeable), or `waiting` (unfinished dependencies). `take: true` with a reason claims a takeable owner's task and notifies them. |
 | `task_update` | `me`, `id`, `status: in_progress \| open \| done \| dropped`, `note?` | Owner only, except that a task's creator may drop it while it's open. `done` and `dropped` release the task's folder reservations. `open` gives it back. |
 | `reserve` | `me`, `folders[]`, `reason?` | **All or nothing:** every folder granted, or nothing plus the conflicts. |
-| `release` | `me`, `paths?` | Releases the given folders or files, or all your holdings if omitted. A file you still have unpushed changes to gets locked again at your next heartbeat. |
+| `release` | `me`, `paths?` | Releases the given folders or files, or all your holdings if omitted. The answer warns about any released file you still have unpushed changes to, since another agent could now edit it. |
 | `take` | `me`, `path`, `reason` | Takes a file or folder lock from a takeable holder (§5) and notifies them. |
 | `post` | `me`, `to` (callsign or `"all"`), `text` (≤ 2,000 chars) | Message id. Messages to an ended agent bounce back. |
 | `inbox` | `me`, `recent?` | Unread messages (marked delivered). `recent: true` also returns the last 20, delivered or not. |
@@ -645,7 +645,7 @@ Hivemind works alongside Git and GitHub with any workflow: a shared branch, a br
   - The Room checks only the generation and its revoke list (`meta`). Agent and viewer tokens have **separate generations**.
   - Revoking one person needs no stored token. Rotating agent tokens (bumping `agent_generation`) invalidates every agent token, so everyone must be invited again and run `hivemind join` again. Rotating the viewer token (bumping `viewer_generation`) only invalidates the dashboard link.
 - **Per person.** Each person has their own agent token, so the server always knows which person an agent belongs to, and the `me` a request names must belong to that person (§5).
-- **On laptops,** the token lives only in `~/.hivemind/config.json` (owner-only permissions where the OS supports it) and in Codex's user-level config. Claude Code reads it through `headersHelper`. `hivemind join` asks for it with hidden input. It never appears in command-line arguments, shell history, logs or project files. The only time a token is shown is once, on the admin's screen, when `invite` or `room create` issues it.
+- **On laptops,** the token lives only in `~/.hivemind/config.json` (owner-only permissions where the OS supports it) and in Codex's user-level config. Claude Code reads it through `headersHelper`. `hivemind join` asks for it with hidden input. It never appears in command-line arguments, shell history, logs or project files. The only time a token is shown is once, on the admin's screen, when `invite`, `room create` or `rotate` issues it.
 - **The admin secret** is entered with hidden input, or read from the `HIVEMIND_ADMIN_TOKEN` environment variable, never from a command-line argument.
 - **Local development** uses `.dev.vars`, which is gitignored.
 
@@ -672,7 +672,7 @@ The residual risk is accepted for a team of people who trust each other's agents
 
 ### Supply chain
 
-Code that runs on teammates' laptops comes only from the Hivemind CLI package, never from project repos (§6.1). Every PR to this repo gets the independent review in §20.4 before it merges, and `cli/**` changes are Tier 2. Teammates run a pinned release (`npx github:ndunl075/hivemind#<tag>`), not whatever is on `main`. CI runs a secret scanner (gitleaks) on every push. GitHub push protection should be on, but it doesn't know `hm_` tokens, so the scanner config adds a pattern for them, with an allowlist for the fake test-token prefix `hm_a.test.`.
+Code that runs on teammates' laptops comes only from the Hivemind CLI package, never from project repos (§6.1). Every PR to this repo gets the independent review in §20.4 before it merges, and `cli/**` changes are Tier 2. Teammates run a pinned release (`npx github:ndunl075/hivemind#<tag>`), not whatever is on `main`. CI runs a secret scanner (gitleaks) on every push. GitHub push protection should be on, but it doesn't know `hm_` tokens, so the scanner config adds a pattern for them, with an allowlist for the fake test-token prefixes `hm_a.test.` and `hm_v.test.`.
 
 ### Transport and limits
 
@@ -805,7 +805,7 @@ At 16 agents and 3 edits a minute, the same rates come to about 88,000. That's w
 **Budget guard** `[DECIDED]`: the Room counts requests per UTC day in memory, flushed to `meta` once a minute, and raises `heartbeatMs` as the count climbs:
 - 30 s at 60% of the cap,
 - 60 s at 80%,
-- at 95%, heartbeats stop and the room switches itself to `warn` mode, announced to every agent. Without heartbeats, locks can't be released by pushing, so denials would go stale; `warn` turns them into heads-ups until the cap resets.
+- at 95%, the server returns `heartbeatMs: 0`, which tells hooks to stop heartbeats, and the room switches itself to `warn` mode, announced to every agent. Without heartbeats, locks can't be released by pushing, so denials would go stale; `warn` turns them into heads-ups. The switch is recorded in `meta` as `mode_by_guard`. At the first request after 00:00 UTC, if the mode is still the guard's `warn`, the previous mode is restored; a mode a teammate set in the meantime is left alone.
 
 The dashboard footer shows the day's usage. If a team outgrows the free plan, Workers Paid ($5 a month) lifts these limits. It's mentioned only as an option.
 
@@ -874,7 +874,7 @@ Admin commands ask for the admin secret with hidden input, or read `HIVEMIND_ADM
 | `hivemind off` / `hivemind on` | Pause or resume Hivemind on this laptop only. |
 | `hivemind update` | Refresh the hook folder and registrations. Codex users approve the hooks again. |
 | `hivemind revoke hackathon <person>` | Admin: revoke one person's token. |
-| `hivemind rotate hackathon --agents` or `--viewer` | Admin: invalidate all agent tokens (everyone is invited and runs `join` again) or only the dashboard link. |
+| `hivemind rotate hackathon --agents` or `--viewer` | Admin: invalidate all agent tokens (everyone is invited and runs `join` again) or only the dashboard link, in which case the new link is printed once. |
 
 **After the hackathon:** `hivemind leave` removes this laptop's config and registrations. `hivemind room delete hackathon` deletes the room's data.
 
@@ -948,7 +948,7 @@ Stack:
 - Room, MCP, dashboard and CLI tests on Ubuntu;
 - hook and CLI tests on Ubuntu and Windows;
 - the e2e suite on Ubuntu;
-- gitleaks, with the `hm_` pattern and the test-token allowlist (§13).
+- gitleaks, with the `hm_` pattern and the test-token allowlists (§13).
 
 **Deploys are manual** (`npm run deploy`) `[DECIDED]`, so no Cloudflare token is ever stored in GitHub.
 
@@ -972,7 +972,7 @@ Rules every worker follows are in [`docs/parallel-sessions.md`](docs/parallel-se
 ### 20.2 Collision rules
 
 - No two workers own the same file. Each brief lists exactly what it owns, including its own `docs/evidence/<task>.md`. Owning a file includes its colocated tests (§18).
-- **Architect-only hotspots:** everything in `shared/`, root `package.json` and lockfile, `.github/`, `docs/parallel-sessions.md`, `docs/worker-briefs.md`, and after Wave 1 also `server/src/worker.ts`, `server/src/room.ts`, `server/src/pipeline.ts`, `server/wrangler.toml`, `cli/hook/hook.mjs` and `cli/hook/claude.mjs`. A worker that needs a change there asks for it under **Requests for the architect** in its PR description.
+- **Architect-only hotspots:** everything in `shared/` (except `shared/fixtures/hooks/`, which W0 writes), root `package.json` and lockfile, `.github/`, `docs/parallel-sessions.md`, `docs/worker-briefs.md`, and after Wave 1 also `server/src/worker.ts`, `server/src/room.ts`, `server/src/pipeline.ts`, `server/wrangler.toml`, `cli/hook/hook.mjs` and `cli/hook/claude.mjs`. A worker that needs a change there asks for it under **Requests for the architect** in its PR description.
 - **Features meet only through frozen interfaces.** The internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi`, `SnapshotApi`) and the hook module interfaces in `shared/hook-modules.d.ts` are written in Wave 0. Wave 1 provides a working basic implementation behind every one of them, so each Wave 2 slice can be built and tested on its own against the others' basic versions.
 - All dependencies each worker needs are installed in Wave 0 (listed in `docs/worker-briefs.md`).
 - **Contract checkpoint:** between waves, the architect folds approved contract requests into `shared/`, then launches the next wave.
@@ -983,7 +983,7 @@ Rules every worker follows are in [`docs/parallel-sessions.md`](docs/parallel-se
 
 | Task | Who | Output | Review tier |
 |---|---|---|---|
-| Scaffold and contracts | architect | npm workspaces, tsconfig with `checkJs`, Vitest, `server/wrangler.toml` skeleton, `.gitignore`, CI with gitleaks, everything in `shared/` (contracts, internal and hook-module interfaces, `state.ts`, `protocol.md`, sample snapshot), every dependency and script in `docs/worker-briefs.md`. Answers §21 items 13 and 14. | 1 |
+| Scaffold and contracts | architect | npm workspaces, tsconfig with `checkJs`, Vitest, `server/wrangler.toml` skeleton, `.gitignore`, CI with gitleaks, everything in `shared/` (contracts, internal and hook-module interfaces, `state.ts`, `protocol.md`, sample snapshot), every dependency and script in `docs/worker-briefs.md`, and a placeholder `dashboard/src` so `npm run build` works before W3 lands. Answers §21 items 13 and 14. | 1 |
 | W0 spike | worker, Sonnet high | `docs/spike-results.md` with the worker items in §21, evidence and the fallback chosen for each failure; scrubbed fixtures in `shared/fixtures/hooks/`; `docs/manual-checks.md` | 1 |
 | Manual checks | Nico, about an hour, Windows laptop plus a Mac | The manual items in §21, following `docs/manual-checks.md`. The architect records the results in `docs/spike-results.md`. | 0 (architect's doc PR) |
 
@@ -993,9 +993,9 @@ The architect then folds the results into this document and `shared/`, and freez
 
 | Worker | Owns | Builds | Effort | Tier |
 |---|---|---|---|---|
-| W1 server-core | `server/**` (this wave only) | Every route in §8.1, token verification, the Room (§8.2: storage, memory, pipeline, WebSocket plumbing with viewer auth, the `wait` registry, limits, budget guard, room modes, unlock), and basic implementations behind every internal interface: file locks (§9 rules 1–3, 6–8, 11), `notify()` with delivery on heartbeats, a task stub (gate off), a minimal snapshot. The briefing and the `status` tool. `npm run deploy`. | Sonnet high | 2 |
+| W1 server-core | `server/**` (this wave only) | Every route in §8.1, token verification, the Room (§8.2: storage, memory, pipeline, WebSocket plumbing with viewer auth, the `wait` registry, limits, budget guard, room modes, unlock, per-repo project settings), and basic implementations behind every internal interface: file locks (§9 rules 1–3, 6–8, 11), `notify()` with delivery on heartbeats, a task stub (gate off), a minimal snapshot. The briefing and the `status` tool. A deployable `server/wrangler.toml`. | Sonnet high | 2 |
 | W2 hook-core | `cli/hook/**` (this wave only) | `hook.mjs` and `claude.mjs`: every event in §6.2 for Claude Code, the local `me` check, dynamic module loading, `HIVEMIND_HOME`, settings, the baseline, `shellSinceHeartbeat`, the circuit breaker and outage notice, `hook.log`; basic `git.mjs` (divergent files from `git status` only) and a `codex.mjs` stub, both behind `shared/hook-modules.d.ts` | Sonnet high | 2 |
-| W3 dashboard | `dashboard/**` | The full view-only dashboard from §14, with its data source isolated in `dashboard/src/live/`, which reads `shared/fixtures/snapshot.json` and a fake pulse stream for now | Sonnet medium | 1 |
+| W3 dashboard | `dashboard/**` (this wave only) | The full view-only dashboard from §14, with its data source isolated in `dashboard/src/live/`, which reads `shared/fixtures/snapshot.json` and a fake pulse stream for now | Sonnet medium | 1 |
 
 Then the architect deploys the skeleton, creates a room for this repo, and **turns Hivemind on for all later work**. Wave 2 workers coordinate through it.
 
@@ -1059,14 +1059,14 @@ Each item is answered in `docs/spike-results.md` with evidence and the tool vers
 | # | Check | Who | If it fails |
 |---|---|---|---|
 | 1 | Both tools accept stateless, JSON-only Streamable HTTP MCP responses | W0 | Answer with a single-event SSE stream |
-| 2 | Record every hook payload in §6.2 from both tools, including each `PreToolUse` tool variant and each `SessionEnd` reason | W0 | An event that never fires: the features that need it degrade as listed in §15, and the gap is noted in the briefing |
+| 2 | Record every hook payload in §6.2 from both tools, including each `PreToolUse` tool variant, and accepted and rejected output samples | W0 (events and reasons that need an interactive session, such as `clear`, `resume` and `compact`: Nico) | An event that never fires: the features that need it degrade as listed in §15, and the gap is noted in the briefing |
 | 3 | Exact output shapes: deny with reason and `additionalContext` on `PreToolUse` and `PostToolUse`; `decision: "block"` on `Stop`; what Codex does with each field | W0 | Adjust per-tool output builders |
 | 4 | Codex fires `PreToolUse` for `apply_patch`, and a deny still blocks in each tool's auto or full-access mode | W0 | That tool or mode is advisory: edits are detected afterward from divergent files (§9 rule 4), and the briefing says so |
 | 5 | Claude's `command` + `args` form with absolute paths runs without a shell under Git Bash and PowerShell | W0 | Shell string with explicit quoting per shell |
 | 6 | Codex `command` and `commandWindows` with absolute paths; which shell runs them; whether hooks need a feature flag; what happens when a hook crashes or exits non-zero | W0 | Adjust quoting and setup |
 | 7 | Codex accepts a static `Authorization` in `http_headers`; `default_tools_approval_mode = "approve"` stops prompts; the default tool timeout is 60 s | W0 | `bearer_token_env_var` plus a user environment variable; shorten `wait` |
 | 8 | `claude mcp add-json` accepts a `headersHelper` server (tested at project scope in a throwaway project); the `mcp__hivemind` allow rule stops prompts | W0 | Static header written by `join` |
-| 9 | Codex `SessionEnd` timeout limits and subagent `session_id`s | W0 if the CLI shows them, otherwise manual | Rely on the 12-hour ending |
+| 9 | Codex `SessionEnd` timeout limits and subagent `session_id`s | W0 if the CLI shows them; otherwise W0 writes them into the manual checks for Nico | Rely on the 12-hour ending |
 | 10 | Hook latency on Windows; the `PostToolUse` matcher can exclude `Read`, `Glob` and `Grep` | W0 | Narrow matchers |
 | 11 | Hooks fire and can deny in the Claude Code desktop app and IDE extension, and the user-scope `headersHelper` server works there | Nico | Use the CLI or IDE where they do; `register` elsewhere |
 | 12 | Hooks fire and can deny in the Codex app and IDE extension (there are open reports that they don't in the desktop app); what Codex hashes for hook trust | Nico | Codex in that surface is advisory (`register`), or use the Codex CLI |
