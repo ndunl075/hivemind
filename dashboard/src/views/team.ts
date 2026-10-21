@@ -12,6 +12,8 @@ import type { UiState } from '../team';
 export interface TeamBar {
   el: HTMLElement;
   update(vm: ViewModel, ui: UiState): void;
+  /** Moves keyboard focus to a person's chip. */
+  focusPerson(person: string): void;
 }
 
 export interface TeamHandlers {
@@ -34,8 +36,14 @@ export function personStats(p: PersonVM): string {
 }
 
 export function createTeamBar(on: TeamHandlers): TeamBar {
+  let current: string | null = null;
   const clear = h('button', { type: 'button', class: 'team-clear' }, 'Show everyone');
-  clear.addEventListener('click', () => on.onClear());
+  clear.addEventListener('click', () => {
+    const person = current;
+    on.onClear();
+    // The button hides itself now; keyboard focus goes to the chip of the person who was focused.
+    if (person !== null) rows.get(person)?.main.focus();
+  });
   const list = h('ul', { class: 'team-list' });
   const el = h('section', { class: 'team', 'aria-label': 'Team' }, list, clear);
   const rows = new Map<string, Row>();
@@ -76,7 +84,9 @@ export function createTeamBar(on: TeamHandlers): TeamBar {
         setClass(row.li, 'dim', ui.focus !== null && !focused);
         setClass(row.li, 'idle', p.live === 0);
         row.main.setAttribute('aria-pressed', String(focused));
-        row.main.setAttribute('aria-label', `${p.person}: ${personStats(p)}. ${focused ? 'Showing only this person. Press to show everyone.' : 'Press to show only this person.'}`);
+        row.main.setAttribute('aria-label', `${p.person}: ${personStats(p)}`);
+        // A button that hides itself while it has focus would drop focus to the page; hand it to the chip instead.
+        if (p.ended === 0 && document.activeElement === row.ended) row.main.focus();
         row.ended.hidden = p.ended === 0;
         if (p.ended > 0) {
           const open = ui.expanded.has(p.person);
@@ -86,6 +96,10 @@ export function createTeamBar(on: TeamHandlers): TeamBar {
         }
       });
       clear.hidden = ui.focus === null;
+      current = ui.focus;
+    },
+    focusPerson(person) {
+      rows.get(person)?.main.focus();
     },
   };
 }

@@ -7,7 +7,7 @@ import { h, prefersReducedMotion, s, setClass, setText } from '../dom';
 import { truncate } from '../format';
 import {
   bowControl,
-  forceLayout,
+  forceLayoutFit,
   gridLayout,
   groupOutline,
   pointOnQuad,
@@ -135,10 +135,12 @@ export function createGraph(): GraphView {
       ),
     ),
   );
-  const svg = s('svg', { class: 'edges', 'aria-hidden': 'true', preserveAspectRatio: 'none' }, defs, hulls, links, fx, labels);
+  const svg = s('svg', { class: 'edges', 'aria-hidden': 'true', preserveAspectRatio: 'none' }, defs, hulls, links, fx);
+  // Labels sit above the cards so a card never hides a person, checkout or edge label.
+  const svgTop = s('svg', { class: 'edges edges-top', 'aria-hidden': 'true', preserveAspectRatio: 'none' }, labels);
   const nodesLayer = h('div', { class: 'nodes' });
   const empty = h('p', { class: 'empty-graph' }, 'No agents in this room yet.');
-  const stage = h('div', { class: 'stage' }, svg, nodesLayer, empty);
+  const stage = h('div', { class: 'stage' }, svg, nodesLayer, svgTop, empty);
   const connections = h('ul', { class: 'sr-only', 'aria-label': 'Connections between agents', 'aria-live': 'polite' });
   const el = h('section', { class: 'graph', 'aria-label': 'Agent graph' }, stage, connections);
   let connectionsKey = '';
@@ -157,12 +159,14 @@ export function createGraph(): GraphView {
   /** Cached container width (kept current by the ResizeObserver) so updates don't force layout. */
   let boxW = 0;
   let measuredKey = '';
+  /** Where the cards sat the last time everyone was shown, so focusing a person and clearing doesn't shuffle the graph. */
+  let remembered = new Map<string, Point>();
 
-  function measure(vm: ViewModel): void {
+  function measure(vm: ViewModel, roster: string): void {
     if (boxW === 0) boxW = el.clientWidth || 1000;
     const count = vm.agents.length;
     const tier = tierFor(count);
-    const key = `${boxW}|${count}|${vm.people.length}`;
+    const key = `${boxW}|${vm.people.length}|${roster}`;
     if (key === measuredKey) return;
     measuredKey = key;
     const width = boxW;
@@ -245,7 +249,7 @@ export function createGraph(): GraphView {
       if (outline.length < 3) continue;
       const top = outline.reduce((m, p) => (p.y < m.y || (p.y === m.y && p.x < m.x) ? p : m), outline[0]!);
       hulls.append(s('path', { class: 'hull', d: roundedPath(outline, 22) }));
-      labels.append(s('text', { class: 'hull-label', x: top.x + 22, y: top.y + 15 }, person));
+      labels.append(s('text', { class: 'hull-label', x: top.x + 22, y: top.y + Math.min(15, hullPad - 1) }, person));
     }
     const order = ['nearby', 'waiting', 'message', 'blocked'];
     for (const kind of order) {
@@ -259,7 +263,7 @@ export function createGraph(): GraphView {
         links.append(path);
         if (kind === 'blocked' && e.label) {
           const mid = pointOnQuad(g.a, g.c, g.b, 0.5);
-          links.append(s('text', { class: 'edge-label', x: mid.x.toFixed(1), y: (mid.y - 7).toFixed(1), 'text-anchor': 'middle' }, `blocked: ${truncate(e.label, 28)}`));
+          labels.append(s('text', { class: 'edge-label', x: mid.x.toFixed(1), y: (mid.y - 7).toFixed(1), 'text-anchor': 'middle' }, `blocked: ${truncate(e.label, 28)}`));
         }
       }
     }
@@ -291,7 +295,8 @@ export function createGraph(): GraphView {
 
   function update(vm: ViewModel): void {
     last = vm;
-    measure(vm);
+    const roster = vm.agents.map((a) => `${a.callsign}|${a.person}|${a.checkout ?? ''}`).join(',');
+    measure(vm, roster);
     setClass(empty, 'show', vm.agents.length === 0);
     const described = vm.edges.map(describeEdge);
     const describedKey = described.join('|');
@@ -328,16 +333,21 @@ export function createGraph(): GraphView {
       v.el.setAttribute('aria-label', `${a.callsign}, ${a.person}${a.checkoutLabel ? `, ${a.checkoutLabel}` : ''}, ${a.state}, ${a.stateLabel}${a.enforced ? '' : ', not enforced'}`);
     }
 
-    const key = JSON.stringify([
-      vm.agents.map((a) => [a.callsign, a.person, a.checkout]),
-      layoutLinks(vm.edges).map((l) => [l.a, l.b]),
-      frame,
-      dims,
-    ]);
+    // Message edges come and go every few seconds; they don't re-run the layout (links only matter when it runs).
+    const key = JSON.stringify([roster, frame, dims]);
     if (key !== layoutKey) {
       layoutKey = key;
       const nodes: LayoutNode[] = vm.agents.map((a) => ({ id: a.callsign, group: a.person, cluster: a.checkout ?? '', w: dims.w, h: dims.h }));
-      positions = grid ? grid.positions : forceLayout(nodes, layoutLinks(vm.edges), frame, { previous: positions, pad: hullPad + 18, gap: nodeGap, groupGap: 2 * hullPad + 8 });
+      if (grid) positions = grid.positions;
+      else {
+        const fit = forceLayoutFit(nodes, layoutLinks(vm.edges), frame, { previous: remembered, pad: hullPad + 18, gap: nodeGap, groupGap: 2 * hullPad + 8 });
+        positions = fit.positions;
+        if (fit.size.height !== frame.height) {
+          frame = fit.size;
+          stage.style.minHeight = `${frame.height}px`;
+        }
+        if (new Set(vm.agents.map((a) => a.person)).size > 1) remembered = new Map(positions);
+      }
       drawKey = '';
     }
     place();
@@ -345,6 +355,7 @@ export function createGraph(): GraphView {
     if (edgesKey !== drawKey) {
       drawKey = edgesKey;
       svg.setAttribute('viewBox', `0 0 ${frame.width} ${frame.height}`);
+      svgTop.setAttribute('viewBox', `0 0 ${frame.width} ${frame.height}`);
       drawEdges(vm);
     }
   }

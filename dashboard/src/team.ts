@@ -42,6 +42,7 @@ export function shapeViewModel(vm: ViewModel, ui: UiState): ViewModel {
   if (focus === null) return { ...vm, agents, edges };
 
   const items = vm.tasks.items.filter((t) => mine(t.owner));
+  const hiddenUnowned = vm.tasks.items.filter((t) => t.owner === null && t.status !== 'done').length;
   return {
     ...vm,
     agents,
@@ -51,6 +52,7 @@ export function shapeViewModel(vm: ViewModel, ui: UiState): ViewModel {
       inProgress: items.filter((t) => t.status === 'in_progress').length,
       done: items.filter((t) => t.status === 'done').length,
       items,
+      hiddenUnowned,
     },
     locks: vm.locks.filter((l) => mine(l.holder)),
     activity: vm.activity.filter((a) => mine(a.actor)),

@@ -59,9 +59,10 @@ describe('shapeViewModel', () => {
     const ui = toggleFocus(NO_FOCUS, 'ana');
     const f = shapeViewModel(v, ui);
     expect(f.agents.every((a) => a.person === 'ana')).toBe(true);
-    expect(f.tasks.items.every((t) => t.owner?.endsWith('-ana') || t.owner?.includes('-ana-'))).toBe(true);
-    expect(f.locks.every((l) => l.holder.includes('-ana'))).toBe(true);
-    expect(f.activity.every((a) => a.actor?.includes('-ana'))).toBe(true);
+    const ana = new Set(v.agents.filter((a) => a.person === 'ana').map((a) => a.callsign));
+    expect(f.tasks.items.every((t) => t.owner !== null && ana.has(t.owner))).toBe(true);
+    expect(f.locks.every((l) => ana.has(l.holder))).toBe(true);
+    expect(f.activity.every((a) => a.actor !== null && ana.has(a.actor))).toBe(true);
     expect(f.edges.every((e) => f.agents.some((a) => a.callsign === e.from))).toBe(true);
     expect(f.counts).toEqual(v.counts);
     expect(toggleFocus(ui, 'ana').focus).toBeNull();

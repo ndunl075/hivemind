@@ -1,6 +1,7 @@
 /** Tasks, Locks and Activity panels (§14.3). Every string from an agent is set as a text node. */
 import type { AgentState } from '../../../shared/contracts';
 import { h, keyed, setText } from '../dom';
+import { plural } from '../format';
 import type { ViewModel } from '../model';
 
 export interface Panel {
@@ -33,6 +34,7 @@ export function createTasksPanel(): Panel {
         h('span', { class: 'stat' }, h('b', undefined, String(vm.tasks.inProgress)), ' in progress'),
         h('span', { class: 'stat' }, h('b', undefined, String(vm.tasks.done)), ' done'),
       );
+      if (vm.tasks.hiddenUnowned > 0) meta.append(h('span', { class: 'stat stat-hint' }, `${plural(vm.tasks.hiddenUnowned, 'unowned task')} hidden`));
       const rows = vm.tasks.items.map((t) =>
         h(
           'article',

@@ -310,3 +310,36 @@ export function gridLayout(nodes: readonly LayoutNode[], width: number, options:
   }
   return { positions, height: ordered.length === 0 ? 0 : rowTop + rowH + pad };
 }
+
+/** True when any two node rectangles intersect. */
+export function hasOverlap(nodes: readonly LayoutNode[], positions: ReadonlyMap<string, Point>): boolean {
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i]!;
+      const b = nodes[j]!;
+      const p = positions.get(a.id);
+      const q = positions.get(b.id);
+      if (p && q && Math.abs(p.x - q.x) < (a.w + b.w) / 2 && Math.abs(p.y - q.y) < (a.h + b.h) / 2) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * `forceLayout`, and if the frame turned out too small for the cards (some still overlap), the frame grows taller by
+ * 20% and the layout runs again, up to 10 times. Returns the positions and the frame they fit in.
+ */
+export function forceLayoutFit(
+  nodes: readonly LayoutNode[],
+  links: readonly LayoutLink[],
+  size: Size,
+  options: LayoutOptions = {},
+): { positions: Map<string, Point>; size: Size } {
+  let frame = size;
+  let positions = forceLayout(nodes, links, frame, options);
+  for (let i = 0; i < 10 && hasOverlap(nodes, positions); i++) {
+    frame = { width: frame.width, height: Math.ceil(frame.height * 1.2) };
+    positions = forceLayout(nodes, links, frame, options);
+  }
+  return { positions, size: frame };
+}

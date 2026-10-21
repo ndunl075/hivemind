@@ -2,7 +2,7 @@
 import type { Pulse, Snapshot } from '../../shared/contracts';
 import { h } from './dom';
 import type { LiveSource, SourceOptions } from './live/types';
-import { buildViewModel, showReconnectBanner, type ConnectionState, type ViewModel } from './model';
+import { buildViewModel, showReconnectBanner, type CheckoutOrder, type ConnectionState, type ViewModel } from './model';
 import { NO_FOCUS, normalizeUi, shapeViewModel, toggleEnded, toggleFocus, type UiState } from './team';
 import { forgetToken, saveToken } from './token';
 import { createBanners, createFooter, createTokenPrompt, createTopbar, type BannerItem } from './views/chrome';
@@ -65,6 +65,8 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
   let since = clock();
   let vm: ViewModel | null = null;
   let ui: UiState = NO_FOCUS;
+  /** Checkout numbering, kept for this page load so labels don't shift when agents come and go. */
+  const checkoutOrder: CheckoutOrder = new Map();
   let stopSource: (() => void) | null = null;
   /** Bumped on every start and on stop, so callbacks from a replaced or stopped source are ignored. */
   let generation = 0;
@@ -80,20 +82,20 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
   }
 
   const onKey = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && ui.focus !== null) setUi({ ...ui, focus: null });
+    if (e.key === 'Escape' && !e.defaultPrevented && ui.focus !== null) setUi({ ...ui, focus: null });
   };
   document.addEventListener('keydown', onKey);
 
   function render(): void {
     const t = clock();
-    vm = snapshot ? buildViewModel(snapshot, nowMs()) : null;
+    vm = snapshot ? buildViewModel(snapshot, nowMs(), checkoutOrder) : null;
     if (vm) ui = normalizeUi(ui, vm);
     const items: BannerItem[] = [];
     if (!awaitingToken && showReconnectBanner(conn, since, t)) {
       items.push({ id: 'reconnect', tone: 'warn', text: vm ? 'Reconnecting. Showing the last update received.' : 'Connecting to the room…' });
     }
     if (vm) items.push(...vm.banners);
-    topbar.update(vm, conn, deps.room);
+    topbar.update(vm, conn, deps.room, ui.focus !== null);
     banners.update(items);
     footer.update(vm);
     if (vm) {

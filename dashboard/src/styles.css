@@ -1055,3 +1055,9 @@ p {
     font-size: 11px;
   }
 }
+.edges-top {
+  pointer-events: none;
+}
+.stat-hint {
+  color: var(--muted);
+}

@@ -67,6 +67,19 @@ for (const [name, viewport] of sizes) {
   await page.waitForTimeout(1200);
   await report('focus');
   await shot(`big-team-${name}-focus.png`);
+  // Switch focus straight from one person to another (same agent count), then clear.
+  await page.locator('.team-main').nth(0).click();
+  await page.waitForTimeout(1200);
+  await report('focus switched');
+  const unplaced = await page.evaluate(() => [...document.querySelectorAll('.node')].filter((n) => !n.style.transform).length);
+  if (unplaced) {
+    console.log(`${name}: ${unplaced} cards without a position after the switch`);
+    failed = true;
+  }
+  await shot(`big-team-${name}-focus-switched.png`);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(1200);
+  await report('focus cleared');
   await page.close();
 }
 
