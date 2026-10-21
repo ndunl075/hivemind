@@ -88,7 +88,7 @@ function real(p) {
     } catch {
       const up = dirname(cur);
       if (up === cur) return p;
-      tail.unshift(cur.slice(up.length).replace(/^[\/]+/, ''));
+      tail.unshift(cur.slice(up.length).replace(/^[\\/]+/, ''));
       cur = up;
     }
   }

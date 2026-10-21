@@ -49,7 +49,7 @@ Flow (§6.3): read stdin, `off`, config, load adapter, parse, resolve the checko
 
 ## Tests
 
-`npm run test:hook` (4 files, 104 tests) runs the real `hook.mjs` as a child process against a fake `/hook` server on an ephemeral port, with `HIVEMIND_HOME` and the OS temp dir in temporary folders and a throwaway Git repo as the checkout.
+`npm run test:hook` (3 files, 99 tests) runs the real `hook.mjs` as a child process against a fake `/hook` server on an ephemeral port, with `HIVEMIND_HOME` and the OS temp dir in temporary folders and a throwaway Git repo as the checkout.
 
 - **Exact output for every fixture** (`claude.test.mjs`): each `output/*` fixture is either reproduced byte for byte by `format` or listed as a shape Hivemind never emits (exit codes, invalid JSON, timeout, unknown fields); a new fixture fails the test until classified. Every input fixture parses, and runs through `hook.mjs` and exits 0 with no stderr. End-to-end tests print the recorded `stdout` for SessionStart, UserPromptSubmit, PreToolUse (deny, deny with context, context), PostToolUse and Stop.
 - **me check** denies a wrong callsign with the request count unchanged.

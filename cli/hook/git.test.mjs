@@ -1,6 +1,6 @@
 // @ts-nocheck -- tests use loosely typed fixtures and a fake server; the code under test is type-checked.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -16,7 +16,7 @@ const git = (args, cwd = repo) => execFileSync('git', args, {
 }).trim();
 
 beforeAll(() => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'hm-git-')));
+  base = realpathSync.native(mkdtempSync(join(tmpdir(), 'hm-git-')));
   repo = join(base, 'proj');
   mkdirSync(repo);
   git(['init', '-q', '-b', 'main']);
@@ -62,6 +62,12 @@ describe('git.mjs', () => {
     expect(normalize(root, join(repo, 'sub'), ['x.ts', '../a.txt'])).toEqual(['sub/x.ts', 'a.txt']);
     expect(normalize(root, repo, [join(base, 'elsewhere.txt'), '../x', join(repo, '.git', 'config'), '.git/HEAD', repo, ''])).toEqual([]);
     expect(normalize(root, repo, ['a.txt', './a.txt'])).toEqual(['a.txt']);
+  });
+
+  it('normalize: a cwd reached through a link (or a Windows 8.3 short name) still maps to the checkout, even for new files', () => {
+    const link = join(base, 'link-to-proj');
+    symlinkSync(repo, link, 'junction');
+    expect(normalize(repo, link, ['brand-new/file.ts', join(link, 'other.ts')])).toEqual(['brand-new/file.ts', 'other.ts']);
   });
 
   it('state: divergent files from git status; baseline only without previous', async () => {
