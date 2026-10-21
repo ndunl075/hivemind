@@ -8,6 +8,8 @@ import {
   type AgentState,
   type AgentView,
   type EdgeKind,
+  type EdgeView,
+  type LockView,
   type LockKind,
   type Millis,
   type RoomMode,
@@ -142,6 +144,28 @@ function edgeIsLive(kind: EdgeKind, at: Millis, now: Millis): boolean {
   }
 }
 
+/**
+ * A blocked edge (A denied a file B holds) is drawn only while it still applies (§14.2): both agents are
+ * still alive, the label's lock still exists, B still holds it, and A has not since taken it. The edge only
+ * carries the file's base name, so a lock matches when its path is that name or ends with "/<name>". A folder
+ * lock held by B can't be matched to the name, so it keeps the edge (the max age still removes it).
+ */
+function blockedStillApplies(
+  e: EdgeView,
+  locks: readonly LockView[],
+  stateOf: ReadonlyMap<string, { state: AgentState }>,
+): boolean {
+  if (stateOf.get(e.from)?.state === 'ended') return false;
+  if (e.to === undefined) return true;
+  if (stateOf.get(e.to)?.state === 'ended') return false;
+  if (e.label === undefined) return true;
+  const name = e.label;
+  const matching = locks.filter((l) => l.kind === 'file' && (l.path === name || l.path.endsWith(`/${name}`)));
+  if (matching.some((l) => l.holder === e.from)) return false;
+  if (matching.some((l) => l.holder === e.to)) return true;
+  return locks.some((l) => l.kind !== 'file' && l.holder === e.to);
+}
+
 function tone(type: string): ActivityTone {
   if (/denied|blocked|outage/.test(type)) return 'danger';
   if (/take|quiet/.test(type)) return 'warn';
@@ -190,6 +214,7 @@ export function buildViewModel(s: Snapshot, now: Millis): ViewModel {
   const edges: EdgeVM[] = [];
   for (const e of s.edges) {
     if (!edgeIsLive(e.kind, e.at, now)) continue;
+    if (e.kind === 'blocked' && !blockedStillApplies(e, s.locks, stateOf)) continue;
     if (!present.has(e.from) || (e.to !== undefined && !present.has(e.to))) continue;
     const pair = e.kind === 'nearby' ? [e.from, e.to ?? ''].sort().join('|') : `${e.from}|${e.to ?? ''}`;
     const key = `${e.kind}:${pair}`;
