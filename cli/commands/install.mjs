@@ -182,7 +182,7 @@ async function registerClaude(ctx, config, manifest, claudeOnPath, report) {
   const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
   if (got.code === 0) {
     // An entry named "hivemind" that is not ours belongs to the user: never replace it.
-    if (!isOurHelper(got.stdout) && !manifest.claude.mcp) {
+    if (!isOurHelper(got.stdout, p.helperScript, p.helperCmd) && !manifest.claude.mcp) {
       throw new CliError(
         'Claude Code already has its own MCP server named "hivemind", so the Hivemind one was not added. Rename or remove yours (claude mcp remove --scope user hivemind), then run hivemind update.',
       );
@@ -315,7 +315,7 @@ export async function uninstallAll(ctx) {
   try {
     const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
     if (got.code === 0) {
-      if (isOurHelper(got.stdout) || manifest?.claude.mcp === true) {
+      if (isOurHelper(got.stdout, p.helperScript, p.helperCmd)) {
         const r = await ctx.runner('claude', ['mcp', 'remove', '--scope', 'user', 'hivemind']);
         if (r.code === 0) report.lines.push('Claude Code: MCP server "hivemind" removed');
         else {

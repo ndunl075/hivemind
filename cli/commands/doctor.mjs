@@ -100,7 +100,7 @@ export async function doctor(argv, ctx) {
       const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
       if (got.code === 127) line('warn', 'Claude Code: the "claude" program is not on PATH, so the MCP server was not checked');
       else if (got.code !== 0) line('FAIL', 'Claude Code: MCP server "hivemind" is missing; run hivemind update');
-      else if (!isOurHelper(got.stdout) && !manifest?.claude.mcp) line('FAIL', 'Claude Code: the MCP server named "hivemind" is not the Hivemind one (its helper is not ours); rename or remove it, then run hivemind update');
+      else if (!isOurHelper(got.stdout, p.helperScript, p.helperCmd) && !manifest?.claude.mcp) line('FAIL', 'Claude Code: the MCP server named "hivemind" is not the Hivemind one (its helper is not ours); rename or remove it, then run hivemind update');
       else if (!got.stdout.includes(`${normalizeServer(config.server)}/mcp`)) line('FAIL', 'Claude Code: MCP server "hivemind" points at a different URL than config.json; run hivemind update');
       else line('ok', 'Claude Code: MCP server "hivemind" is set up and is ours');
     }

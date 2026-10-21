@@ -772,12 +772,50 @@ describe('a Claude MCP server the user already has', () => {
 
   it('an entry that is recognisably ours (our helper path) is replaced, with or without an install record', async () => {
     const lap = laptop();
-    const old = { type: 'http', url: 'https://old.example.com/mcp', headersHelper: '"/old/node" "/old/.hivemind/hook/headers-helper.mjs"' };
+    const old = { type: 'http', url: 'https://old.example.com/mcp', headersHelper: `"/old/node" "${lap.path('.hivemind', 'hook', 'headers-helper.mjs')}"` };
     write(lap.path('.claude.json'), `${JSON.stringify({ mcpServers: { hivemind: old } }, null, 2)}\n`);
     const r = await join_(lap);
     expect(r.code, r.err).toBe(0);
     expect(readJson(lap.path('.claude.json')).mcpServers.hivemind.url).toBe(`${SERVER}/mcp`);
     expect(lap.stub.calls.some((c) => c.args.includes('remove'))).toBe(true);
+  });
+
+  it('leave removes the entry only if it names our exact helper path, whatever the install record says', async () => {
+    const lap = laptop();
+    expect((await join_(lap)).code).toBe(0);
+    expect(readJson(lap.path('.hivemind', 'install.json')).claude.mcp).toBe(true);
+    // The user replaces our entry after join: same helper file name, another folder.
+    const theirs = { type: 'http', url: 'https://mine.example.com/mcp', headersHelper: '"/usr/bin/node" "/home/them/.hivemind/hook/headers-helper.mjs"' };
+    const file = readJson(lap.path('.claude.json'));
+    file.mcpServers.hivemind = theirs;
+    writeFileSync(lap.path('.claude.json'), JSON.stringify(file));
+    lap.stub.calls.length = 0;
+    const l = await lap.run(main, ['leave']);
+    expect(l.code, l.err).toBe(0);
+    expect(l.out).toContain('left alone');
+    expect(readJson(lap.path('.claude.json')).mcpServers.hivemind).toEqual(theirs);
+    expect(lap.stub.calls.filter((c) => c.args.includes('remove'))).toEqual([]);
+  });
+
+  it('a Hivemind folder with ( ) \' & # ! in its path does not stop the hooks or Codex from installing', async () => {
+    const dirName = "it's (my) & #1 home!";
+    const home = join(base, `${Date.now()}`, dirName, '.hivemind');
+    const lap = laptop({ env: { HIVEMIND_HOME: home } });
+    // As on Windows: the Claude command has to be one shell word, which this path cannot be.
+    const r = await lap.run(main, ['join', '--server', SERVER, '--yes'], { platform: 'win32' });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('HIVEMIND_HOME');
+    expect(r.err).toContain('Claude Code:');
+    expect(existsSync(join(home, 'hook', 'hook.mjs'))).toBe(true);
+    expect(readJson(join(home, 'config.json')).token).toBe(AGENT_TOKEN);
+    expect(readJson(lap.path('.claude', 'settings.json')).hooks.SessionStart).toBeTruthy();
+    expect(existsSync(lap.path('.codex', 'hooks.json'))).toBe(true);
+    expect(readFileSync(lap.path('.codex', 'config.toml'), 'utf8')).toContain('[mcp_servers.hivemind]');
+    expect(lap.stub.calls.filter((c) => c.args.includes('add-json'))).toEqual([]);
+    // Where sh runs the helper, the same kind of folder works: the quoting covers it.
+    const lap2 = laptop({ env: { HIVEMIND_HOME: join(base, `${Date.now()}b`, dirName, '.hivemind') } });
+    const r2 = await lap2.run(main, ['join', '--server', SERVER, '--yes'], { platform: 'linux' });
+    expect(r2.code, r2.err).toBe(0);
   });
 });
 

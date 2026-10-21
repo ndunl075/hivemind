@@ -145,9 +145,15 @@ describe('registrations', () => {
     expect(win).toBe('C:/Users/me/.hivemind/hook/headers-helper.cmd');
     expect(headersHelperCommand('win32', 'n', 's', 'C:\\Users\\Ann Lee\\.hivemind\\hook\\headers-helper.cmd'))
       .toBe('C:/Users/Ann" "Lee/.hivemind/hook/headers-helper.cmd');
-    expect(isOurHelper(win)).toBe(true);
-    expect(isOurHelper('"/a/b/hook/headers-helper.mjs"')).toBe(true);
-    expect(isOurHelper('node other-helper.js')).toBe(false);
+    const mine = 'C:\\Users\\me\\.hivemind\\hook\\headers-helper.cmd';
+    expect(isOurHelper(win, mine)).toBe(true);
+    expect(isOurHelper('"/a/b/.hivemind/hook/headers-helper.mjs"', '/a/b/.hivemind/hook/headers-helper.mjs')).toBe(true);
+    expect(isOurHelper('C:/Users/Ann" "Lee/.hivemind/hook/headers-helper.cmd', 'C:\\Users\\Ann Lee\\.hivemind\\hook\\headers-helper.cmd')).toBe(true);
+    // Same file name in another folder, a longer name, or nothing: not ours.
+    expect(isOurHelper('"/other/.hivemind/hook/headers-helper.mjs"', '/a/b/.hivemind/hook/headers-helper.mjs')).toBe(false);
+    expect(isOurHelper('/a/b/.hivemind/hook/headers-helper.mjs.bak', '/a/b/.hivemind/hook/headers-helper.mjs')).toBe(false);
+    expect(isOurHelper('node other-helper.js', mine)).toBe(false);
+    expect(isOurHelper(win)).toBe(false);
   });
 
   it('shellWord refuses characters one of the shells would act on', () => {

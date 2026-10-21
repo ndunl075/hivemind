@@ -123,11 +123,21 @@ export function helperCmdText(node) {
 }
 
 /**
- * True when text from `claude mcp get` (or a settings file) names Hivemind's own helper script.
+ * True when text from `claude mcp get` names exactly one of our helper paths (this install's script or wrapper), as a
+ * whole path: backslashes and the `" "` space form are normalised, case is ignored on both sides.
  * @param {string} text
+ * @param {...string} helperPaths
  */
-export function isOurHelper(text) {
-  return /\/hook\/headers-helper\.(mjs|cmd)/.test(text.replace(/\\/g, '/'));
+export function isOurHelper(text, ...helperPaths) {
+  const norm = (/** @type {string} */ s) => s.replace(/\\/g, '/').replace(/" "/g, ' ').toLowerCase();
+  const t = norm(text);
+  return helperPaths.some((p) => {
+    const want = norm(p);
+    for (let i = t.indexOf(want); i !== -1; i = t.indexOf(want, i + 1)) {
+      if (!/[a-z0-9_.\-/]/.test(t[i + want.length] ?? '')) return true;
+    }
+    return false;
+  });
 }
 
 /**
