@@ -456,7 +456,7 @@ Held by others: src/auth/ (codex-ana, folder) · infra/wrangler.toml (codex-sam)
 
 Endpoint: `POST https://<server>/mcp`, Streamable HTTP, **stateless, JSON responses only** (no server-sent stream), header `Authorization: Bearer <agent token>`. `GET` returns 405. `[VERIFY]` that both tools accept plain JSON responses. If not, respond with a single-event SSE stream instead (§21).
 
-The server name is `hivemind`, so tools appear as `mcp__hivemind__<name>`. Every tool except `register` requires `me`. Descriptions are written as short instructions, since they are effectively prompts. The `initialize` result carries the §6.5 protocol as `instructions`.
+The server name is `hivemind`, so tools appear as `mcp__hivemind__<name>`. Every tool except `register` requires `me`. Paths are plain repo-relative paths. Tools that take paths (and `task_add`, `register`) also accept an optional `repo`, which defaults to the caller's current repo and may be the repo's display name or root commit; it's needed only by an agent with no repo yet. Exact argument and result types are in `shared/contracts.ts`. Descriptions are written as short instructions, since they are effectively prompts. The `initialize` result carries the §6.5 protocol as `instructions`.
 
 | Tool | Arguments | Result |
 |---|---|---|
@@ -501,11 +501,11 @@ The server name is `hivemind`, so tools appear as `mcp__hivemind__<name>`. Every
 - **Load once.** On first wake, `blockConcurrencyWhile` creates the schema if needed and loads all tables into memory.
 - **Atomic by construction.** Every mutation is a synchronous check against memory followed by a `sql.exec` write in the same turn, with no `await` in between. A Durable Object handles one event at a time, so two claims for the same task, or two edits of the same new file, are decided strictly in order.
 - **No alarms.** States and takeability are computed from timestamps when read (§4). Trimming happens on writes.
-- **Memory-first writes.** `last_event`, activity text and request counters live in memory. They're flushed at most once a minute, piggybacked on a request.
+- **Memory-first writes.** `last_event`, activity text and request counters live in memory. They're flushed at most once a minute, piggybacked on a request. Exception: setting `idle_since` (on `Stop`) and clearing it (on the next event) are written at once, together with `last_event`, so a reload can never show a working agent as idle.
 - **Dashboard broadcast** uses the WebSocket Hibernation API (`ctx.acceptWebSocket`), with ping/pong answered by `setWebSocketAutoResponse` so idle viewers cost nothing. Viewers get a full **snapshot** (a few KB) on connect and on every change, debounced to at most 4 per second, plus small **pulse** events (message sent, edit denied, push) that drive animations.
 - **`wait`** parks a promise per caller, resolved by the first matching event or a 45 s timer. Parked waits end if the Room restarts. The caller simply gets a timeout.
 - **Limits:** 50 agents per room, messages of 2,000 chars, 10 messages per minute per sender, a burst of 20 requests per second per person.
-- **Feature boundaries.** `room.ts` owns storage, the WebSocket plumbing, the `wait` registry, limits and the budget guard. Each feature in `server/src/features/` plugs into the pipeline and talks to other features only through the internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi` with `notify()`, `SnapshotApi`), so slices can be built in parallel (§20).
+- **Feature boundaries.** `room.ts` owns storage, the WebSocket plumbing, the `wait` registry, limits and the budget guard. Each feature in `server/src/features/` plugs into the pipeline and talks to other features only through the internal interfaces in `shared/contracts.ts` (`LocksApi`, `TasksApi`, `MessagesApi` with `notify()`, `PushesApi`, `SnapshotApi`, and the optional `BriefingContributor`), built by factories that receive a shared `RoomContext`, so slices can be built in parallel (§20).
 
 ---
 
@@ -901,7 +901,7 @@ hivemind/
 ├── shared/                     architect-owned
 │   ├── contracts.ts            wire types (/hook, MCP tool I/O, dashboard snapshot and pulses) and the
 │   │                           internal feature interfaces (LocksApi, TasksApi, MessagesApi, SnapshotApi)
-│   ├── hook-modules.ts       interfaces of the hook's modules (claude, codex, git)
+│   ├── hook-modules.ts         interfaces of the hook's modules (claude, codex, git)
 │   ├── state.ts                agent state and takeability from timestamps (§5), used by server and dashboard
 │   ├── protocol.md             the protocol text in §6.5, the single source
 │   └── fixtures/               sample snapshot; recorded hook payloads (scrubbed)

@@ -100,10 +100,12 @@ Task: build the server half of the walking skeleton (ARCHITECTURE.md §20.3 Wave
   WebSocket plumbing (snapshot on connect and on change, debounced, pulses) calling SnapshotApi, the wait registry,
   limits, the budget guard (§16) including its midnight restore, room modes, emergency unlock, and per-repo project
   settings received on /hook (stored in meta as settings:<repo>, read by other features through the interfaces).
-- server/src/pipeline.ts: the hook and tool pipeline with extension points.
+- server/src/pipeline.ts: the hook and tool pipeline with extension points; each feature is built by the
+  FeatureFactory in shared/contracts.ts with one RoomContext.
 - Basic implementations behind every interface in shared/contracts.ts, each in its feature folder:
   - locks: §9 rules 1–3, 6, 7, 8 and 11, plus modes;
   - messages: notify() with delivery on heartbeats;
+  - pushes: record() storing the latest push per file and latest() answering lastPush (no notice text yet);
   - tasks: a stub with the gate off;
   - snapshot: agents, locks and mode only;
   - mcp: the status tool.

@@ -6,7 +6,7 @@
 - TypeScript 5.9 (TypeScript 7's native compiler was skipped to keep `checkJs` behavior predictable).
 - Configs: root `vitest.config.ts` (shared, cli), `server/vitest.config.ts` (Workers runtime), `dashboard/vitest.config.ts` (happy-dom), `test/vitest.config.ts` (e2e, smoke).
 - Placeholders: `server/src/{worker,room,env}.ts`, `dashboard/{build.mjs,src/}`, `cli/hivemind.mjs`.
-- `shared/`: `contracts.ts` (wire types, limits and internal interfaces), `hook-modules.d.ts`, `state.ts` with tests, `protocol.md`, `fixtures/snapshot.json`.
+- `shared/`: `contracts.ts` (wire types, limits and internal interfaces), `hook-modules.ts`, `state.ts` with tests, `protocol.md`, `fixtures/snapshot.json`.
 - CI: Ubuntu (typecheck, all tests, build, `wrangler deploy --dry-run`, e2e), Windows (Node tests: shared and cli), gitleaks with an `hm_` token rule and a `hm_[av].test.` allowlist. Actions are pinned by commit SHA; jobs have timeouts and cancel superseded runs.
 
 ## Checks run locally

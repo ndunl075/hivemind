@@ -67,7 +67,7 @@ export const DEFAULT_SETTINGS: ResolvedSettings = Object.freeze({
 // Tuning constants (§5, §6, §8, §11, §16). Change only through the architect.
 // ---------------------------------------------------------------------------
 
-export const LIMITS = {
+export const LIMITS = Object.freeze({
   /** §5: working → quiet after this much silence. */
   quietAfterMs: 10 * 60_000,
   /** §5: idle or quiet holders become takeable after this much silence. */
@@ -120,7 +120,7 @@ export const LIMITS = {
   /** §14.2: how long message and blocked edges stay on the dashboard. */
   messageEdgeMs: 60_000,
   blockedEdgeMs: 2 * 60_000,
-} as const;
+} as const);
 
 // ---------------------------------------------------------------------------
 // Tokens (§13)
@@ -609,7 +609,10 @@ export interface PushesApi {
   latest(actor: Actor, repo: RepoId, paths: RepoPath[]): LastPush[];
 }
 
-/** Called by the Room so features can contribute lines to the briefing (§6.6). */
+/**
+ * Optional on any feature: the Room checks each entry of Features for briefingLines() and joins the lines
+ * into the briefing (§6.6). Features derive agent states with deriveState() from shared/state.ts and ctx.now().
+ */
 export interface BriefingContributor {
   briefingLines(actor: Actor): string[];
 }
