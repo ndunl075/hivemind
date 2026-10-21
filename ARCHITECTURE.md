@@ -779,7 +779,7 @@ Vanilla TypeScript and SVG, bundled with esbuild into Worker static assets, with
 | Agent crashes or the laptop sleeps | It shows as *quiet*, and after 15 minutes its holdings are takeable. After 12 hours it ends and releases everything. |
 | Person thinking for 20 minutes, a long build, or a permission prompt | Same as above. Nothing is taken without an explicit, notified `take`. |
 | A rejected or failed edit leaves a lock | Released at the agent's next heartbeat, because the file isn't divergent. |
-| Room object restarts or is evicted | Tables reload from SQLite. Up to a minute of in-memory timestamps and counters may be lost (the daily request counter is not: it's persisted ahead of the count and can only overcount, by at most 24), and parked `wait` calls time out. No holdings are lost. |
+| Room object restarts or is evicted | Tables reload from SQLite. Up to a minute of in-memory timestamps and counters may be lost (the daily request counter is not: it's persisted ahead of the count and can only overcount, by at most 24 per restart; frequent restarts can add up to about twice the real count), and parked `wait` calls time out. No holdings are lost. |
 | Two agents claim or lock at the same instant | Decided in order inside the single-threaded Room. One wins. |
 | Laptop without Hivemind, or repo not mapped | The hook exits silently. That person's agents are invisible but unaffected. |
 | Hooks don't fire in a surface (for example, the Codex app) | That agent can still `register` through MCP. It shows as *not enforced* on the dashboard and in briefings. `hivemind doctor`'s in-app self-test catches this before a team relies on it. |
