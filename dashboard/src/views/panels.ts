@@ -1,6 +1,6 @@
 /** Tasks, Locks and Activity panels (§14.3). Every string from an agent is set as a text node. */
 import type { AgentState } from '../../../shared/contracts';
-import { h, keyed } from '../dom';
+import { h, keyed, setText } from '../dom';
 import type { ViewModel } from '../model';
 
 export interface Panel {
@@ -65,7 +65,7 @@ export function createLocksPanel(): Panel {
     el,
     update(vm) {
       if (!gate.changed(JSON.stringify(vm.locks))) return;
-      meta.replaceChildren(h('span', { class: 'stat' }, h('b', undefined, String(vm.locks.length)), vm.locks.length === 1 ? ' held' : ' held'));
+      meta.replaceChildren(h('span', { class: 'stat' }, h('b', undefined, String(vm.locks.length)), ' held'));
       const rows = vm.locks.map((l) =>
         h(
           'article',
@@ -92,20 +92,29 @@ export function createLocksPanel(): Panel {
 export function createActivityPanel(): Panel {
   const { el, meta, body } = panel('Activity', 'Activity');
   const gate = keyed();
+  let ages: { el: HTMLElement; seq: number }[] = [];
   return {
     el,
     update(vm) {
-      if (!gate.changed(JSON.stringify(vm.activity))) return;
-      meta.replaceChildren(h('span', { class: 'stat' }, 'newest first'));
-      const rows = vm.activity.map((a) =>
-        h(
-          'article',
-          { class: `row act-row tone-${a.tone}` },
-          h('span', { class: 'act-dot', 'aria-hidden': 'true' }),
-          h('div', { class: 'row-main' }, h('div', { class: 'act-text' }, a.text), h('div', { class: 'act-age' }, a.age)),
-        ),
-      );
-      body.replaceChildren(...(rows.length ? rows : [h('p', { class: 'empty' }, 'Quiet so far.')]));
+      // Rebuild only when the set of items changes; ages are updated in place.
+      if (gate.changed(JSON.stringify(vm.activity.map((a) => [a.seq, a.type, a.tone, a.text])))) {
+        meta.replaceChildren(h('span', { class: 'stat' }, 'newest first'));
+        ages = [];
+        const rows = vm.activity.map((a) => {
+          const age = h('div', { class: 'act-age' }, a.age);
+          ages.push({ el: age, seq: a.seq });
+          return h(
+            'article',
+            { class: `row act-row tone-${a.tone}` },
+            h('span', { class: 'act-dot', 'aria-hidden': 'true' }),
+            h('div', { class: 'row-main' }, h('div', { class: 'act-text' }, a.text), age),
+          );
+        });
+        body.replaceChildren(...(rows.length ? rows : [h('p', { class: 'empty' }, 'Quiet so far.')]));
+        return;
+      }
+      const bySeq = new Map(vm.activity.map((a) => [a.seq, a.age]));
+      for (const a of ages) setText(a.el, bySeq.get(a.seq) ?? '');
     },
   };
 }

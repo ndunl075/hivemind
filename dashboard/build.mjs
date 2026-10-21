@@ -1,8 +1,10 @@
 // Builds the dashboard into dashboard/dist.
-// `node dashboard/build.mjs --serve [port]` rebuilds on change and serves dist (default port 5173).
+// `node dashboard/build.mjs --serve [port]` rebuilds on change and serves dist (default port 5173) with the
+// _headers CSP and a single-page-app fallback, like the Worker.
 import { context } from 'esbuild';
 import { cpSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { startStaticServer } from './static-server.mjs';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -42,6 +44,6 @@ if (port === null) {
   await ctx.dispose();
 } else {
   await ctx.watch();
-  await ctx.serve({ servedir: dist, port });
+  await startStaticServer(dist, port);
   console.log(`dashboard on http://localhost:${port}`);
 }

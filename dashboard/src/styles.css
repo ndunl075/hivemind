@@ -293,6 +293,10 @@ p {
   stroke-width: 1;
 }
 .hull-label {
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 4px;
+  stroke-linejoin: round;
   fill: var(--muted);
   font: 500 10.5px var(--font-ui);
   letter-spacing: 0.09em;
@@ -885,4 +889,17 @@ p {
     opacity: 0.5;
     transform: scale(1.1);
   }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  list-style: none;
 }

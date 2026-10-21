@@ -297,3 +297,20 @@ export const RECONNECT_BANNER_AFTER_MS = 10_000;
 export function showReconnectBanner(state: ConnectionState, since: Millis, now: Millis): boolean {
   return state !== 'open' && now - since >= RECONNECT_BANNER_AFTER_MS;
 }
+
+/** One plain sentence per edge, for the screen-reader list next to the graph. */
+export function describeEdge(e: EdgeVM): string {
+  switch (e.kind) {
+    case 'message':
+      return `${e.from} messaged ${e.to ?? 'someone'}`;
+    case 'broadcast':
+      return `${e.from} messaged everyone`;
+    case 'blocked': {
+      return `${e.from} blocked from ${e.label ?? 'a file'}${e.to ? `, held by ${e.to}` : ''}`;
+    }
+    case 'waiting':
+      return `${e.to ?? 'someone'} waits on ${e.from}`;
+    case 'nearby':
+      return `${e.from} and ${e.to ?? 'someone'} hold locks in the same folder`;
+  }
+}

@@ -36,7 +36,7 @@ export function mountApp(root: HTMLElement, deps: AppDeps): App {
     token_ = token;
     prompt.hide();
     startSource();
-  });
+  }, { dismissible: deps.demo === 'prompt' });
 
   const side = h('aside', { class: 'side' }, tasks.el, locks.el, activity.el);
   const main = h('main', { class: 'main' }, graph.el, side);

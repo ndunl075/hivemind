@@ -2,9 +2,9 @@
 // Usage: npm run build && node dashboard/scripts/screenshots.mjs
 // Serves dashboard/dist on port 5173 with the same headers as _headers (including the CSP), so CSP violations show up.
 import { chromium } from '@playwright/test';
-import { createServer } from 'node:http';
-import { mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { startStaticServer } from '../static-server.mjs';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -12,24 +12,7 @@ const dist = join(here, '../dist');
 const out = join(here, '../../docs/evidence/dashboard');
 mkdirSync(out, { recursive: true });
 
-const headersText = readFileSync(join(dist, '_headers'), 'utf8');
-const globalHeaders = Object.fromEntries(
-  headersText
-    .split(/\r?\n\r?\n/)[0]
-    .split(/\r?\n/)
-    .slice(1)
-    .map((l) => l.trim().split(/:\s(.*)/s).slice(0, 2)),
-);
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
-
-const server = createServer((req, res) => {
-  const url = new URL(req.url, 'http://x');
-  let file = join(dist, url.pathname);
-  if (!existsSync(file) || url.pathname.endsWith('/')) file = join(dist, 'index.html');
-  res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream', ...globalHeaders });
-  res.end(readFileSync(file));
-});
-await new Promise((r) => server.listen(5173, '127.0.0.1', r));
+const server = await startStaticServer(dist, 5173);
 
 const browser = await chromium.launch();
 const report = {};

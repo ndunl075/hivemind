@@ -17,7 +17,7 @@ The script also records console and page errors: none, with the CSP (`default-sr
 
 ## Checks
 
-- `npm run test:dashboard`: 69 tests pass. They cover:
+- `npm run test:dashboard`: 87 tests pass. They cover:
   - layout logic: force layout (inside the frame, no overlap, deterministic, person grouping, stability when a node is added, phone width), ring fallback, hull, edge geometry;
   - state display: every state label from `shared/state.ts`, hiding ended agents after 24 h, edge expiry (message 60 s, blocked 2 min), banners (mode, not enforced, outage), panels, usage levels, reconnect banner timing;
   - text escaping: a task title, note, branch, activity, lock path, activity text and edge label containing `<img src=x onerror=...>` render as text (no `img` created, no `onerror` attribute, handler never runs); a source scan forbids `innerHTML`-style sinks;
@@ -48,3 +48,14 @@ Button label (#0E0E10 on lavender): 8.10. Body text (primary and secondary) is 9
 - `prefers-reduced-motion` turns off all animation; pulses then flash a node border instead of travelling dots, and working nodes keep a static ring.
 - `dashboard/tsconfig.json` now lists `"types": ["node"]` so tests can read files (own file).
 - The token prompt is wired but the fake source does not need a token (`sourceNeedsToken = false` in `live/index.ts`); W7 should flip it.
+
+## Review round 1
+
+- Token prompt: the page behind is `inert` while it is open, Tab is trapped inside, focus returns on close, Escape closes the preview prompt only (a required token cannot be skipped).
+- Activity panel rebuilds only when the set of items changes; ages update in place.
+- A visually hidden live list (`aria-live=polite`) describes the current edges, e.g. "claude-nico-2 blocked from login.ts, held by codex-ana".
+- `parseMessage` validates every list element and drops bad ones; optional fields are normalized.
+- Fonts are cached for a day (no `immutable`, filenames are not hashed). `build.mjs --serve` now serves with the `_headers` CSP and a single-page-app fallback (`dashboard/static-server.mjs`).
+- Graph measuring is skipped unless the width or agent count changed.
+- New tests: CSP directives in `_headers`, built `index.html`/CSS/JS reference only same-origin assets, dev-server fallback, reduced-motion pulse, focus handling, validation.
+- Person labels are drawn in a layer above the edges with a background halo.

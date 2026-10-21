@@ -15,7 +15,7 @@ import {
   type LayoutNode,
   type Point,
 } from '../layout';
-import type { AgentVM, EdgeVM, ViewModel } from '../model';
+import { describeEdge, type AgentVM, type EdgeVM, type ViewModel } from '../model';
 
 interface NodeView {
   el: HTMLElement;
@@ -107,6 +107,7 @@ export function createGraph(): GraphView {
   const hulls = s('g', { class: 'hulls' });
   const links = s('g', { class: 'links' });
   const fx = s('g', { class: 'fx' });
+  const labels = s('g', { class: 'labels' });
   const defs = s(
     'defs',
     undefined,
@@ -121,11 +122,13 @@ export function createGraph(): GraphView {
       ),
     ),
   );
-  const svg = s('svg', { class: 'edges', 'aria-hidden': 'true', preserveAspectRatio: 'none' }, defs, hulls, links, fx);
+  const svg = s('svg', { class: 'edges', 'aria-hidden': 'true', preserveAspectRatio: 'none' }, defs, hulls, links, fx, labels);
   const nodesLayer = h('div', { class: 'nodes' });
   const empty = h('p', { class: 'empty-graph' }, 'No agents in this room yet.');
   const stage = h('div', { class: 'stage' }, svg, nodesLayer, empty);
-  const el = h('section', { class: 'graph', 'aria-label': 'Agent graph' }, stage);
+  const connections = h('ul', { class: 'sr-only', 'aria-label': 'Connections between agents', 'aria-live': 'polite' });
+  const el = h('section', { class: 'graph', 'aria-label': 'Agent graph' }, stage, connections);
+  let connectionsKey = '';
 
   const views = new Map<string, NodeView>();
   let positions = new Map<string, Point>();
@@ -135,9 +138,16 @@ export function createGraph(): GraphView {
   let dims = { w: 236, h: 122 };
   let hullPad = 20;
   let frame = { width: 1000, height: 600 };
+  /** Cached container width (kept current by the ResizeObserver) so updates don't force layout. */
+  let boxW = 0;
+  let measuredKey = '';
 
   function measure(vm: ViewModel): void {
-    const width = el.clientWidth || 1000;
+    if (boxW === 0) boxW = el.clientWidth || 1000;
+    const key = `${boxW}|${vm.agents.length}`;
+    if (key === measuredKey) return;
+    measuredKey = key;
+    const width = boxW;
     const narrow = width < 700;
     hullPad = narrow ? 9 : 20;
     dims = narrow ? { w: Math.min(168, Math.floor((width - 2 * (hullPad + 6) - 16) / 2)), h: 122 } : { w: 236, h: 122 };
@@ -172,6 +182,7 @@ export function createGraph(): GraphView {
   function drawEdges(vm: ViewModel): void {
     hulls.replaceChildren();
     links.replaceChildren();
+    labels.replaceChildren();
     const byPerson = new Map<string, { x: number; y: number; w: number; h: number }[]>();
     for (const a of vm.agents) {
       const p = positions.get(a.callsign);
@@ -184,10 +195,8 @@ export function createGraph(): GraphView {
       const outline = groupOutline(rects, hullPad);
       if (outline.length < 3) continue;
       const top = outline.reduce((m, p) => (p.y < m.y || (p.y === m.y && p.x < m.x) ? p : m), outline[0]!);
-      hulls.append(
-        s('path', { class: 'hull', d: roundedPath(outline, 22) }),
-        s('text', { class: 'hull-label', x: top.x + 22, y: top.y + 15 }, person),
-      );
+      hulls.append(s('path', { class: 'hull', d: roundedPath(outline, 22) }));
+      labels.append(s('text', { class: 'hull-label', x: top.x + 22, y: top.y + 15 }, person));
     }
     const order = ['nearby', 'waiting', 'message', 'blocked'];
     for (const kind of order) {
@@ -235,6 +244,12 @@ export function createGraph(): GraphView {
     last = vm;
     measure(vm);
     setClass(empty, 'show', vm.agents.length === 0);
+    const described = vm.edges.map(describeEdge);
+    const describedKey = described.join('|');
+    if (describedKey !== connectionsKey) {
+      connectionsKey = describedKey;
+      connections.replaceChildren(...described.map((d) => h('li', undefined, d)));
+    }
 
     const ids = new Set(vm.agents.map((a) => a.callsign));
     for (const [id, v] of views) {
@@ -346,15 +361,19 @@ export function createGraph(): GraphView {
   function resize(): void {
     if (last) {
       layoutKey = '';
+      measuredKey = '';
       update(last);
     }
   }
 
   if (typeof ResizeObserver === 'function') {
-    let w = 0;
     new ResizeObserver(() => {
-      if (el.clientWidth !== w) {
-        w = el.clientWidth;
+      const w = el.clientWidth;
+      if (w > 0 && w !== boxW) {
+        boxW = w;
+        resize();
+      } else if (w > 0) {
+        // Height may have changed (window resize): refresh the frame.
         resize();
       }
     }).observe(el);

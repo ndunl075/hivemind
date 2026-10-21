@@ -97,7 +97,7 @@ export interface TokenPrompt {
 }
 
 /** The only input on the page. Accepts a bare token or a full dashboard link containing #v=. */
-export function createTokenPrompt(onToken: (token: string) => void): TokenPrompt {
+export function createTokenPrompt(onToken: (token: string) => void, options: { dismissible?: boolean } = {}): TokenPrompt {
   const input = h('input', {
     id: 'viewer-token',
     class: 'input',
@@ -135,16 +135,54 @@ export function createTokenPrompt(onToken: (token: string) => void): TokenPrompt
     input.value = '';
     onToken(token.trim());
   });
+  let restore: HTMLElement | null = null;
+  const inerted: Element[] = [];
+
+  function hide(): void {
+    el.hidden = true;
+    setClass(el, 'open', false);
+    for (const n of inerted.splice(0)) n.removeAttribute('inert');
+    restore?.focus();
+    restore = null;
+  }
+
+  el.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && options.dismissible) {
+      ev.preventDefault();
+      hide();
+      return;
+    }
+    if (ev.key !== 'Tab') return;
+    // Keep Tab inside the dialog.
+    const stops = [...el.querySelectorAll<HTMLElement>('input, button')];
+    const first = stops[0];
+    const last = stops[stops.length - 1];
+    if (!first || !last) return;
+    const active = document.activeElement;
+    if (ev.shiftKey && (active === first || !el.contains(active))) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && (active === last || !el.contains(active))) {
+      ev.preventDefault();
+      first.focus();
+    }
+  });
+
   return {
     el,
     show() {
+      restore = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       el.hidden = false;
       setClass(el, 'open', true);
-      queueMicrotask(() => input.focus());
+      // Make everything behind the dialog inert, so focus and clicks cannot reach it.
+      for (const sib of Array.from(el.parentElement?.children ?? [])) {
+        if (sib !== el && !sib.hasAttribute('inert')) {
+          sib.setAttribute('inert', '');
+          inerted.push(sib);
+        }
+      }
+      input.focus();
     },
-    hide() {
-      el.hidden = true;
-      setClass(el, 'open', false);
-    },
+    hide,
   };
 }
