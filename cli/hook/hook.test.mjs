@@ -1178,3 +1178,30 @@ describe('hook-local LIMITS copy', () => {
     }
   });
 });
+
+describe('home resolution', () => {
+  it('uses the folder it is installed in when HIVEMIND_HOME is unset', async () => {
+    const srv = await fakeServer();
+    const dir = mkdtempSync(join(base, 'inst-'));
+    const home = join(dir, 'custom-home');
+    const hookDir = join(home, 'hook');
+    const tmp = join(dir, 'tmp');
+    const fakeUserHome = join(dir, 'user');
+    mkdirSync(hookDir, { recursive: true });
+    mkdirSync(tmp);
+    mkdirSync(fakeUserHome);
+    for (const f of HOOK_FILES) copyFileSync(new URL(f, HOOK_DIR), join(hookDir, f));
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ server: srv.url, room: 'r', person: 'nobody', token: FAKE_AGENT_CRED, repos: [rootSha] }));
+    const env = { ...process.env, TEMP: tmp, TMP: tmp, TMPDIR: tmp, HOME: fakeUserHome, USERPROFILE: fakeUserHome };
+    delete env.HIVEMIND_HOME;
+    const input = JSON.stringify(payload('SessionStart', { session: `inst-${process.pid}` }));
+    const code = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [join(hookDir, 'hook.mjs'), 'claude'], { env, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true });
+      child.on('close', resolve);
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    });
+    expect(code).toBe(0);
+    expect(srv.requests.length).toBeGreaterThan(0);
+  });
+});
