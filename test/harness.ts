@@ -12,7 +12,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const HOOK = join(REPO_ROOT, 'cli', 'hook', 'hook.mjs');
@@ -157,11 +157,33 @@ export interface HookResult {
   context: string;
 }
 
+/**
+ * Optional request counting (used by the team-scale test). While `file` is set, every hook subprocess loads
+ * test/count-fetch.mjs, which appends one line per server request to it; `mcp` counts MCP tool calls by name.
+ */
+export const tally = { file: '', mcp: new Map<string, number>() };
+
+export function startTally(file: string): void {
+  tally.file = file;
+  tally.mcp.clear();
+  writeFileSync(file, '');
+}
+
+export function tallyLines(): string[] {
+  return tally.file && existsSync(tally.file) ? readFileSync(tally.file, 'utf8').split(/\r?\n/).filter(Boolean) : [];
+}
+
 export function runHook(tool: Tool, home: string, payload: unknown, extraEnv: Record<string, string> = {}): Promise<HookResult> {
   return new Promise((done, fail) => {
     const t0 = Date.now();
+    const counting: Record<string, string> = tally.file
+      ? {
+          HIVEMIND_COUNT_FILE: tally.file,
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import ${pathToFileURL(join(REPO_ROOT, 'test', 'count-fetch.mjs')).href}`.trim(),
+        }
+      : {};
     const child = spawn(process.execPath, [HOOK, tool], {
-      env: { ...process.env, HIVEMIND_HOME: home, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      env: { ...process.env, HIVEMIND_HOME: home, ...counting, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
     });
     let stdout = '';
     let stderr = '';
@@ -211,6 +233,7 @@ export function writeHookConfig(home: string, cfg: { server: string; room: strin
 let rpcId = 1;
 
 export async function mcpCall(server: string, token: string, name: string, args: Record<string, unknown>): Promise<{ value: any; isError: boolean }> {
+  if (tally.file) tally.mcp.set(name, (tally.mcp.get(name) ?? 0) + 1);
   const res = await fetch(`${server}/mcp`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
@@ -235,6 +258,10 @@ export interface AgentOptions {
   base: string;
   /** Skip the real token and use this server URL in the hook config (for outage tests). */
   hookServer?: string;
+  /** Names the laptop (clone + Hivemind home) when a person has several. */
+  laptop?: string;
+  /** A second agent on an existing laptop: same checkout, home and token, its own session. */
+  alongside?: Agent;
 }
 
 /** One person with one agent in its own clone, its own Hivemind home and session. */
@@ -252,13 +279,18 @@ export class Agent {
     this.person = o.person;
     this.tool = o.tool;
     this.server = o.server ?? SERVER;
-    this.dir = join(o.base, `${o.person}-${o.tool}`);
-    this.home = join(o.base, `home-${o.person}-${o.tool}`);
-    this.session = `e2e-${o.room}-${o.person}-${o.tool}`;
+    const lap = o.laptop ? `-${o.laptop}` : '';
+    this.dir = o.alongside?.dir ?? join(o.base, `${o.person}${lap}-${o.tool}`);
+    this.home = o.alongside?.home ?? join(o.base, `home-${o.person}${lap}-${o.tool}`);
+    this.session = `e2e-${o.room}-${o.person}${lap}-${o.tool}${o.alongside ? '-2' : ''}`;
   }
 
   static async create(o: AgentOptions): Promise<Agent> {
     const a = new Agent(o);
+    if (o.alongside) {
+      a.token = o.alongside.token;
+      return a;
+    }
     git(o.base, 'clone', '-q', o.origin, a.dir);
     const invite = await admin(`/admin/rooms/${o.room}/invite`, { person: o.person }, 'POST', a.server);
     a.token = invite.agentToken as string;
@@ -279,8 +311,13 @@ export class Agent {
     return p;
   }
 
-  fire(name: string, patch?: (p: any) => void): Promise<HookResult> {
-    return runHook(this.tool, this.home, this.payload(name, patch));
+  /** The context (notices, messages) every hook call of this agent has been given, in order. Lets a test count deliveries. */
+  readonly heard: string[] = [];
+
+  async fire(name: string, patch?: (p: any) => void): Promise<HookResult> {
+    const r = await runHook(this.tool, this.home, this.payload(name, patch));
+    this.heard.push(r.context);
+    return r;
   }
 
   async start(): Promise<HookResult> {
@@ -380,9 +417,9 @@ export class Team {
     return this;
   }
 
-  async agent(person: string, tool: Tool = 'claude', start = true, hookServer?: string): Promise<Agent> {
+  async agent(person: string, tool: Tool = 'claude', start = true, hookServer?: string, where: { laptop?: string; alongside?: Agent } = {}): Promise<Agent> {
     const a = await Agent.create({
-      room: this.room, person, tool, server: this.server, origin: this.origin, repoId: this.repoId, base: this.base, ...(hookServer ? { hookServer } : {}),
+      room: this.room, person, tool, server: this.server, origin: this.origin, repoId: this.repoId, base: this.base, ...(hookServer ? { hookServer } : {}), ...where,
     });
     this.agents.push(a);
     if (start) await a.start();
