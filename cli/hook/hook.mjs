@@ -523,8 +523,10 @@ async function run() {
     ctx.deadline = ctx.started + SESSION_END_DEADLINE_MS;
     arm();
   }
+  // Test-only: HIVEMIND_GIT_BUDGET_MS raises the Git time cap so slow CI runners don't hit it. Never set in production.
+  const GIT_CAP_MS = Number(process.env.HIVEMIND_GIT_BUDGET_MS) || 1_500;
   /** Time Git may use: whatever is left after reserving the network call and the margin. */
-  const gitBudget = () => Math.min(1_500, remaining() - netTimeout - MARGIN_MS);
+  const gitBudget = () => Math.min(GIT_CAP_MS, remaining() - netTimeout - MARGIN_MS);
 
   ctx.statePath = statePathFor(input.session);
   const statePath = ctx.statePath;
@@ -586,22 +588,20 @@ async function run() {
     state = loadState(statePath) ?? state;
   }
   if (event === 'PostToolUse') {
-    // An edit that went through is the agent's own divergent file from now on, even when this event is throttled:
-    // remember it locally (no network) so a push before the next heartbeat is still recognised (§12).
-    if (input.editPaths.length > 0 && state.gitMemory) {
-      const edited = gitMod.normalize(ident.root, input.cwd, input.editPaths);
-      if (edited.length > 0) {
-        updateState((s) => {
-          if (!s.gitMemory) return;
-          const merged = [...new Set([...s.gitMemory.divergent, ...edited])].sort();
-          s.gitMemory = { ...s.gitMemory, divergent: merged.slice(0, limits.maxDivergentPaths) };
-        });
-        state = loadState(statePath) ?? state;
-      }
-    }
     if (state.heartbeatMs === 0) return done(null);
     const interval = state.heartbeatMs ?? limits.heartbeatMs;
-    if (state.shellSeq <= state.shellAck && now < state.lastHeartbeat + interval) return done(null);
+    // An edit of a file Git has not yet reported as divergent is not throttled: the heartbeat records it, so the
+    // remembered set stays Git-confirmed and a push right after the edit is recognised (§12, issue #20).
+    let newEdit = false;
+    try {
+      if (input.editPaths.length > 0 && state.gitMemory) {
+        const known = new Set(state.gitMemory.divergent);
+        newEdit = gitMod.normalize(ident.root, input.cwd, input.editPaths).some((p) => !known.has(p));
+      }
+    } catch (e) {
+      log(false, e); // not a network failure: no breaker count
+    }
+    if (!newEdit && state.shellSeq <= state.shellAck && now < state.lastHeartbeat + interval) return done(null);
   }
 
   // Circuit breaker: skip the network while it is open.

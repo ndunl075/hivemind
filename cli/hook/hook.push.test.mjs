@@ -73,7 +73,7 @@ function agentSession(w, url) {
   const session = `sess-push-${process.pid}-${counter}`;
   return (hook_event_name, extra = {}) => new Promise((resolve) => {
     const child = spawn(process.execPath, [HOOK_PATH, 'claude'], {
-      env: { ...process.env, HIVEMIND_HOME: home, TEMP: tmp, TMP: tmp, TMPDIR: tmp },
+      env: { ...process.env, HIVEMIND_GIT_BUDGET_MS: '30000', HIVEMIND_HOME: home, TEMP: tmp, TMP: tmp, TMPDIR: tmp },
       stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
     });
     child.on('close', (code) => resolve(code));
@@ -83,7 +83,7 @@ function agentSession(w, url) {
 }
 
 describe('issue #20: edit and push inside one heartbeat interval', () => {
-  it('reports the push when the edit was throttled and the push came through Bash', async () => {
+  it('reports the push when the edit and the push come within one heartbeat interval', async () => {
     const srv = await fakeServer();
     const w = world();
     const send = agentSession(w, srv.url);
@@ -93,51 +93,59 @@ describe('issue #20: edit and push inside one heartbeat interval', () => {
     const file = join(w.agent, 'a.txt');
     await send('PreToolUse', { tool_name: 'Edit', tool_input: { file_path: file } });
     writeFileSync(file, 'changed\n');
-    await send('PostToolUse', { tool_name: 'Edit', tool_input: { file_path: file } }); // throttled: no request
-    const sent = srv.requests.length;
+    await send('PostToolUse', { tool_name: 'Edit', tool_input: { file_path: file } }); // a new divergent file: heartbeat now
+    expect(srv.requests.at(-1).git.divergent).toEqual(['a.txt']);
     git(['commit', '-q', '-am', 'change a'], w.agent);
     git(['push', '-q', 'origin', 'main'], w.agent);
     await send('PostToolUse', { tool_name: 'Bash', tool_input: { command: 'git commit && git push' } });
 
-    expect(srv.requests).toHaveLength(sent + 1);
     const last = srv.requests.at(-1);
     expect(last.event).toBe('PostToolUse');
     expect(last.git.pushed).toMatchObject({ branch: 'main', files: [{ path: 'a.txt', blob: git(['rev-parse', 'HEAD:a.txt'], w.agent) }] });
     expect(last.git.divergent).toEqual([]);
   });
 
-  it('only the edited files count: a fetched teammate commit is not ours', async () => {
+  it('a teammate\'s push of the same file, pulled over the agent\'s discarded edit, is not the agent\'s push', async () => {
     const srv = await fakeServer();
     const w = world();
     const mate = join(w.dir, 'mate');
+    const send = agentSession(w, srv.url);
+    await send('SessionStart', { source: 'startup' });
     git(['clone', '-q', w.remote, mate], w.dir);
-    writeFileSync(join(mate, 'b.txt'), 'b\n');
-    git(['add', '-A'], mate);
-    git(['commit', '-q', '-m', 'mate'], mate);
+    writeFileSync(join(mate, 'a.txt'), 'mate\n');
+    git(['commit', '-q', '-am', 'mate'], mate);
     git(['push', '-q', 'origin', 'main'], mate);
 
+    const file = join(w.agent, 'a.txt');
+    writeFileSync(file, 'mine\n');
+    await send('PostToolUse', { tool_name: 'Edit', tool_input: { file_path: file } });
+    git(['checkout', '--', 'a.txt'], w.agent);
+    git(['pull', '-q', '--ff-only'], w.agent);
+    await send('PostToolUse', { tool_name: 'Bash', tool_input: { command: 'git checkout -- a.txt && git pull --ff-only' } });
+    expect(srv.requests.at(-1).git.pushed).toBeNull();
+  });
+
+  it('a new edit sends a heartbeat at once, a repeated edit of the same file stays throttled', async () => {
+    const srv = await fakeServer();
+    const w = world();
     const send = agentSession(w, srv.url);
     await send('SessionStart', { source: 'startup' });
     const file = join(w.agent, 'a.txt');
-    writeFileSync(file, 'mine\n');
-    await send('PostToolUse', { tool_name: 'Write', tool_input: { file_path: file } });
-    git(['commit', '-q', '-am', 'mine'], w.agent);
-    git(['pull', '-q', '--no-rebase', '--no-edit', 'origin', 'main'], w.agent);
-    git(['push', '-q', 'origin', 'main'], w.agent);
-    await send('PostToolUse', { tool_name: 'Bash', tool_input: { command: 'git pull && git push' } });
-
-    const pushed = srv.requests.at(-1).git.pushed;
-    expect(pushed.files.map((f) => f.path)).toEqual(['a.txt']);
+    writeFileSync(file, 'one\n');
+    await send('PostToolUse', { tool_name: 'Edit', tool_input: { file_path: file } });
+    expect(srv.requests).toHaveLength(2);
+    writeFileSync(file, 'two\n');
+    await send('PostToolUse', { tool_name: 'Edit', tool_input: { file_path: file } });
+    expect(srv.requests).toHaveLength(2);
   });
 
-  it('an edit outside the checkout or under .git is not remembered', async () => {
+  it('an edit outside the checkout or under .git sends nothing', async () => {
     const srv = await fakeServer();
     const w = world();
     const send = agentSession(w, srv.url);
     await send('SessionStart', { source: 'startup' });
     await send('PostToolUse', { tool_name: 'Edit', tool_input: { file_path: join(w.dir, 'elsewhere.txt') } });
     await send('PostToolUse', { tool_name: 'Edit', tool_input: { file_path: join(w.agent, '.git', 'config') } });
-    await send('UserPromptSubmit', {});
-    expect(srv.requests.at(-1).git.divergent).toEqual([]);
+    expect(srv.requests).toHaveLength(1);
   });
 });

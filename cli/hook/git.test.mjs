@@ -148,5 +148,11 @@ describe('repoNameOf (issue #21)', () => {
     expect(repoNameOf(null)).toBeNull();
     expect(repoNameOf('')).toBeNull();
     expect(repoNameOf('/')).toBeNull();
+    expect(repoNameOf('/srv/repo/.git')).toBe('repo');
+    expect(repoNameOf('/srv/repo/.GIT/')).toBe('repo');
+    expect(repoNameOf(String.raw`C:\work\repo\.git`)).toBe('repo');
+    expect(repoNameOf('/srv/Repo.GIT')).toBe('Repo');
+    expect(repoNameOf('ssh://example.invalid:2222/')).toBeNull();
+    expect(repoNameOf('ssh://example.invalid:2222')).toBeNull();
   });
 });
