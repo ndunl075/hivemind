@@ -175,6 +175,24 @@ const NULL_SHA = '0'.repeat(40);
 const STATE_BUDGET_MS = 1_200;
 
 /**
+ * A usable time budget: an integer from 1 to 2_147_483_647 (the largest setTimeout delay), otherwise null (unset).
+ * @param {unknown} v
+ * @returns {number | null}
+ */
+function validBudget(v) {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 2_147_483_647 ? n : null;
+}
+
+/**
+ * Test-only: HIVEMIND_GIT_BUDGET_MS lets slow CI runners finish Git work that production would cut off.
+ * @returns {number | null} the validated value, or null when unset or invalid
+ */
+export function gitBudgetEnv() {
+  return validBudget(process.env.HIVEMIND_GIT_BUDGET_MS);
+}
+
+/**
  * True for failures that say nothing about the repository (a timeout, a kill, a spawn error), as opposed to Git
  * exiting with a status.
  * @param {unknown} err
@@ -393,7 +411,7 @@ export async function state(root, previous, options = {}) {
   const prev = /** @type {Memory | null} */ (previous);
   const exec = options.exec ?? git;
   // HIVEMIND_GIT_BUDGET_MS is test-only: it lets slow CI runners finish Git work that production would cut off.
-  const deadline = Date.now() + (options.budgetMs ?? (Number(process.env.HIVEMIND_GIT_BUDGET_MS) || STATE_BUDGET_MS));
+  const deadline = Date.now() + (validBudget(options.budgetMs) ?? gitBudgetEnv() ?? STATE_BUDGET_MS);
   /** @type {Run} */
   const g = (args, timeout = GIT_TIMEOUT_MS) => {
     const left = deadline - Date.now();
@@ -519,7 +537,7 @@ function ago(ms) {
  * @param {GitExec} run
  * @returns {Promise<string | null>}
  */
-async function workingBlob(root, path, run) {
+async function workingBlob(root, path, run, callMs = STALE_CALL_MS) {
   const abs = resolve(root, path);
   try {
     const st = await stat(abs);
@@ -527,7 +545,7 @@ async function workingBlob(root, path, run) {
   } catch (e) {
     return /** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT' ? NULL_SHA : null;
   }
-  return run(['hash-object', `--path=${path}`, '--', abs], root, STALE_CALL_MS).then((o) => o.trim() || null, () => null);
+  return run(['hash-object', `--path=${path}`, '--', abs], root, callMs).then((o) => o.trim() || null, () => null);
 }
 
 /**
@@ -537,13 +555,14 @@ async function workingBlob(root, path, run) {
  * @param {LastPush} p
  * @param {number} now
  * @param {GitExec} run
+ * @param {number} [callMs]
  * @returns {Promise<string | null>}
  */
-async function staleWarning(root, branch, p, now, run) {
+async function staleWarning(root, branch, p, now, run, callMs = STALE_CALL_MS) {
   /** @type {(args: string[]) => Promise<boolean>} */
-  const yes = (args) => run(args, root, STALE_CALL_MS).then(() => true, () => false);
+  const yes = (args) => run(args, root, callMs).then(() => true, () => false);
   /** @type {(args: string[]) => Promise<string | null>} */
-  const out = (args) => run(args, root, STALE_CALL_MS).then((o) => o.trim() || null, () => null);
+  const out = (args) => run(args, root, callMs).then((o) => o.trim() || null, () => null);
   if (!p || typeof p.path !== 'string' || typeof p.sha !== 'string' || typeof p.blob !== 'string') return null;
   if (!isSafeRelPath(p.path)) return null;
   if (!/^[0-9a-f]{4,64}$/i.test(p.sha)) return null;
@@ -558,7 +577,7 @@ async function staleWarning(root, branch, p, now, run) {
   if ((headBlob ?? NULL_SHA) === p.blob) return null;
   // The working copy only matters when it differs from HEAD, and only then is it worth hashing.
   const dirty = await out(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', `:(literal)${p.path}`]);
-  if (dirty && (await workingBlob(root, p.path, run)) === p.blob) return null;
+  if (dirty && (await workingBlob(root, p.path, run, callMs)) === p.blob) return null;
   const who = safeText(p.by, 64);
   const file = quotePath(p.path);
   const when = ago(age);
@@ -574,21 +593,26 @@ async function staleWarning(root, branch, p, now, run) {
  * @param {string} root
  * @param {string | null} branch
  * @param {LastPush[]} lastPush
- * @param {{ exec?: GitExec }} [options]  `exec` replaces the Git runner (tests watch which commands run).
+ * @param {{ exec?: GitExec, budgetMs?: number }} [options]  `exec` replaces the Git runner (tests watch which commands run);
+ *   `budgetMs` replaces the overall time limit (and the per-command one when larger).
  * @returns {Promise<string[]>}
  */
 export async function staleWarnings(root, branch, lastPush, options = {}) {
   const run = options.exec ?? git;
+  // HIVEMIND_GIT_BUDGET_MS is test-only: it lets slow CI runners finish Git work that production would cut off.
+  const budgetMs = validBudget(options.budgetMs) ?? gitBudgetEnv();
+  const totalMs = budgetMs ?? STALE_TOTAL_MS;
+  const callMs = Math.max(STALE_CALL_MS, budgetMs ?? 0);
   try {
     if (!Array.isArray(lastPush) || lastPush.length === 0) return [];
     const now = Date.now();
     /** @type {string[]} */
     const lines = [];
-    const work = Promise.all(lastPush.slice(0, STALE_MAX_FILES).map((p) => staleWarning(root, branch, p, now, run).catch(() => null)))
+    const work = Promise.all(lastPush.slice(0, STALE_MAX_FILES).map((p) => staleWarning(root, branch, p, now, run, callMs).catch(() => null)))
       .then((found) => { for (const l of found) if (l) lines.push(l); });
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let timer;
-    await Promise.race([work, new Promise((r) => { timer = setTimeout(r, STALE_TOTAL_MS); })]);
+    await Promise.race([work, new Promise((r) => { timer = setTimeout(r, totalMs); })]);
     clearTimeout(timer);
     const out = [...lines];
     if (lastPush.length > STALE_MAX_FILES && out.length > 0) out.push(`${lastPush.length - STALE_MAX_FILES} more files were pushed by teammates.`);
@@ -598,4 +622,4 @@ export async function staleWarnings(root, branch, lastPush, options = {}) {
   }
 }
 
-export default { identity, refs, normalize, state, staleWarnings };
+export default { identity, refs, normalize, state, staleWarnings, gitBudgetEnv };

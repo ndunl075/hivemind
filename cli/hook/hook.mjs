@@ -525,7 +525,8 @@ async function run() {
     arm();
   }
   // Test-only: HIVEMIND_GIT_BUDGET_MS raises the Git time cap so slow CI runners don't hit it. Never set in production.
-  const GIT_CAP_MS = Number(process.env.HIVEMIND_GIT_BUDGET_MS) || 1_500;
+  const envBudget = typeof /** @type {any} */ (gitMod).gitBudgetEnv === 'function' ? /** @type {any} */ (gitMod).gitBudgetEnv() : null;
+  const GIT_CAP_MS = envBudget ?? 1_500;
   /** Time Git may use: whatever is left after reserving the network call and the margin. */
   const gitBudget = () => Math.min(GIT_CAP_MS, remaining() - netTimeout - MARGIN_MS);
 
@@ -727,7 +728,7 @@ async function run() {
   // Stale-copy check (§6.3 step 12): a failure drops only the warning.
   if (event === 'PreToolUse' && outcome.decision !== 'deny' && resp.lastPush && resp.lastPush.length > 0 && remaining() > MARGIN_MS) {
     try {
-      const lines = await within(gitMod.staleWarnings(ident.root, ident.branch, resp.lastPush), Math.min(1_000, remaining() - MARGIN_MS));
+      const lines = await within(gitMod.staleWarnings(ident.root, ident.branch, resp.lastPush), Math.min(envBudget ?? 1_000, remaining() - MARGIN_MS));
       if (lines.length > 0) {
         const text = `[Hivemind] Before you edit:\n${lines.map((l) => `- ${l}`).join('\n')}`;
         outcome.context = outcome.context ? `${outcome.context}\n\n${text}` : text;
