@@ -63,17 +63,19 @@ export interface TaskOps {
   add(actor: Actor, specs: NewTask[], options: { force: boolean; repo?: string }): AddOutcome;
   claim(actor: Actor, id: number, options: { take?: boolean; reason?: string }): ClaimResult;
   update(actor: Actor, id: number, status: TaskStatus, note?: string): TaskView;
-  /**
-   * §6.2 Stop: the one-time reminder for an agent that stops while it owns an in-progress task, or null (no such task,
-   * or already reminded for it). Calling it records the reminder, so call it only when the Stop will really be blocked.
-   */
-  stopReminder(callsign: Callsign): string | null;
 }
 
 export type FullTasks = TasksApi & TaskOps & BriefingContributor;
 
 /** Task text written by another agent, shown as quoted data. */
 const quoted = (s: string): string => `"${s.replace(/"/g, "'")}"`;
+
+/** A title for the Stop reminder: one line, typographic quotes and backticks flattened, cut by code points. */
+const reminderTitle = (title: string): string =>
+  quoted(Array.from(cleanLine(title, 400).replace(/[‘’‚‛“”„‟«»`]/g, "'")).slice(0, 80).join('').trim());
+
+const REMINDED_KEY = 'stop_reminded:';
+const MAX_REMINDED_TASKS = 3;
 
 const GATE_TEXT = 'Claim a task first (`task_claim`, or `task_add` with `claim: true`).';
 
@@ -130,6 +132,17 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
 
   const isOpenOrActive = (t: TaskView): boolean => t.status === 'open' || t.status === 'in_progress';
 
+  // The Stop-reminder record is a plain meta row. The Room's in-memory meta cache is loaded once and only the Room
+  // reads it for its own keys, so rows this feature owns go straight to SQL (like next_task_id below).
+  const clearReminded = (id: number): void => {
+    ctx.sql.exec('DELETE FROM meta WHERE key = ?', `${REMINDED_KEY}${id}`).toArray();
+  };
+  const wasReminded = (id: number, callsign: Callsign): boolean =>
+    ctx.sql.exec('SELECT value FROM meta WHERE key = ?', `${REMINDED_KEY}${id}`).toArray()[0]?.value === callsign;
+  /** Newest push this agent made (read-only look at the pushes table of features/git), or 0. */
+  const lastPushAt = (callsign: Callsign): number =>
+    Number(ctx.sql.exec('SELECT MAX(pushed_at) AS at FROM pushes WHERE callsign = ?', callsign).toArray()[0]?.at ?? 0);
+
   const ownerIsGone = (owner: Callsign): boolean => {
     const a = ctx.agent(owner);
     return !a || deriveState(a, ctx.now()).state === 'ended';
@@ -139,6 +152,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
   const returnToOpen = (t: TaskView, why: string): void => {
     const previous = t.owner;
     const keep = t.note ? ` Last note: "${t.note}"` : '';
+    clearReminded(t.id);
     t.status = 'open';
     t.owner = null;
     t.note = cleanBlock(`${why}${keep}`, MAX_NOTE);
@@ -171,7 +185,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
     for (const t of closed.slice(0, Math.max(0, closed.length - KEEP_CLOSED))) {
       tasks.delete(t.id);
       ctx.sql.exec('DELETE FROM tasks WHERE id = ?', t.id).toArray();
-      ctx.sql.exec('DELETE FROM meta WHERE key = ?', `stop_reminded:${t.id}`).toArray();
+      clearReminded(t.id);
     }
   };
 
@@ -329,6 +343,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
         const unfinished = unfinishedDeps(t);
         if (unfinished.length > 0) return { result: 'waiting', unfinished };
       }
+      clearReminded(id);
       t.status = 'in_progress';
       t.owner = actor.callsign;
       t.updatedAt = ctx.now();
@@ -358,6 +373,7 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
       }
       if (!isOpenOrActive(t)) throw new TaskError(`Task #${id} is already ${t.status}.`);
       if (note !== undefined) t.note = cleanBlock(note, MAX_NOTE).trim() || null;
+      if (status !== 'in_progress') clearReminded(id);
       t.updatedAt = ctx.now();
       t.status = status;
       if (status === 'open') t.owner = null; // given back
@@ -372,15 +388,22 @@ export const createTasks: FeatureFactory<'tasks'> = (ctx, features) => {
     },
 
     stopReminder(callsign) {
-      const t = inProgressFor(callsign);
-      if (!t) return null;
-      const key = `stop_reminded:${t.id}`;
-      const seen = ctx.sql.exec('SELECT value FROM meta WHERE key = ?', key).toArray()[0]?.value;
-      if (seen === callsign) return null;
-      ctx.sql.exec('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', key, callsign).toArray();
-      return `[Hivemind] You still own task #${t.id}, in progress (title written by a teammate's agent): ${quoted(cleanLine(t.title, 80))}. `
-        + 'Before you stop, update it with `task_update`: done if the work is finished or already exists, dropped with a short note if it is not needed, '
-        + 'or keep working. If you have unpushed changes, push them so your locks release. This reminder appears once for this task.';
+      // Only a real "forgot to close it" signal: the agent pushed since it took the task, and holds no file locks
+      // (its work landed), yet the task is still in progress. A plain turn end (maybe waiting for its person) is left alone.
+      const pushedAt = lastPushAt(callsign);
+      if (pushedAt === 0) return null;
+      const holdsLocks = features.locks.holdings(callsign).some((l) => l.kind === 'file');
+      if (holdsLocks) return null;
+      const due = [...tasks.values()]
+        .filter((t) => t.status === 'in_progress' && t.owner === callsign && pushedAt > t.updatedAt && !wasReminded(t.id, callsign))
+        .sort((a, b) => a.id - b.id);
+      if (due.length === 0) return null;
+      for (const t of due) ctx.sql.exec('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', `${REMINDED_KEY}${t.id}`, callsign).toArray();
+      const list = due.slice(0, MAX_REMINDED_TASKS).map((t) => `#${t.id} ${reminderTitle(t.title)}`).join(' · ');
+      const more = due.length > MAX_REMINDED_TASKS ? ` (and ${due.length - MAX_REMINDED_TASKS} more)` : '';
+      return `[Hivemind] You pushed your work but still own in-progress ${due.length === 1 ? 'task' : 'tasks'} (titles written by teammates' agents): ${list}${more}. `
+        + 'Update each with `task_update`: done if the work is finished or already exists, dropped with a short note if it is not needed, or keep working. '
+        + "If you're waiting for your person, say so in one line and stop. This reminder appears once.";
     },
 
     briefingLines(actor: Actor): string[] {

@@ -6,7 +6,7 @@
  * The tool side (POST /mcp) is features/mcp, built with the same services.
  */
 import {
-  type Actor, type AgentRecord, type BriefingContributor, type HookRequest, type HookResponse, type Millis,
+  LIMITS, type Actor, type AgentRecord, type BriefingContributor, type HookRequest, type HookResponse, type Millis,
 } from '../../shared/contracts';
 import { buildBriefing } from './briefing';
 import { denialText } from './features/locks/denial';
@@ -218,9 +218,11 @@ export class Pipeline {
             call.denied = features.messages.format(msgs, now);
           }
         }
-        // One block per Stop: unread direct messages come first. The task reminder is once per task (recorded by the
-        // board), never in mode off, never while stop_hook_active, and not while the budget guard has heartbeats off.
-        if (decision !== 'block' && req.stopActive !== true && ctx.mode() !== 'off' && this.svc.heartbeatMs() > 0) {
+        // One block per Stop: unread direct messages come first. The task reminder fires only on a real "forgot to
+        // close it" signal (decided by the board), once per ownership period; never in mode off, never while
+        // stop_hook_active, and not at any slowed budget level (heartbeatMs is budget.level().heartbeatMs, which
+        // differs from the normal interval from 60% of the daily cap on).
+        if (decision !== 'block' && req.stopActive !== true && ctx.mode() !== 'off' && this.svc.heartbeatMs() === LIMITS.heartbeatMs) {
           const reminder = features.tasks.stopReminder(agent.callsign);
           if (reminder) {
             decision = 'block';
