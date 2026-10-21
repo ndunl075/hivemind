@@ -451,11 +451,22 @@ let LIM = null;
 function claimOutageNotice(event) {
   if (!LIM || !CONTEXT_EVENTS.has(event)) return null;
   const limits = LIM;
-  const claimed = updateState((s) => {
+  /** @type {number | null} */
+  let outage = null;
+  const eligible = updateState((s) => {
     if (s.failures < limits.breakerFailures || s.outageNotified) return false;
     s.outageNotified = true;
+    outage = s.outageSince ?? 0;
     return true;
   });
+  // The state merge isn't a lock, so the claim itself is an exclusive-create marker, one per outage.
+  let claimed = false;
+  if (eligible && ctx.statePath) {
+    try {
+      writeFileSync(`${ctx.statePath}.notice.${outage}`, '', { flag: 'wx', mode: 0o600 });
+      claimed = true;
+    } catch { /* another process said it */ }
+  }
   return claimed ? { decision: 'allow', reason: null, context: OUTAGE_NOTICE } : null;
 }
 
