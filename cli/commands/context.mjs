@@ -34,6 +34,7 @@ export class CliError extends Error {
  *   runner: Runner,
  *   fetch: typeof fetch,
  *   readSecret: (label: string) => Promise<string>,
+ *   readStdin: () => Promise<string>,
  *   readLine: (label: string) => Promise<string>,
  *   interactive: boolean,
  *   now: () => number,
@@ -49,20 +50,53 @@ function cmdQuote(a) {
 }
 
 /**
+ * The environment a child process (`claude`, `codex`) gets: everything except Hivemind secrets. A variable is
+ * dropped when its name looks like one of ours (HIVEMIND_*TOKEN / *SECRET) or its value is a Hivemind token.
+ * @param {Record<string, string | undefined>} env
+ * @returns {Record<string, string | undefined>}
+ */
+export function scrubEnv(env) {
+  /** @type {Record<string, string | undefined>} */
+  const out = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (/^HIVEMIND_.*(TOKEN|SECRET)/i.test(k)) continue;
+    if (typeof v === 'string' && /^hm_[av]\./.test(v.trim())) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * True when an argument holds a character cmd.exe would still act on inside quotes (%VAR% expansion, ^, & | < >)
+ * or one that ends a command line. The shell fallback refuses such a call rather than risk running something else.
+ * @param {string} cmd
+ * @param {string[]} args
+ */
+export function shellUnsafe(cmd, args) {
+  return [cmd, ...args].some((a) => /[%^&|<>\r\n\0]/.test(a));
+}
+
+/**
  * Runs a program with no shell. On Windows a program installed as a .cmd shim is not found that way, so a second
- * attempt goes through the shell with every argument quoted. A missing program is code 127, not a throw.
+ * attempt goes through the shell with every argument quoted (skipped when an argument is not safe for cmd.exe).
+ * A missing program is code 127, not a throw. Hivemind secrets are removed from the child's environment.
  * @type {Runner}
  */
 export function defaultRunner(cmd, args, opts = {}) {
+  const env = scrubEnv(opts.env ?? process.env);
   /**
    * @param {boolean} shell
    * @returns {Promise<RunResult & { missing?: boolean }>}
    */
   const attempt = (shell) =>
     new Promise((resolve) => {
+      if (shell && shellUnsafe(cmd, args)) {
+        resolve({ code: 127, stdout: '', stderr: 'not run: an argument has a character cmd.exe could misread (% ^ & | < >)', missing: false });
+        return;
+      }
       const child = spawn(shell ? cmdQuote(cmd) : cmd, shell ? args.map(cmdQuote) : args, {
         cwd: opts.cwd,
-        env: /** @type {NodeJS.ProcessEnv} */ (opts.env ?? process.env),
+        env: /** @type {NodeJS.ProcessEnv} */ (env),
         shell,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -91,9 +125,10 @@ export function createContext(over = {}) {
     platform: over.platform ?? process.platform,
     out: over.out ?? ((t) => { process.stdout.write(t); }),
     err: over.err ?? ((t) => { process.stderr.write(t); }),
-    runner: over.runner ?? defaultRunner,
+    runner: (cmd, args, opts = {}) => (over.runner ?? defaultRunner)(cmd, args, { ...opts, env: scrubEnv(opts.env ?? env) }),
     fetch: over.fetch ?? globalThis.fetch,
-    readSecret: over.readSecret ?? (async () => { throw new CliError('no terminal to ask on; use the environment variable named in the help'); }),
+    readSecret: over.readSecret ?? (async () => { throw new CliError('no terminal to ask on; run this in a real terminal'); }),
+    readStdin: over.readStdin ?? (async () => { throw new CliError('no piped input available'); }),
     readLine: over.readLine ?? (async () => { throw new CliError('no terminal to ask on'); }),
     interactive: over.interactive ?? Boolean(process.stdin.isTTY),
     now: over.now ?? Date.now,
@@ -113,6 +148,7 @@ export function paths(ctx) {
     hookDir: join(home, 'hook'),
     hookScript: join(home, 'hook', 'hook.mjs'),
     helperScript: join(home, 'hook', 'headers-helper.mjs'),
+    helperCmd: join(home, 'hook', 'headers-helper.cmd'),
     config: join(home, 'config.json'),
     manifest: join(home, 'install.json'),
     off: join(home, 'off'),

@@ -80,15 +80,79 @@ export function codexHandler(node, hookScript, spec) {
   };
 }
 
+/** Characters a path may hold and still be written as one shell word that PowerShell, cmd and Git Bash all read the same. */
+const WORD_SAFE = /^[\p{L}\p{N}_@+=:,./~ -]+$/u;
+
 /**
- * The command line Claude's headersHelper runs. Forward slashes and double quotes work under Git Bash and PowerShell
- * alike; the helper prints the Authorization header from config.json, so no token is in this string.
+ * A path as a command word that works in PowerShell, cmd.exe and Git Bash alike (verified under each): forward
+ * slashes, no quotes around it, and every space written as `" "` (a quote pair around a space). A leading quoted
+ * string would only be printed by PowerShell, and `&` is not understood by cmd, so this is the one common form.
+ * @param {string} path
+ */
+export function shellWord(path) {
+  const fwd = path.replace(/\\/g, '/');
+  if (!WORD_SAFE.test(fwd)) {
+    throw new CliError(
+      'the Hivemind folder path has a character that cannot be written safely in a command every shell reads the same way. Set HIVEMIND_HOME to a folder whose path has only letters, digits, spaces and . _ - / : and run this again.',
+    );
+  }
+  return fwd.replace(/ /g, '" "');
+}
+
+/**
+ * The command Claude's headersHelper runs; the helper prints the Authorization header from config.json, so no token
+ * is in this string. Claude does not say which shell runs it, so on Windows it is one word: the wrapper script
+ * (see helperCmdText), which knows the node path itself. Elsewhere sh runs it, and quoting is enough.
+ * @param {string} platform
  * @param {string} node
  * @param {string} helperScript
+ * @param {string} helperCmd the Windows wrapper
  */
-export function headersHelperCommand(node, helperScript) {
-  const fwd = (/** @type {string} */ p) => posixQuote(p.replace(/\\/g, '/'));
-  return `${fwd(node)} ${fwd(helperScript)}`;
+export function headersHelperCommand(platform, node, helperScript, helperCmd) {
+  if (platform === 'win32') return shellWord(helperCmd);
+  return `${posixQuote(node)} ${posixQuote(helperScript)}`;
+}
+
+/**
+ * The Windows wrapper next to headers-helper.mjs: runs it with the node recorded at join time.
+ * @param {string} node
+ */
+export function helperCmdText(node) {
+  if (/["\r\n]/.test(node)) throw new CliError('the node path has a character a Windows script cannot hold');
+  return `@echo off\r\n"${node.replace(/%/g, '%%')}" "%~dp0headers-helper.mjs"\r\n`;
+}
+
+/**
+ * True when text from `claude mcp get` (or a settings file) names Hivemind's own helper script.
+ * @param {string} text
+ */
+export function isOurHelper(text) {
+  return /\/hook\/headers-helper\.(mjs|cmd)/.test(text.replace(/\\/g, '/'));
+}
+
+/**
+ * Escape a string as one Windows command-line argument (the MSVC rules): backslashes before a quote are doubled.
+ * @param {string} s
+ */
+function winArg(s) {
+  return s.replace(/(\\*)"/g, '$1$1\\"');
+}
+
+/**
+ * The `claude mcp add-json` command to run by hand, once per shell family, with the JSON quoted for that shell.
+ * @param {string} platform
+ * @param {string} json
+ * @param {string} [prefix] the program and fixed arguments
+ * @returns {Array<{ shell: string, command: string }>}
+ */
+export function addJsonCommands(platform, json, prefix = 'claude mcp add-json --scope user hivemind') {
+  if (platform === 'win32') {
+    return [
+      { shell: 'PowerShell', command: `${prefix} '${winArg(json).replace(/'/g, "''")}'` },
+      { shell: 'Command Prompt', command: `${prefix} "${winArg(json)}"` },
+    ];
+  }
+  return [{ shell: 'sh', command: `${prefix} '${json.replace(/'/g, "'\\''")}'` }];
 }
 
 /**

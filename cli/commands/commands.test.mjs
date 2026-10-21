@@ -3,11 +3,16 @@
  * Command tests. Every test runs against a temporary home and project, a stubbed `claude`/`codex` runner and a fake
  * server on port 8790. This is the only test file that binds 8790, so run files never collide.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { spawn, spawnSync } from 'node:child_process';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { main } from '../hivemind.mjs';
+import { createContext, scrubEnv, shellUnsafe } from './context.mjs';
+import { addJsonCommands } from './registrations.mjs';
+import { terminalReaders } from './secrets.mjs';
+import { writeAtomic } from './files.mjs';
 import {
   ADMIN_SECRET, AGENT_TOKEN, OTHER_TOKEN, SERVER, VIEWER_TOKEN, VIEWER_TOKEN_2,
   cleanup, makeLaptop, mtimes, snapshot, startFakeServer, tempBase,
@@ -70,7 +75,9 @@ describe('join', () => {
     expect(config).toEqual({ server: SERVER, room: 'hack', person: 'ana', token: AGENT_TOKEN, repos: [lap.project.root] });
     // Only the runtime files plus the helper; no tests.
     const files = Object.keys(snapshot(lap.path('.hivemind', 'hook'))).sort();
-    expect(files).toEqual(['claude.mjs', 'codex.mjs', 'git.mjs', 'headers-helper.mjs', 'hook.mjs', 'limits.mjs']);
+    expect(files).toEqual([
+      'claude.mjs', 'codex.mjs', 'git.mjs', ...(process.platform === 'win32' ? ['headers-helper.cmd'] : []), 'headers-helper.mjs', 'hook.mjs', 'limits.mjs',
+    ]);
     expect(existsSync(lap.path('.hivemind', 'config.json'))).toBe(true);
 
     const settings = readJson(lap.path('.claude', 'settings.json'));
@@ -104,7 +111,7 @@ describe('join', () => {
     const mcp = readJson(lap.path('.claude.json')).mcpServers.hivemind;
     expect(mcp.type).toBe('http');
     expect(mcp.url).toBe(`${SERVER}/mcp`);
-    expect(mcp.headersHelper).toContain('headers-helper.mjs');
+    expect(mcp.headersHelper).toContain(process.platform === 'win32' ? 'headers-helper.cmd' : 'headers-helper.mjs');
     expect(mcp.headersHelper).not.toContain(AGENT_TOKEN);
     expect(JSON.stringify(mcp)).not.toContain('hm_a.');
   });
@@ -152,11 +159,22 @@ describe('join', () => {
     expect(r2.err).toContain('unknown option');
   });
 
-  it('takes the token from HIVEMIND_AGENT_TOKEN without prompting', async () => {
-    const lap = makeLaptop(base, { env: { HIVEMIND_AGENT_TOKEN: AGENT_TOKEN } });
+  it('does not read the token from the environment: HIVEMIND_AGENT_TOKEN is ignored', async () => {
+    const lap = laptop({ env: { HIVEMIND_AGENT_TOKEN: OTHER_TOKEN } });
     const r = await join_(lap);
     expect(r.code, r.err).toBe(0);
-    expect(lap.prompts).toEqual([]);
+    expect(lap.prompts.some((p) => /token/i.test(p))).toBe(true); // it asked, instead of using the variable
+    expect(readJson(lap.path('.hivemind', 'config.json')).token).toBe(AGENT_TOKEN);
+  });
+
+  it('--token-stdin reads one piped line, and never prompts', async () => {
+    const lap = makeLaptop(base, { stdin: [AGENT_TOKEN] });
+    mkdirSync(lap.path('.claude'), { recursive: true });
+    const r = await join_(lap, ['--token-stdin']);
+    expect(r.code, r.err).toBe(0);
+    expect(lap.prompts).toEqual(['<stdin>']);
+    expect(readJson(lap.path('.hivemind', 'config.json')).token).toBe(AGENT_TOKEN);
+    expect(r.out + r.err).not.toContain(AGENT_TOKEN);
   });
 
   it('running join twice changes nothing: same bytes, no writes, no second MCP add', async () => {
@@ -201,9 +219,11 @@ describe('join', () => {
     expect(codex.hooks.Stop).toHaveLength(2);
 
     const toml = readFileSync(lap.path('.codex', 'config.toml'), 'utf8');
-    expect(toml.startsWith(EXISTING_TOML)).toBe(true);
-    expect(toml).toContain('# my codex settings');
-    expect(toml).toContain('[mcp_servers.other]');
+    // Root keys first, then our block, then the user's tables untouched.
+    const head = '# my codex settings\nmodel = "gpt-5"\n\n';
+    expect(toml.startsWith(head)).toBe(true);
+    expect(toml.endsWith(EXISTING_TOML.slice(head.length))).toBe(true);
+    expect(toml.indexOf('[mcp_servers.hivemind]')).toBeLessThan(toml.indexOf('[mcp_servers.other]'));
   });
 
   it('leave removes only what join added, leaving every other byte as it was', async () => {
@@ -333,7 +353,7 @@ describe('join', () => {
 
   it('writes paths with spaces and special characters in a form each shell reads back', async () => {
     const lap = laptop({ nodePath: join(base, 'Program Files', 'node js', 'no$de"x') });
-    await join_(lap);
+    await lap.run(main, ['join', '--server', SERVER, '--yes'], { platform: 'linux' });
     const h = readJson(lap.path('.codex', 'hooks.json')).hooks.SessionStart[0].hooks[0];
     expect(h.commandWindows).toContain('no`$de`"x');
     expect(h.commandWindows.startsWith('& "')).toBe(true);
@@ -633,6 +653,450 @@ describe('doctor', () => {
     await join_(lap);
     await lap.run(main, ['off']);
     expect((await lap.run(main, ['doctor'])).out).toContain('paused');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+describe('file modes and links', () => {
+  const posix = process.platform !== 'win32';
+
+  (posix ? it : it.skip)('config.toml (it holds the token) is owner-only even if it was 0644; other rewritten files keep their mode', async () => {
+    const lap = laptop();
+    seedExisting(lap);
+    chmodSync(lap.path('.codex', 'config.toml'), 0o644);
+    chmodSync(lap.path('.claude', 'settings.json'), 0o640);
+    chmodSync(lap.path('.codex', 'hooks.json'), 0o664);
+    expect((await join_(lap)).code).toBe(0);
+    const mode = (...p) => statSync(lap.path(...p)).mode & 0o777;
+    expect(mode('.codex', 'config.toml')).toBe(0o600);
+    expect(mode('.hivemind', 'config.json')).toBe(0o600);
+    expect(mode('.claude', 'settings.json')).toBe(0o640);
+    expect(mode('.codex', 'hooks.json')).toBe(0o664);
+
+    // Loosened by hand with nothing else to change: the next join tightens it again.
+    chmodSync(lap.path('.codex', 'config.toml'), 0o644);
+    chmodSync(lap.path('.hivemind', 'config.json'), 0o644);
+    lap.answers.secrets.push(AGENT_TOKEN);
+    expect((await join_(lap)).code).toBe(0);
+    expect(mode('.codex', 'config.toml')).toBe(0o600);
+    expect(mode('.hivemind', 'config.json')).toBe(0o600);
+    expect(mode('.claude', 'settings.json')).toBe(0o640);
+  });
+
+  (posix ? it : it.skip)('a new config.toml is created owner-only', async () => {
+    const lap = laptop();
+    await join_(lap);
+    expect(statSync(lap.path('.codex', 'config.toml')).mode & 0o777).toBe(0o600);
+  });
+
+  it('writeAtomic keeps the mode of the file it replaces unless told otherwise', () => {
+    if (!posix) return;
+    const f = join(base, `mode-${Date.now()}.txt`);
+    writeFileSync(f, 'a');
+    chmodSync(f, 0o640);
+    writeAtomic(f, 'b');
+    expect(statSync(f).mode & 0o777).toBe(0o640);
+    writeAtomic(f, 'c', 0o600);
+    expect(statSync(f).mode & 0o777).toBe(0o600);
+    expect(readFileSync(f, 'utf8')).toBe('c');
+  });
+
+  it('rewrites a symlinked dotfile through the link, so the link survives join, update and leave', async (t) => {
+    const lap = laptop();
+    const real = (n) => join(lap.dir, 'dotfiles', n);
+    write(real('settings.json'), `${JSON.stringify({ model: 'x' }, null, 2)}\n`);
+    write(real('hooks.json'), `${JSON.stringify({ hooks: { Notification: [{ hooks: [{ type: 'command', command: 'n.sh' }] }] } }, null, 2)}\n`);
+    write(real('config.toml'), 'model = "gpt-5"\n\n[tools]\nweb = true\n');
+    try {
+      symlinkSync(real('settings.json'), lap.path('.claude', 'settings.json'));
+      symlinkSync(real('hooks.json'), lap.path('.codex', 'hooks.json'));
+      symlinkSync(real('config.toml'), lap.path('.codex', 'config.toml'));
+    } catch {
+      t.skip(); // no right to create symlinks here
+      return;
+    }
+    const isLink = (...p) => lstatSync(lap.path(...p)).isSymbolicLink();
+    const original = ['settings.json', 'hooks.json', 'config.toml'].map((n) => readFileSync(real(n), 'utf8'));
+
+    expect((await join_(lap)).code).toBe(0);
+    expect([isLink('.claude', 'settings.json'), isLink('.codex', 'hooks.json'), isLink('.codex', 'config.toml')]).toEqual([true, true, true]);
+    expect(readJson(real('settings.json')).hooks.SessionStart).toBeTruthy();
+    expect(readJson(real('settings.json')).model).toBe('x');
+    expect(readJson(real('hooks.json')).hooks.Notification).toBeTruthy();
+    expect(readJson(real('hooks.json')).hooks.Stop).toBeTruthy();
+    expect(readFileSync(real('config.toml'), 'utf8')).toContain('[mcp_servers.hivemind]');
+
+    expect((await lap.run(main, ['update'])).code).toBe(0);
+    expect(isLink('.claude', 'settings.json')).toBe(true);
+
+    expect((await lap.run(main, ['leave'])).code).toBe(0);
+    expect([isLink('.claude', 'settings.json'), isLink('.codex', 'hooks.json'), isLink('.codex', 'config.toml')]).toEqual([true, true, true]);
+    expect(['settings.json', 'hooks.json', 'config.toml'].map((n) => readFileSync(real(n), 'utf8')).map((x) => x.replace(/\r\n/g, '\n')))
+      .toEqual(original.map((x) => x.replace(/\r\n/g, '\n')));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+describe('a Claude MCP server the user already has', () => {
+  const OWN = { type: 'stdio', command: 'my-hivemind', args: ['--x'] };
+
+  it('is never removed or replaced: join refuses, update refuses, leave leaves it', async () => {
+    const lap = laptop();
+    write(lap.path('.claude.json'), `${JSON.stringify({ mcpServers: { hivemind: OWN, other: { type: 'stdio', command: 'o' } } }, null, 2)}\n`);
+    const r = await join_(lap);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('its own MCP server named "hivemind"');
+    expect(r.err).toContain('claude mcp remove --scope user hivemind'); // how to move it aside, said, not done
+    expect(readJson(lap.path('.claude.json')).mcpServers.hivemind).toEqual(OWN);
+    expect(lap.stub.calls.filter((c) => c.args.includes('remove') || c.args.includes('add-json'))).toEqual([]);
+    // The rest still went in: Claude hooks, and Codex.
+    expect(readJson(lap.path('.claude', 'settings.json')).hooks.SessionStart).toBeTruthy();
+    expect(existsSync(lap.path('.codex', 'hooks.json'))).toBe(true);
+    expect(readJson(lap.path('.hivemind', 'install.json')).claude.mcp).toBe(false);
+
+    const u = await lap.run(main, ['update']);
+    expect(u.code).toBe(1);
+    expect(u.err).toContain('its own MCP server');
+    expect(lap.stub.calls.filter((c) => c.args.includes('remove') || c.args.includes('add-json'))).toEqual([]);
+
+    const d = await lap.run(main, ['doctor']);
+    expect(d.code).toBe(1);
+    expect(d.out).toContain('is not the Hivemind one');
+
+    const l = await lap.run(main, ['leave']);
+    expect(l.code, l.err).toBe(0);
+    expect(l.out).toContain('left alone');
+    expect(readJson(lap.path('.claude.json')).mcpServers.hivemind).toEqual(OWN);
+    expect(lap.stub.calls.filter((c) => c.args.includes('remove'))).toEqual([]);
+  });
+
+  it('an entry that is recognisably ours (our helper path) is replaced, with or without an install record', async () => {
+    const lap = laptop();
+    const old = { type: 'http', url: 'https://old.example.com/mcp', headersHelper: '"/old/node" "/old/.hivemind/hook/headers-helper.mjs"' };
+    write(lap.path('.claude.json'), `${JSON.stringify({ mcpServers: { hivemind: old } }, null, 2)}\n`);
+    const r = await join_(lap);
+    expect(r.code, r.err).toBe(0);
+    expect(readJson(lap.path('.claude.json')).mcpServers.hivemind.url).toBe(`${SERVER}/mcp`);
+    expect(lap.stub.calls.some((c) => c.args.includes('remove'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+describe('leave when something cannot be removed', () => {
+  it('keeps the hook folder and the install record, says what to fix, and finishes on the next run', async () => {
+    const lap = laptop();
+    await join_(lap);
+    const settings = lap.path('.claude', 'settings.json');
+    const good = readFileSync(settings, 'utf8');
+    write(settings, '{ "hooks": ');
+    const r = await lap.run(main, ['leave']);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(settings);
+    expect(r.err).toContain('not valid JSON');
+    expect(r.err).toContain('hivemind leave again');
+    expect(r.out).not.toContain('Left.');
+    // Everything needed to try again is still there; the broken file is untouched.
+    expect(existsSync(lap.path('.hivemind', 'hook', 'hook.mjs'))).toBe(true);
+    expect(existsSync(lap.path('.hivemind', 'install.json'))).toBe(true);
+    expect(existsSync(lap.path('.hivemind', 'config.json'))).toBe(true);
+    expect(readFileSync(settings, 'utf8')).toBe('{ "hooks": ');
+    // The registrations that could be removed were.
+    expect(existsSync(lap.path('.codex', 'hooks.json'))).toBe(false);
+    expect(readJson(lap.path('.claude.json')).mcpServers ?? {}).toEqual({});
+
+    write(settings, good);
+    const again = await lap.run(main, ['leave']);
+    expect(again.code, again.err).toBe(0);
+    expect(existsSync(lap.path('.hivemind'))).toBe(false);
+    expect(existsSync(settings)).toBe(false); // join had created it
+  });
+
+  it('a failed "claude mcp remove" also keeps the folder', async () => {
+    const lap = laptop();
+    await join_(lap);
+    const failing = async (cmd, args, opts) => (args.includes('remove') ? { code: 1, stdout: '', stderr: 'boom' } : lap.stub.runner(cmd, args, opts));
+    const r = await lap.run(main, ['leave'], { runner: failing });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('claude mcp remove --scope user hivemind');
+    expect(existsSync(lap.path('.hivemind', 'install.json'))).toBe(true);
+    expect(existsSync(lap.path('.hivemind', 'hook', 'hook.mjs'))).toBe(true);
+  });
+
+  it('a config.toml whose block was edited is not touched, and the folder stays', async () => {
+    const lap = laptop();
+    await join_(lap);
+    const tomlPath = lap.path('.codex', 'config.toml');
+    const edited = readFileSync(tomlPath, 'utf8').replace('tool_timeout_sec = 60', 'tool_timeout_sec = 60\nmy_key = 1');
+    write(tomlPath, edited);
+    const r = await lap.run(main, ['leave']);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('edited');
+    expect(readFileSync(tomlPath, 'utf8')).toBe(edited);
+    expect(existsSync(lap.path('.hivemind', 'install.json'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+describe('the headersHelper command string, run the way a shell would', () => {
+  /** Shells that exist on this machine, each as [name, program, args-for(command), spawn options]. */
+  function shells(cmd) {
+    if (process.platform !== 'win32') return [['sh', 'sh', ['-c', cmd], {}]];
+    const out = [
+      ['powershell.exe', 'powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], {}],
+      ['cmd.exe', 'cmd.exe', ['/d', '/s', '/c', `"${cmd}"`], { windowsVerbatimArguments: true }],
+    ];
+    for (const candidate of ['C:/Program Files/Git/bin/bash.exe', 'C:/Program Files (x86)/Git/bin/bash.exe']) {
+      if (existsSync(candidate)) { out.push(['git bash', candidate, ['-c', cmd], {}]); break; }
+    }
+    return out;
+  }
+
+  const homes = process.platform === 'win32'
+    ? [['a plain folder', 'plain-home'], ['a folder with a space', 'home with space']]
+    : [['a plain folder', 'plain-home'], ['a folder with a space', 'home with space'], ['odd characters', 'we ird $x `q` "d"']];
+
+  for (const [label, dirName] of homes) {
+    it(`prints the Authorization header under every shell, with ${label}`, async () => {
+      const home = join(base, `${dirName}-${Date.now()}`, '.hivemind');
+      const lap = laptop({ env: { HIVEMIND_HOME: home } });
+      const r = await join_(lap);
+      expect(r.code, r.err).toBe(0);
+      const cmd = readJson(lap.path('.claude.json')).mcpServers.hivemind.headersHelper;
+      expect(cmd).not.toContain(AGENT_TOKEN);
+      if (process.platform === 'win32') {
+        // One word that needs no shell syntax of its own: the wrapper, with the node path inside it.
+        expect(cmd.endsWith('hook/headers-helper.cmd')).toBe(true);
+        const wrapper = readFileSync(join(home, 'hook', 'headers-helper.cmd'), 'utf8');
+        expect(wrapper).toBe(`@echo off\r\n"${process.execPath}" "%~dp0headers-helper.mjs"\r\n`);
+      }
+      for (const [name, program, args, opts] of shells(cmd)) {
+        const run = spawnSync(program, args, { encoding: 'utf8', timeout: 90000, stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+        expect(run.status, `${name}: ${run.stderr}${run.error ?? ''}`).toBe(0);
+        expect(JSON.parse(run.stdout), name).toEqual({ Authorization: `Bearer ${AGENT_TOKEN}` });
+      }
+    }, 180000);
+  }
+
+  it('the printed by-hand command reaches `claude` as exactly the JSON, in each shell family', () => {
+    // Uses a tiny stand-in for `claude` that prints its last argument, run through the real shells on this machine.
+    const script = join(base, `argv-${Date.now()}.mjs`);
+    writeFileSync(script, 'process.stdout.write(process.argv[process.argv.length - 1]);\n');
+    const helper = process.platform === 'win32' ? 'D:/Ann" "Lee/.hivemind/hook/headers-helper.cmd' : '"/home/me/.hivemind/hook/headers-helper.mjs"';
+    const json = JSON.stringify({ type: 'http', url: 'https://hive.example.com/mcp', headersHelper: helper });
+    const platform = process.platform === 'win32' ? 'win32' : 'linux';
+    const node = process.execPath.replace(/\\/g, '/');
+    const prefix = `"${node}" "${script.replace(/\\/g, '/')}" mcp add-json --scope user hivemind`;
+    // (These shells quote the program path differently; the stand-in call itself is given in each shell's own form.)
+    for (const { shell, command } of addJsonCommands(platform, json, 'NODE_PLACEHOLDER')) {
+      const withNode = command.replace('NODE_PLACEHOLDER', shell === 'PowerShell' ? `& ${prefix}` : prefix);
+      const [program, args, opts] = shell === 'PowerShell'
+        ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', withNode], {}]
+        : shell === 'Command Prompt'
+          ? ['cmd.exe', ['/d', '/s', '/c', `"${withNode}"`], { windowsVerbatimArguments: true }]
+          : ['sh', ['-c', withNode], {}];
+      const run = spawnSync(program, args, { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+      expect(run.status, `${shell}: ${run.stderr}`).toBe(0);
+      expect(run.stdout, shell).toBe(json);
+    }
+  }, 120000);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+describe('no secrets in the environment of claude and codex', () => {
+  it('scrubEnv drops Hivemind tokens and secrets by name and by value, and keeps the rest', () => {
+    const out = scrubEnv({
+      HIVEMIND_ADMIN_TOKEN: ADMIN_SECRET, HIVEMIND_AGENT_TOKEN: AGENT_TOKEN, hivemind_secret: 'x', HIVEMIND_SERVER: SERVER, HIVEMIND_HOME: '/h',
+      PATH: '/bin', FOO: 'bar', COPIED: AGENT_TOKEN, VIEWER: ` ${VIEWER_TOKEN}`, EMPTY: undefined,
+    });
+    expect(out).toEqual({ HIVEMIND_SERVER: SERVER, HIVEMIND_HOME: '/h', PATH: '/bin', FOO: 'bar', EMPTY: undefined });
+  });
+
+  it('every call to claude or codex gets a scrubbed environment (join, update, doctor, leave)', async () => {
+    const lap = laptop({
+      env: { HIVEMIND_ADMIN_TOKEN: ADMIN_SECRET, HIVEMIND_AGENT_TOKEN: OTHER_TOKEN, SNEAKY: VIEWER_TOKEN, KEEP_ME: 'yes', HIVEMIND_SERVER: SERVER },
+    });
+    await join_(lap);
+    await lap.run(main, ['update']);
+    await lap.run(main, ['doctor']);
+    await lap.run(main, ['leave']);
+    expect(lap.stub.calls.length).toBeGreaterThan(6);
+    for (const call of lap.stub.calls) {
+      expect(call.env, JSON.stringify(call.args)).toBeTruthy();
+      expect(Object.keys(call.env)).not.toContain('HIVEMIND_ADMIN_TOKEN');
+      expect(Object.keys(call.env)).not.toContain('HIVEMIND_AGENT_TOKEN');
+      expect(Object.keys(call.env)).not.toContain('SNEAKY');
+      expect(call.env.KEEP_ME).toBe('yes');
+      expect(JSON.stringify(call)).not.toContain(ADMIN_SECRET);
+      expect(JSON.stringify(call)).not.toContain(VIEWER_TOKEN);
+      expect(JSON.stringify(call)).not.toContain(OTHER_TOKEN);
+    }
+  });
+
+  it('the cmd.exe fallback refuses an argument cmd could expand or split', () => {
+    expect(shellUnsafe('claude', ['mcp', 'get', 'hivemind'])).toBe(false);
+    expect(shellUnsafe('claude', ['mcp', 'add-json', '--scope', 'user', 'hivemind', '{"url":"https://h.example.com/mcp"}'])).toBe(false);
+    for (const bad of ['%PATH%', '100%', 'a^b', 'a&calc', 'a|b', 'a<b', 'a>b', 'a\nb']) expect(shellUnsafe('claude', [bad]), bad).toBe(true);
+    expect(shellUnsafe('cl%aude', [])).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+describe('secret input', () => {
+  const tty = () => {
+    const s = new PassThrough();
+    s.isTTY = true;
+    s.rawModes = [];
+    s.setRawMode = (v) => { s.rawModes.push(v); return s; };
+    return s;
+  };
+  const sink = () => ({ text: '', write(x) { this.text += x; return true; } });
+
+  it('refuses to read a secret when stdin is not a terminal, and says what to do', async () => {
+    const stdin = new PassThrough();
+    const stderr = sink();
+    const { readSecret } = terminalReaders({ stdin, stderr });
+    stdin.write(`${AGENT_TOKEN}\n`);
+    await expect(readSecret('Token')).rejects.toThrow(/real terminal.*--token-stdin/);
+    expect(stderr.text).not.toContain(AGENT_TOKEN);
+  });
+
+  it('--token-stdin reads exactly one piped line (and not from a terminal)', async () => {
+    const stdin = new PassThrough();
+    const { readStdin } = terminalReaders({ stdin, stderr: sink() });
+    stdin.end(`${AGENT_TOKEN}\r\nsecond line\n`);
+    expect(await readStdin()).toBe(AGENT_TOKEN);
+    const empty = new PassThrough();
+    empty.end('');
+    await expect(terminalReaders({ stdin: empty, stderr: sink() }).readStdin()).rejects.toThrow('no value');
+    await expect(terminalReaders({ stdin: tty(), stderr: sink() }).readStdin()).rejects.toThrow('piped input');
+  });
+
+  it('in a terminal it reads without echo, handles backspace and Enter, and restores the mode', async () => {
+    const stdin = tty();
+    const stderr = sink();
+    const p = terminalReaders({ stdin, stderr }).readSecret('Token');
+    stdin.write('ab');
+    stdin.write('c\x7fd\r');
+    expect(await p).toBe('abd');
+    expect(stdin.rawModes).toEqual([true, false]);
+    expect(stderr.text).not.toMatch(/abd|abcd/);
+  });
+
+  it('input ending in raw mode (end or close) is an error, not a hang, and restores the mode', async () => {
+    for (const how of ['end', 'destroy', 'ctrl-d']) {
+      const stdin = tty();
+      const p = terminalReaders({ stdin, stderr: sink() }).readSecret('Token');
+      if (how === 'end') stdin.end();
+      else if (how === 'destroy') stdin.destroy();
+      else stdin.write('\x04');
+      await expect(p, how).rejects.toThrow('input ended');
+      expect(stdin.rawModes, how).toEqual([true, false]);
+    }
+  });
+
+  it('Ctrl-C cancels with exit code 130 and restores the mode', async () => {
+    const stdin = tty();
+    const p = terminalReaders({ stdin, stderr: sink() }).readSecret('Token');
+    stdin.write('ab\x03');
+    await expect(p).rejects.toMatchObject({ message: 'cancelled', code: 130 });
+    expect(stdin.rawModes).toEqual([true, false]);
+  });
+
+  it('the admin commands take the secret from --token-stdin too, and ask for nothing else', async () => {
+    const lap = makeLaptop(base, { stdin: [ADMIN_SECRET] });
+    const r = await lap.run(main, ['room', 'create', 'hack', '--server', SERVER, '--token-stdin']);
+    expect(r.code, r.err).toBe(0);
+    expect(lap.prompts).toEqual(['<stdin>']);
+    expect(srv.requests[0].auth).toBe(`Bearer ${ADMIN_SECRET}`);
+    expect(r.out + r.err).not.toContain(ADMIN_SECRET);
+  });
+
+  it('with no terminal and no flag, the real context refuses instead of reading from a pipe', async () => {
+    // The default reader of createContext has nobody to ask.
+    const bare = createContext({ env: {}, homedir: base, cwd: base, out: () => {}, err: () => {} });
+    await expect(bare.readSecret('x')).rejects.toThrow('real terminal');
+    await expect(bare.readStdin()).rejects.toThrow('no piped input');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+describe('messages and checks', () => {
+  it('a JSON error names the line and column but never quotes the file', async () => {
+    const lap = laptop();
+    write(lap.path('.claude', 'settings.json'), '{\n  "env": { "MY_SETTING": "canary-text-visible" "x": 1 }\n}\n');
+    const r = await join_(lap);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('not valid JSON');
+    expect(r.err).toMatch(/line 2, column \d+/);
+    expect(r.err).not.toContain("canary-text-visible");
+    expect(r.err).not.toContain("MY_SETTING");
+  });
+
+  it('without the claude program, the by-hand command is shown per shell: PowerShell and cmd on Windows, sh elsewhere', async () => {
+    for (const platform of ['win32', 'linux']) {
+      const lap = makeLaptop(base, { secrets: [AGENT_TOKEN], claude: false });
+      mkdirSync(lap.path('.claude'), { recursive: true });
+      const r = await lap.run(main, ['join', '--server', SERVER, '--yes'], { platform });
+      expect(r.code, r.err).toBe(0);
+      expect(r.err).toContain('hivemind update');
+      expect(r.err).not.toContain(AGENT_TOKEN);
+      if (platform === 'win32') {
+        expect(r.err).toContain('PowerShell:');
+        expect(r.err).toContain('Command Prompt:');
+        expect(r.err).not.toContain("'\\''");
+        expect(r.err).toContain('\\"type\\"');
+      } else {
+        expect(r.err).toContain('sh:');
+        expect(r.err).toContain("hivemind '{");
+      }
+    }
+  });
+
+  it('a hook of some other hivemind folder is not ours: join adds its own and leave leaves the other alone', async () => {
+    const lap = laptop();
+    const other = { type: 'command', command: process.execPath, args: [join(base, 'elsewhere', '.hivemind', 'hook', 'hook.mjs'), 'claude'], timeout: 5 };
+    write(lap.path('.claude', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [other] }] } }));
+    await join_(lap);
+    expect(readJson(lap.path('.claude', 'settings.json')).hooks.SessionStart).toHaveLength(2);
+    await lap.run(main, ['leave']);
+    expect(readJson(lap.path('.claude', 'settings.json'))).toEqual({ hooks: { SessionStart: [{ hooks: [other] }] } });
+  });
+
+  it('update takes our handler out of an event the registrations no longer use, and keeps the user\'s', async () => {
+    const lap = laptop();
+    await join_(lap);
+    const path = lap.path('.claude', 'settings.json');
+    const s = readJson(path);
+    s.hooks.Notification = [{ hooks: [{ ...s.hooks.Stop[0].hooks[0] }, { type: 'command', command: 'theirs.sh' }] }];
+    writeFileSync(path, JSON.stringify(s));
+    lap.answers.secrets.push(AGENT_TOKEN);
+    expect((await lap.run(main, ['update'])).code).toBe(0);
+    expect(readJson(path).hooks.Notification).toEqual([{ hooks: [{ type: 'command', command: 'theirs.sh' }] }]);
+    expect(readJson(path).hooks.Stop).toHaveLength(1);
+  });
+
+  it('doctor checks the Codex hook paths exist, not only that they are present', async () => {
+    const lap = laptop();
+    await join_(lap);
+    const path = lap.path('.codex', 'hooks.json');
+    const hooks = readJson(path);
+    const h = hooks.hooks.SessionStart[0].hooks[0];
+    h.command = h.command.replace(/^"[^"]*"/, `"${join(base, 'gone', 'node').replace(/\\/g, '/')}"`);
+    writeFileSync(path, JSON.stringify(hooks));
+    const r = await lap.run(main, ['doctor']);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('Codex: hooks with a bad path or command for SessionStart');
+  });
+
+  it('doctor accepts the Claude MCP entry join made, and flags one that is not ours', async () => {
+    const lap = laptop();
+    await join_(lap);
+    expect((await lap.run(main, ['doctor'])).out).toContain('MCP server "hivemind" is set up and is ours');
+    rmSync(lap.path('.hivemind', 'install.json'));
+    write(lap.path('.claude.json'), JSON.stringify({ mcpServers: { hivemind: { type: 'stdio', command: 'x' } } }));
+    const r = await lap.run(main, ['doctor']);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('is not the Hivemind one');
   });
 });
 

@@ -20,7 +20,7 @@ import { terminalReaders } from './commands/secrets.mjs';
 
 const HELP = `hivemind - live coordination for AI coding agents
 
-Once per team (admin; asks for the admin secret, or reads HIVEMIND_ADMIN_TOKEN):
+Once per team (admin; asks for the admin secret in a terminal, or reads HIVEMIND_ADMIN_TOKEN, or --token-stdin):
   hivemind room create <room>              create a room, print the dashboard link (once)
   hivemind invite <room> <person>          print that person's agent token (once)
   hivemind revoke <room> <person>          revoke one person's token
@@ -31,8 +31,8 @@ Once per project repo:
   hivemind init                            write .hivemind/project.json and the protocol in AGENTS.md and CLAUDE.md
 
 Once per laptop, inside the project:
-  hivemind join [--server <url>] [--yes]   register hooks and MCP for Claude Code and Codex (asks for your token, hidden;
-                                           HIVEMIND_AGENT_TOKEN also works)
+  hivemind join [--server <url>] [--yes]   register hooks and MCP for Claude Code and Codex (asks for your token, hidden,
+                                           in a terminal; or add --token-stdin and pipe it in)
   hivemind doctor                          check the setup and print the self-test prompt for each app
 
 During the event:

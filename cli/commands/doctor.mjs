@@ -10,8 +10,8 @@ import { readBlock } from './codex-config.mjs';
 import { paths } from './context.mjs';
 import { readJsonObject, readText } from './files.mjs';
 import { oursMatcher } from './hooks-merge.mjs';
-import { HELPER_FILE, HOOK_FILES, readConfig, readManifest } from './install.mjs';
-import { ALLOW_RULE, CLAUDE_SPECS, CODEX_SPECS } from './registrations.mjs';
+import { HELPER_CMD_FILE, HELPER_FILE, HOOK_FILES, readConfig, readManifest } from './install.mjs';
+import { ALLOW_RULE, CLAUDE_SPECS, CODEX_SPECS, isOurHelper } from './registrations.mjs';
 import { identity } from '../hook/git.mjs';
 
 export const SELF_TEST_PROMPT = [
@@ -80,7 +80,7 @@ export async function doctor(argv, ctx) {
   else line(config.repos.includes(ident.repo) ? 'ok' : 'warn', config.repos.includes(ident.repo) ? 'this repository is mapped to the room' : 'this repository is NOT mapped to the room; run hivemind join inside it');
 
   // Hook files and node
-  const missing = [...HOOK_FILES, HELPER_FILE].filter((f) => !existsSync(`${p.hookDir}/${f}`));
+  const missing = [...HOOK_FILES, HELPER_FILE, ...(ctx.platform === 'win32' ? [HELPER_CMD_FILE] : [])].filter((f) => !existsSync(`${p.hookDir}/${f}`));
   line(missing.length === 0 ? 'ok' : 'FAIL', missing.length === 0 ? `hook files present in ${p.hookDir}` : `hook files missing: ${missing.join(', ')}. Run: hivemind update`);
   const manifest = readManifest(ctx);
   if (manifest?.node) line(existsSync(manifest.node) ? 'ok' : 'FAIL', `node recorded for the hooks: ${manifest.node}${existsSync(manifest.node) ? '' : ' (no longer exists; run hivemind update)'}`);
@@ -99,7 +99,10 @@ export async function doctor(argv, ctx) {
       line(Array.isArray(allow) && allow.includes(ALLOW_RULE) ? 'ok' : 'FAIL', `Claude Code: permission rule "${ALLOW_RULE}" ${Array.isArray(allow) && allow.includes(ALLOW_RULE) ? 'present' : 'missing (tools would prompt); run hivemind update'}`);
       const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
       if (got.code === 127) line('warn', 'Claude Code: the "claude" program is not on PATH, so the MCP server was not checked');
-      else line(got.code === 0 ? 'ok' : 'FAIL', got.code === 0 ? 'Claude Code: MCP server "hivemind" is set up' : 'Claude Code: MCP server "hivemind" is missing; run hivemind update');
+      else if (got.code !== 0) line('FAIL', 'Claude Code: MCP server "hivemind" is missing; run hivemind update');
+      else if (!isOurHelper(got.stdout) && !manifest?.claude.mcp) line('FAIL', 'Claude Code: the MCP server named "hivemind" is not the Hivemind one (its helper is not ours); rename or remove it, then run hivemind update');
+      else if (!got.stdout.includes(`${normalizeServer(config.server)}/mcp`)) line('FAIL', 'Claude Code: MCP server "hivemind" points at a different URL than config.json; run hivemind update');
+      else line('ok', 'Claude Code: MCP server "hivemind" is set up and is ours');
     }
   } catch (e) {
     line('FAIL', `Claude Code: ${/** @type {Error} */ (e).message}`);
@@ -110,7 +113,7 @@ export async function doctor(argv, ctx) {
     const { value: hooks, existed } = readJsonObject(p.codexHooks, {});
     if (existed || manifest?.codex.hooks) {
       apps.push('Codex');
-      checkHooks(hooks, CODEX_SPECS.map((s) => s.event), isOurs, 'Codex', line, (h) => typeof h.command === 'string' && typeof h.commandWindows === 'string' && h.commandWindows.includes('exit $LASTEXITCODE'));
+      checkHooks(hooks, CODEX_SPECS.map((s) => s.event), isOurs, 'Codex', line, codexHandlerValid);
       const toml = readText(p.codexToml);
       const block = toml === null ? null : readBlock(toml);
       if (!block) line('FAIL', 'Codex: [mcp_servers.hivemind] is missing from config.toml; run hivemind update');
@@ -187,4 +190,17 @@ function lastHookLogTime(file) {
     /* none */
   }
   return null;
+}
+
+/**
+ * A Codex handler is sound when it has both command forms, passes the exit code on under PowerShell, and the node
+ * and hook script it names exist.
+ * @param {Record<string, any>} h
+ */
+function codexHandlerValid(h) {
+  if (typeof h.command !== 'string' || typeof h.commandWindows !== 'string' || !h.commandWindows.includes('exit $LASTEXITCODE')) return false;
+  const m = /^"((?:[^"\\]|\\.)*)" "((?:[^"\\]|\\.)*)" codex$/.exec(h.command);
+  if (!m) return false;
+  const unescape = (/** @type {string} */ x) => x.replace(/\\(.)/g, '$1');
+  return existsSync(unescape(/** @type {string} */ (m[1]))) && existsSync(unescape(/** @type {string} */ (m[2])));
 }

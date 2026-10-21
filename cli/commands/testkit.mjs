@@ -46,8 +46,8 @@ export function makeRunner(home, { claude = true, codex = true } = {}) {
   const file = join(home, '.claude.json');
   const load = () => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {});
   const save = (o) => writeFileSync(file, `${JSON.stringify(o, null, 2)}\n`);
-  const runner = async (cmd, args) => {
-    calls.push({ cmd, args: [...args] });
+  const runner = async (cmd, args, opts = {}) => {
+    calls.push({ cmd, args: [...args], env: opts.env });
     if (cmd === 'codex') return codex ? { code: 0, stdout: 'codex-cli 0.159.3', stderr: '' } : { code: 127, stdout: '', stderr: 'not found' };
     if (cmd !== 'claude' || !claude) return { code: 127, stdout: '', stderr: 'not found' };
     if (args[0] === '--version') return { code: 0, stdout: '2.1.287', stderr: '' };
@@ -84,7 +84,7 @@ export function makeLaptop(base, opts = {}) {
   mkdirSync(homedir);
   const project = makeProject(dir);
   const stub = makeRunner(homedir, opts);
-  const answers = { secrets: [...(opts.secrets ?? [])], lines: [...(opts.lines ?? [])] };
+  const answers = { secrets: [...(opts.secrets ?? [])], lines: [...(opts.lines ?? [])], stdin: [...(opts.stdin ?? [])] };
   const prompts = [];
   const lap = {
     dir,
@@ -106,6 +106,7 @@ export function makeLaptop(base, opts = {}) {
         err: (t) => { lap.err += t; },
         runner: stub.runner,
         readSecret: async (label) => { prompts.push(label); if (!answers.secrets.length) throw new Error(`unexpected secret prompt: ${label}`); return answers.secrets.shift(); },
+        readStdin: async () => { prompts.push('<stdin>'); if (!answers.stdin.length) throw new Error('unexpected stdin read'); return answers.stdin.shift(); },
         readLine: async (label) => { prompts.push(label); if (!answers.lines.length) throw new Error(`unexpected prompt: ${label}`); return answers.lines.shift(); },
         interactive: false,
         platform: process.platform,

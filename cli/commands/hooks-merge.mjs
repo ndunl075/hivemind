@@ -11,20 +11,34 @@ import { CliError } from './context.mjs';
  */
 
 /**
- * A handler is Hivemind's when any of its command strings points at our hook script.
+ * A handler is Hivemind's when one of its command strings names exactly our hook script (the one in
+ * $HIVEMIND_HOME/hook/) as a whole token: a longer path that merely starts with it, or the hook of some other
+ * folder, is not ours. The script path is also looked for in the escaped forms the registrations use.
  * @param {string} hookScript absolute path of $HIVEMIND_HOME/hook/hook.mjs
  * @returns {(handler: unknown) => boolean}
  */
 export function oursMatcher(hookScript) {
   const norm = (/** @type {string} */ s) => s.replace(/\\/g, '/').toLowerCase();
-  const exact = norm(hookScript);
+  const forms = [
+    hookScript,
+    hookScript.replace(/(["\\$`])/g, '\\$1'),
+    hookScript.replace(/(["`$])/g, '`$1'),
+  ].map(norm);
+  const whole = (/** @type {string} */ s, /** @type {string} */ path) => {
+    for (let i = s.indexOf(path); i !== -1; i = s.indexOf(path, i + 1)) {
+      const before = i === 0 ? '' : /** @type {string} */ (s[i - 1]);
+      const after = s[i + path.length] ?? '';
+      if ((before === '' || /["'\s]/.test(before)) && (after === '' || /["'\s]/.test(after))) return true;
+    }
+    return false;
+  };
   return (handler) => {
     if (typeof handler !== 'object' || handler === null) return false;
     const h = /** @type {Obj} */ (handler);
     const strings = [h.command, h.commandWindows, ...(Array.isArray(h.args) ? h.args : [])]
       .filter((s) => typeof s === 'string')
       .map(norm);
-    return strings.some((s) => s.includes(exact) || /\/\.?hivemind\/hook\/hook\.mjs/.test(s));
+    return strings.some((s) => forms.some((f) => whole(s, f)));
   };
 }
 
@@ -41,7 +55,31 @@ function hooksOf(root) {
 }
 
 /**
- * Put our handler into each event, replacing any earlier Hivemind handler in place. Returns a new object.
+ * The groups of one event without Hivemind's handlers. Undefined when there was nothing of ours in them.
+ * @param {unknown} groups
+ * @param {(handler: unknown) => boolean} isOurs
+ * @returns {Obj[] | undefined}
+ */
+function stripOurs(groups, isOurs) {
+  if (!Array.isArray(groups)) return undefined;
+  /** @type {Obj[]} */
+  const kept = [];
+  let touched = false;
+  for (const g of groups) {
+    if (typeof g === 'object' && g !== null && Array.isArray(g.hooks)) {
+      const rest = g.hooks.filter((/** @type {unknown} */ h) => !isOurs(h));
+      if (rest.length !== g.hooks.length) touched = true;
+      if (rest.length > 0) kept.push(rest.length === g.hooks.length ? g : { ...g, hooks: rest });
+    } else {
+      kept.push(g);
+    }
+  }
+  return touched ? kept : undefined;
+}
+
+/**
+ * Put our handler into each event, replacing any earlier Hivemind handler in place, and take Hivemind handlers out
+ * of events the specs no longer list. Returns a new object.
  * @param {Obj} root
  * @param {HookSpec[]} specs
  * @param {(spec: HookSpec) => Obj} makeHandler
@@ -72,6 +110,15 @@ export function mergeHooks(root, specs, makeHandler, isOurs) {
     else kept.splice(at, 0, ours);
     hooks[spec.event] = kept;
   }
+  // Events no longer in the specs: a Hivemind handler an older version left there goes.
+  const wanted = new Set(specs.map((x) => x.event));
+  for (const event of Object.keys(hooks)) {
+    if (wanted.has(event)) continue;
+    const stripped = stripOurs(hooks[event], isOurs);
+    if (stripped === undefined) continue;
+    if (stripped.length > 0) hooks[event] = stripped;
+    else delete hooks[event];
+  }
   next.hooks = hooks;
   return next;
 }
@@ -87,22 +134,9 @@ export function removeHooks(root, isOurs) {
   if (next.hooks === undefined) return next;
   const hooks = hooksOf(next);
   for (const event of Object.keys(hooks)) {
-    const groups = hooks[event];
-    if (!Array.isArray(groups)) continue;
-    /** @type {Obj[]} */
-    const kept = [];
-    let touched = false;
-    for (const g of groups) {
-      if (typeof g === 'object' && g !== null && Array.isArray(g.hooks)) {
-        const rest = g.hooks.filter((/** @type {unknown} */ h) => !isOurs(h));
-        if (rest.length !== g.hooks.length) touched = true;
-        if (rest.length > 0) kept.push(rest.length === g.hooks.length ? g : { ...g, hooks: rest });
-      } else {
-        kept.push(g);
-      }
-    }
-    if (!touched) continue;
-    if (kept.length > 0) hooks[event] = kept;
+    const stripped = stripOurs(hooks[event], isOurs);
+    if (stripped === undefined) continue;
+    if (stripped.length > 0) hooks[event] = stripped;
     else delete hooks[event];
   }
   if (Object.keys(hooks).length === 0) delete next.hooks;

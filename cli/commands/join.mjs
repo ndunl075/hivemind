@@ -19,16 +19,17 @@ function printReport(ctx, report) {
 }
 
 /**
- * hivemind join [--server <url>] [--yes]
- * The token is asked for with hidden input, or read from HIVEMIND_AGENT_TOKEN; it is never an argument.
+ * hivemind join [--server <url>] [--yes] [--token-stdin]
+ * The token is asked for with hidden input in a terminal, or read as one piped line with --token-stdin; it is never
+ * an argument and never an environment variable.
  * @param {string[]} argv
  * @param {Context} ctx
  */
 export async function join(argv, ctx) {
-  const { flags, options } = parseArgs(argv, { flags: ['yes'], options: ['server'] });
+  const { flags, options } = parseArgs(argv, { flags: ['yes', 'token-stdin'], options: ['server'] });
   const existing = readConfig(ctx);
   const server = normalizeServer(options.server ?? ctx.env.HIVEMIND_SERVER ?? (await ctx.readLine('Server URL')));
-  const token = ctx.env.HIVEMIND_AGENT_TOKEN || (await ctx.readSecret('Your agent token (input hidden)'));
+  const token = flags.has('token-stdin') ? await ctx.readStdin() : await ctx.readSecret('Your agent token (input hidden)');
   if (!looksLikeAgentToken(token)) throw new CliError('that does not look like an agent token (they start with hm_a.)');
 
   const ident = await identity(ctx.cwd);
@@ -77,6 +78,7 @@ export async function leave(argv, ctx) {
   parseArgs(argv);
   const report = await uninstallAll(ctx);
   printReport(ctx, report);
+  if (report.failed) return 1;
   ctx.out('Left. Project files (.hivemind/project.json, AGENTS.md, CLAUDE.md) were not touched.\n');
-  return report.failed ? 1 : 0;
+  return 0;
 }

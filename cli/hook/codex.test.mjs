@@ -78,6 +78,24 @@ describe('apply_patch paths', () => {
     expect(patchPaths(patch)).toEqual(['dir with space/a.txt']);
   });
 
+  it('accepts leading whitespace before every header kind (an indented patch)', () => {
+    const patch = [
+      '  *** Begin Patch',
+      '  *** Add File: src/a.ts',
+      '  +x',
+      '\t*** Update File: src/b.ts',
+      '    *** Move to: src/c.ts',
+      '   *** Delete File: src/d.ts',
+      '  *** End Patch',
+    ].join('\n');
+    expect(patchPaths(patch)).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/d.ts']);
+    // ...and through parse, with CRLF as well
+    const p = parse({ session_id: 's', hook_event_name: 'PreToolUse', tool_name: 'apply_patch', tool_input: { command: patch.replace(/\n/g, '\r\n') } });
+    expect(p.editPaths).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/d.ts']);
+    // Added content lines (start with +) are still never headers, however they are indented after the +.
+    expect(patchPaths('*** Add File: x.txt\n+  *** Add File: not-a-header\n')).toEqual(['x.txt']);
+  });
+
   it('finds nothing in an empty, missing or malformed patch', () => {
     expect(patchPaths('')).toEqual([]);
     expect(parse({ session_id: 's', hook_event_name: 'PreToolUse', tool_name: 'apply_patch', tool_input: {} }).editPaths).toEqual([]);

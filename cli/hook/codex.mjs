@@ -32,7 +32,9 @@ export function patchPaths(patch) {
   /** @type {string[]} */
   const out = [];
   for (const line of patch.split('\n')) {
-    const m = /^\*\*\* (?:Add File|Update File|Delete File|Move to):[ \t]*(.+?)\s*$/.exec(line);
+    // Leading whitespace is allowed: an indented patch is still a patch. Content lines start with + - or a space
+    // followed by the content, so a header-looking line inside a hunk can only over-report a path, never hide one.
+    const m = /^\s*\*\*\* (?:Add File|Update File|Delete File|Move to):[ \t]*(.+?)\s*$/.exec(line);
     if (m && m[1] && !out.includes(m[1])) out.push(m[1]);
   }
   return out;

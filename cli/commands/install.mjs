@@ -13,13 +13,16 @@ import { CliError, paths } from './context.mjs';
 import { readJsonObject, readText, removeDirIfEmpty, removeFile, writeAtomic, writeIfChanged, writeJson } from './files.mjs';
 import { mergeHooks, oursMatcher, removeHooks } from './hooks-merge.mjs';
 import {
-  ALLOW_RULE, CLAUDE_SPECS, CODEX_SPECS, claudeHandler, claudeMcpJson, codexHandler, headersHelperCommand,
+  ALLOW_RULE, CLAUDE_SPECS, CODEX_SPECS, addJsonCommands, claudeHandler, claudeMcpJson, codexHandler, headersHelperCommand,
+  helperCmdText, isOurHelper,
 } from './registrations.mjs';
 
 /** The hook's runtime files; tests (*.test.mjs) are never copied. */
 export const HOOK_FILES = ['hook.mjs', 'claude.mjs', 'codex.mjs', 'git.mjs', 'limits.mjs'];
 /** The helper that sits next to them. */
 export const HELPER_FILE = 'headers-helper.mjs';
+/** The Windows wrapper that runs it (written on Windows only, removed everywhere). */
+export const HELPER_CMD_FILE = 'headers-helper.cmd';
 
 /**
  * @typedef {{ server: string, room: string, person: string, token: string, repos: string[] }} HivemindConfig
@@ -97,6 +100,7 @@ export function copyRuntime(ctx) {
     if (text === null) throw new CliError(`the Hivemind package is incomplete: ${name} is missing`);
     if (writeIfChanged(join(p.hookDir, name), text)) changed = true;
   }
+  if (ctx.platform === 'win32' && writeIfChanged(p.helperCmd, helperCmdText(ctx.nodePath))) changed = true;
   return changed;
 }
 
@@ -166,21 +170,31 @@ async function registerClaude(ctx, config, manifest, claudeOnPath, report) {
   report.lines.push(`Claude Code: hooks registered in ${p.claudeSettings}`);
 
   // The MCP server: the JSON holds the URL and a headersHelper, never the token.
-  const helper = headersHelperCommand(ctx.nodePath, p.helperScript);
+  const helper = headersHelperCommand(ctx.platform, ctx.nodePath, p.helperScript, p.helperCmd);
   const json = JSON.stringify(claudeMcpJson(config.server, helper));
   if (!claudeOnPath) {
+    const by = addJsonCommands(ctx.platform, json).map((c) => `  ${c.shell}:  ${c.command}`).join('\n');
     report.warnings.push(
-      `Claude Code: the "claude" program was not found, so the MCP server was not added. Run this once it is on your PATH:\n  claude mcp add-json --scope user hivemind '${json}'`,
+      `Claude Code: the "claude" program was not found, so the MCP server was not added. Once it is on your PATH, run: hivemind update\nOr add it by hand:\n${by}`,
     );
     return;
   }
   const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
-  if (got.code === 0 && got.stdout.includes(`${config.server}/mcp`) && got.stdout.includes(helper)) {
-    manifest.claude.mcp = true;
-    report.lines.push('Claude Code: MCP server "hivemind" already set up');
-    return;
+  if (got.code === 0) {
+    // An entry named "hivemind" that is not ours belongs to the user: never replace it.
+    if (!isOurHelper(got.stdout) && !manifest.claude.mcp) {
+      throw new CliError(
+        'Claude Code already has its own MCP server named "hivemind", so the Hivemind one was not added. Rename or remove yours (claude mcp remove --scope user hivemind), then run hivemind update.',
+      );
+    }
+    if (got.stdout.includes(`${config.server}/mcp`) && got.stdout.includes(helper)) {
+      manifest.claude.mcp = true;
+      report.lines.push('Claude Code: MCP server "hivemind" already set up');
+      return;
+    }
+    const removed = await ctx.runner('claude', ['mcp', 'remove', '--scope', 'user', 'hivemind']);
+    if (removed.code !== 0) throw new CliError(`could not replace Hivemind's old MCP entry (${firstLine(removed.stderr || removed.stdout)}); run: claude mcp remove --scope user hivemind`);
   }
-  if (got.code === 0) await ctx.runner('claude', ['mcp', 'remove', '--scope', 'user', 'hivemind']);
   const added = await ctx.runner('claude', ['mcp', 'add-json', '--scope', 'user', 'hivemind', json]);
   if (added.code !== 0) {
     report.failed = true;
@@ -209,7 +223,7 @@ function registerCodex(ctx, config, manifest, report) {
   if (!same(next, hooks)) writeJson(p.codexHooks, next);
   manifest.codex.hooks = true;
   manifest.codex.hooksCreated = manifest.codex.hooksCreated || !existed;
-  writeIfChanged(p.codexToml, tomlNext, toml === null ? 0o600 : undefined);
+  writeIfChanged(p.codexToml, tomlNext, 0o600); // it holds the token: owner-only, even if the file was 0644 before
   manifest.codex.config = true;
   manifest.codex.configCreated = manifest.codex.configCreated || toml === null;
   report.lines.push(`Codex: hooks registered in ${p.codexHooks}, MCP server in ${p.codexToml}`);
@@ -297,19 +311,26 @@ export async function uninstallAll(ctx) {
     report.warnings.push(`Claude Code settings: ${/** @type {Error} */ (e).message}`);
   }
 
-  // Claude MCP server: only if join added it (or, without a record, only if it is recognisably ours).
+  // Claude MCP server: only an entry that is ours (join recorded it, or its helper path is ours).
   try {
-    let remove = manifest?.claude.mcp === true;
-    if (!manifest) {
-      const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
-      remove = got.code === 0 && got.stdout.includes(HELPER_FILE);
-    }
-    if (remove) {
-      const r = await ctx.runner('claude', ['mcp', 'remove', '--scope', 'user', 'hivemind']);
-      if (r.code === 0) report.lines.push('Claude Code: MCP server "hivemind" removed');
-      else report.warnings.push(`Claude Code: could not remove the MCP server (${firstLine(r.stderr || r.stdout)}). Run: claude mcp remove --scope user hivemind`);
+    const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
+    if (got.code === 0) {
+      if (isOurHelper(got.stdout) || manifest?.claude.mcp === true) {
+        const r = await ctx.runner('claude', ['mcp', 'remove', '--scope', 'user', 'hivemind']);
+        if (r.code === 0) report.lines.push('Claude Code: MCP server "hivemind" removed');
+        else {
+          report.failed = true;
+          report.warnings.push(`Claude Code: could not remove the MCP server (${firstLine(r.stderr || r.stdout)}). Run: claude mcp remove --scope user hivemind`);
+        }
+      } else {
+        report.lines.push('Claude Code: the MCP server named "hivemind" is not the Hivemind one, so it was left alone');
+      }
+    } else if (got.code === 127 && manifest?.claude.mcp === true) {
+      report.failed = true;
+      report.warnings.push('Claude Code: the "claude" program was not found, so the MCP server could not be removed. Put it on your PATH, or run: claude mcp remove --scope user hivemind');
     }
   } catch (e) {
+    report.failed = true;
     report.warnings.push(`Claude Code MCP: ${/** @type {Error} */ (e).message}`);
   }
 
@@ -331,7 +352,7 @@ export async function uninstallAll(ctx) {
   try {
     const toml = readText(p.codexToml);
     if (toml !== null && hasOurBlock(toml)) {
-      const rest = removeBlock(toml);
+      const rest = removeBlock(toml, p.codexToml);
       if (manifest?.codex.configCreated && rest.trim() === '') removeFile(p.codexToml);
       else writeAtomic(p.codexToml, rest);
       report.lines.push(`Codex: MCP server removed from ${p.codexToml}`);
@@ -341,8 +362,13 @@ export async function uninstallAll(ctx) {
     report.warnings.push(`Codex config: ${/** @type {Error} */ (e).message}`);
   }
 
-  // Our own folder: only the files we created.
-  for (const f of [...HOOK_FILES, HELPER_FILE]) removeFile(join(p.hookDir, f));
+  // Our own folder: only the files we created, and only once every registration is gone. If one could not be
+  // removed, the hook files and the install record stay so that leave can be run again after it is fixed.
+  if (report.failed) {
+    report.warnings.push(`Hivemind is only partly removed. ${p.home} (hook files, config and install record) was kept; fix the problem above, then run hivemind leave again.`);
+    return report;
+  }
+  for (const f of [...HOOK_FILES, HELPER_FILE, HELPER_CMD_FILE]) removeFile(join(p.hookDir, f));
   removeDirIfEmpty(p.hookDir);
   for (const f of [p.config, p.manifest, p.off, p.hookLog, `${p.hookLog}.1`]) removeFile(f);
   if (existsSync(p.state)) rmSync(p.state, { recursive: true, force: true });
