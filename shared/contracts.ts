@@ -577,6 +577,8 @@ export interface TasksApi {
   /** §10: tasks of ended owners return to open. */
   onAgentEnded(callsign: Callsign): void;
   list(): TaskView[];
+  /** §6.2 Stop: the once-per-task reminder text for an agent that stops with an in-progress task, or null. Recording it is part of the call. */
+  stopReminder(callsign: Callsign): string | null;
 }
 
 export interface NotifyOptions {
