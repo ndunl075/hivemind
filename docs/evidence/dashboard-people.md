@@ -23,3 +23,4 @@
 - Layout: message-edge changes no longer re-run the force layout; positions from the last everyone view are remembered across focus and clear; if cards still overlap the frame grows 20% at a time until they don't (`forceLayoutFit`).
 - Labels (person, checkout, blocked file) are drawn in a layer above the cards. The blocked label can now sit over a card's text at 1366x768 where an edge crosses it.
 - Tests added: focus A to B, no-checkout agents, single-checkout people, checkout re-join, Escape and keyboard focus, 30-card overlap and frame growth. The screenshot script also does a focus A to B switch and a clear, and fails on overlap or unplaced cards (15 cases, all clean).
+- Round 2: finished layouts are cached by roster, frame and card size, so focus then clear restores every card exactly (test: two focus/clear cycles give identical transforms); the blocked-file label now has a pill behind it.

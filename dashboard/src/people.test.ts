@@ -185,3 +185,19 @@ describe('layouts at 30 agents', () => {
     expect(hasOverlap(nodes, gridLayout(nodes, 375, { pad: 13, gap: 14 }).positions)).toBe(false);
   });
 });
+
+describe('layout cache', () => {
+  it('restores identical positions after focus then clear, twice', () => {
+    const g = graphAt(1366);
+    const full = buildViewModel(snap(), NOW);
+    const everyone = shapeViewModel(full, NO_FOCUS);
+    g.update(everyone);
+    const sorted = () => placed(g).sort((a, b) => a[0]!.localeCompare(b[0]!));
+    const before = sorted();
+    for (let i = 0; i < 2; i++) {
+      g.update(shapeViewModel(full, toggleFocus(NO_FOCUS, 'ana')));
+      g.update(everyone);
+      expect(sorted()).toEqual(before);
+    }
+  });
+});

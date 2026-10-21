@@ -161,6 +161,8 @@ export function createGraph(): GraphView {
   let measuredKey = '';
   /** Where the cards sat the last time everyone was shown, so focusing a person and clearing doesn't shuffle the graph. */
   let remembered = new Map<string, Point>();
+  /** Finished layouts by roster, frame and card size, so returning to a view restores it exactly. */
+  const layouts = new Map<string, { positions: Map<string, Point>; height: number }>();
 
   function measure(vm: ViewModel, roster: string): void {
     if (boxW === 0) boxW = el.clientWidth || 1000;
@@ -263,7 +265,11 @@ export function createGraph(): GraphView {
         links.append(path);
         if (kind === 'blocked' && e.label) {
           const mid = pointOnQuad(g.a, g.c, g.b, 0.5);
-          labels.append(s('text', { class: 'edge-label', x: mid.x.toFixed(1), y: (mid.y - 7).toFixed(1), 'text-anchor': 'middle' }, `blocked: ${truncate(e.label, 28)}`));
+          const text = `blocked: ${truncate(e.label, 28)}`;
+          const w = text.length * 6.3 + 10;
+          // A pill behind the text keeps it readable where the edge crosses a card.
+          labels.append(s('rect', { class: 'edge-label-pill', x: (mid.x - w / 2).toFixed(1), y: (mid.y - 19).toFixed(1), width: w.toFixed(1), height: 16, rx: 4 }));
+          labels.append(s('text', { class: 'edge-label', x: mid.x.toFixed(1), y: (mid.y - 7).toFixed(1), 'text-anchor': 'middle' }, text));
         }
       }
     }
@@ -338,8 +344,17 @@ export function createGraph(): GraphView {
     if (key !== layoutKey) {
       layoutKey = key;
       const nodes: LayoutNode[] = vm.agents.map((a) => ({ id: a.callsign, group: a.person, cluster: a.checkout ?? '', w: dims.w, h: dims.h }));
+      const cached = grid ? undefined : layouts.get(key);
       if (grid) positions = grid.positions;
-      else {
+      else if (cached) {
+        // Same roster in the same frame as before (focus then clear): put every card back exactly where it was.
+        positions = new Map(cached.positions);
+        if (cached.height !== frame.height) {
+          frame = { width: frame.width, height: cached.height };
+          stage.style.minHeight = `${frame.height}px`;
+        }
+      } else {
+        const before = key;
         const fit = forceLayoutFit(nodes, layoutLinks(vm.edges), frame, { previous: remembered, pad: hullPad + 18, gap: nodeGap, groupGap: 2 * hullPad + 8 });
         positions = fit.positions;
         if (fit.size.height !== frame.height) {
@@ -347,6 +362,10 @@ export function createGraph(): GraphView {
           stage.style.minHeight = `${frame.height}px`;
         }
         if (new Set(vm.agents.map((a) => a.person)).size > 1) remembered = new Map(positions);
+        const entry = { positions: new Map(positions), height: frame.height };
+        layouts.set(before, entry);
+        layouts.set(JSON.stringify([roster, frame, dims]), entry);
+        if (layouts.size > 24) layouts.delete(layouts.keys().next().value!);
       }
       drawKey = '';
     }

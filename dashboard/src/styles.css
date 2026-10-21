@@ -1061,3 +1061,9 @@ p {
 .stat-hint {
   color: var(--muted);
 }
+.edge-label-pill {
+  fill: var(--bg);
+  stroke: rgba(242, 113, 107, 0.45);
+  stroke-width: 1;
+  opacity: 0.92;
+}
