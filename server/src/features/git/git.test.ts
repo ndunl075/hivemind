@@ -34,11 +34,11 @@ async function agent(room: string, person: string, over: Partial<HookRequest> = 
   };
 }
 
-/** Puts this feature in the Room as `features.pushes` (the Room's wiring still points at the basic one). */
+/** The Room is wired to this feature now; check that, so these tests exercise the real pipeline. */
 const install = (room: string) =>
   inRoom(room, (r) => {
-    const ctx = (r as unknown as { roomCtx: RoomContext }).roomCtx;
-    r.features.pushes = createPushes(ctx, r.features);
+    expect(typeof r.features.pushes.record).toBe('function');
+    expect(r.features.pushes.latest.toString()).toBe(createPushes((r as unknown as { roomCtx: RoomContext }).roomCtx, r.features).latest.toString());
   });
 const notices = (room: string, callsign: string) =>
   inRoom(room, (r) => r.features.messages.takeUnread(callsign).filter((m) => m.sender === 'hivemind').map((m) => m.text));

@@ -22,7 +22,7 @@ import type { Env } from './env';
 import { createLocks } from './features/locks';
 import { handleMcp } from './features/mcp';
 import { createMessages } from './features/messages';
-import { createPushes } from './features/pushes';
+import { createPushes } from './features/git';
 import { createSnapshot } from './features/snapshot';
 import { createTasks } from './features/tasks';
 import { Pipeline } from './pipeline';
