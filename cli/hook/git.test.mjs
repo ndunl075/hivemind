@@ -119,7 +119,11 @@ describe('git.mjs', () => {
     expect(next.report.divergent).toEqual(first.report.divergent);
   });
 
-  it('staleWarnings is a no-op in the basic module', async () => {
+  it('staleWarnings: nothing to say for no pushes, and never throws outside a repository', async () => {
     expect(await staleWarnings(repo, 'main', [])).toEqual([]);
+    const lonely = join(base, 'not-a-repo');
+    mkdirSync(lonely);
+    const push = { path: 'a.txt', sha: 'abcdef1234', blob: 'b'.repeat(40), by: 'codex-ana', branch: 'main', at: Date.now() };
+    expect(await staleWarnings(lonely, 'main', [push])).toEqual([`codex-ana pushed changes to a.txt 0s ago. Fetch and pull first.`]);
   });
 });
