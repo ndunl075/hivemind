@@ -424,8 +424,8 @@ describe('headers helper', () => {
     await joinFrom(lap, 'project', SERVER_1, AGENT_TOKEN);
     await joinFrom(lap, 'second', SERVER_2, OTHER_TOKEN);
     const plain = helper(lap);
-    expect(plain.status).toBe(0);
-    expect(JSON.parse(plain.stdout)).toEqual({ Authorization: `Bearer ${AGENT_TOKEN}` });
+    expect(plain.status).toBe(1); // an argument-less call is a leftover: no answer against a rooms list
+    expect(plain.stdout).toBe("");
     expect(JSON.parse(helper(lap, 'hivemind', SERVER_1).stdout)).toEqual({ Authorization: `Bearer ${AGENT_TOKEN}` });
     expect(JSON.parse(helper(lap, 'hivemind-platform', SERVER_2).stdout)).toEqual({ Authorization: `Bearer ${OTHER_TOKEN}` });
     const unknown = helper(lap, 'hivemind-nope', SERVER_2);
@@ -638,5 +638,68 @@ describe('names, the lock and leftovers', () => {
     expect(r.code).toBe(1);
     expect(r.out).toContain('MCP server "hivemind-platform" is a leftover');
     expect(r.out).toContain('[mcp_servers.hivemind-platform] in config.toml is a leftover');
+  });
+});
+
+describe('final review round', () => {
+  it('the exact leftover path: a hand-added argument-less "hivemind" server never gets another room\'s token', async () => {
+    const lap = laptop();
+    // an older version joined room A while claude was off the PATH: old config, old install record without server names
+    mkdirSync(lap.path('.hivemind'), { recursive: true });
+    writeFileSync(lap.path('.hivemind', 'config.json'), JSON.stringify({ server: SERVER_1, room: 'my-team', person: 'ana', token: AGENT_TOKEN, repos: [lap.project.root] }));
+    writeFileSync(lap.path('.hivemind', 'install.json'), JSON.stringify({ version: 1, node: process.execPath, claude: { settings: true, settingsCreated: false, allowAdded: true, mcp: false }, codex: {} }));
+    // the user adds the server by hand, copying the old command (no arguments)
+    const noArgs = `"${process.execPath}" "${lap.path('.hivemind', 'hook', 'headers-helper.mjs')}"`;
+    writeFileSync(lap.path('.claude.json'), JSON.stringify({ mcpServers: { hivemind: { type: 'http', url: `${SERVER_1}/mcp`, headersHelper: noArgs } } }));
+    // upgrade and leave room A with claude off the PATH: nothing can be removed, and it is said loudly
+    const off = { runner: claudeGone(lap.stub.runner), fetch: fetchStub };
+    await lap.run(main, ['update'], { cwd: lap.project.dir, ...off });
+    const gone = await lap.run(main, ['leave', '--room', 'my-team'], { cwd: lap.project.dir, ...off });
+    expect(gone.code).toBe(1);
+    expect(gone.err).toContain('claude mcp remove hivemind -s user');
+    expect(gone.err).toContain('added by hand');
+    // joining room C while claude is still off the PATH: the plain name is not handed out
+    lap.answers.secrets.push(TOKEN_3);
+    const c = await lap.run(main, ['join', '--server', SERVER_2, '--yes'], { cwd: lap.third.dir, fetch: fetchStub, runner: claudeGone(lap.stub.runner) });
+    expect(c.err).toContain('was not added'); // claude is missing: the registration cannot be made, which is said
+    expect(config(lap).rooms.find((r) => r.server === SERVER_2).mcp).not.toBe('hivemind');
+    // and with claude off the PATH the plain name cannot be vouched for, so it is reserved
+    const { takenMcpNames } = await import('./install.mjs');
+    expect((await takenMcpNames(lap.ctx({ runner: claudeGone(lap.stub.runner) }), 'whatever')).has('hivemind')).toBe(true);
+    // and even if it were, the leftover command (no arguments) gets nothing from a rooms config
+    const h = spawnSync(process.execPath, [lap.path('.hivemind', 'hook', 'headers-helper.mjs')], { encoding: 'utf8' });
+    expect(h.status).toBe(1);
+    expect(h.stdout).toBe('');
+  });
+
+  it('with a legacy install record, "hivemind" is reserved even when claude is on the PATH', async () => {
+    const lap = laptop();
+    mkdirSync(lap.path('.hivemind'), { recursive: true });
+    writeFileSync(lap.path('.hivemind', 'install.json'), JSON.stringify({ version: 1, node: process.execPath, claude: { settings: true, settingsCreated: false, allowAdded: false, mcp: false }, codex: {} }));
+    await joinFrom(lap, 'project', SERVER_1, AGENT_TOKEN);
+    expect(config(lap).rooms[0].mcp).toBe('hivemind-my-team');
+  });
+
+  it('config.json has a top-level copy only for the room behind the plain "hivemind" server', async () => {
+    const a = { server: SERVER_1, room: 'a', person: 'p', token: AGENT_TOKEN, repos: ['x'], mcp: 'hivemind-a' };
+    const out = configJson([a]);
+    expect(out.token).toBeUndefined();
+    expect(out.server).toBeUndefined();
+    expect(out.rooms).toEqual([a]);
+    expect(roomsFromJson(out)).toEqual([a]);
+    expect(configJson([a, { ...a, room: 'b', mcp: 'hivemind' }]).room).toBe('b');
+  });
+
+  it('a lock that a slow command keeps fresh is not taken over, and only its owner deletes it', async () => {
+    const { withLock } = await import('./install.mjs');
+    const lap = laptop();
+    const ctx = lap.ctx();
+    const lock = lap.path('.hivemind', '.lock');
+    await withLock(ctx, async () => {
+      expect(readFileSync(lock, 'utf8')).toMatch(/^\d+-/);
+      // another process "takes over" and writes its own lock: ours must not delete it on the way out
+      writeFileSync(lock, 'other-owner');
+    });
+    expect(readFileSync(lock, 'utf8')).toBe('other-owner');
   });
 });

@@ -771,7 +771,7 @@ async function run() {
 
   /** @type {HookOutcome} */
   const outcome = { decision: 'allow', reason: null, context: resp.context };
-  if (event === 'SessionStart' && rooms.length > 1) {
+  if (event === 'SessionStart' && (rooms.length > 1 || config.mcp !== 'hivemind')) {
     const line = `[Hivemind] This project's room is "${config.room}"; its tools are mcp__${config.mcp}__*.`;
     outcome.context = outcome.context ? `${outcome.context}\n${line}` : line;
   }

@@ -383,7 +383,7 @@ describe('no token in argv, logs or output', () => {
     const holders = Object.entries({ ...snapshot(lap.homedir) }).filter(([, text]) => text.includes(AGENT_TOKEN)).map(([f]) => f).sort();
     expect(holders).toEqual(['.codex/config.toml', '.hivemind/config.json']);
     // The helper prints the header from config.json when Claude runs it.
-    const helper = spawnSync(process.execPath, [lap.path('.hivemind', 'hook', 'headers-helper.mjs')], { encoding: 'utf8' });
+    const helper = spawnSync(process.execPath, [lap.path('.hivemind', 'hook', 'headers-helper.mjs'), 'hivemind', SERVER], { encoding: 'utf8' });
     expect(helper.status).toBe(0);
     expect(JSON.parse(helper.stdout)).toEqual({ Authorization: `Bearer ${AGENT_TOKEN}` });
     // And the token doesn't show up on the argv of the server calls either (it is only in the header).
@@ -1116,7 +1116,7 @@ describe('messages and checks', () => {
         expect(r.err).toContain('\\"type\\"');
       } else {
         expect(r.err).toContain('sh:');
-        expect(r.err).toContain("hivemind '{");
+        expect(r.err).toContain("hivemind-hack '{"); // claude is missing, so the plain name cannot be vouched for
       }
     }
   });

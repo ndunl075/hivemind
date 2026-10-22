@@ -90,15 +90,16 @@ export function roomsFromJson(c) {
 
 /**
  * The file's contents for these rooms: the primary room's fields at the top level, then the full list.
- * The primary room is the one served by the plain `hivemind` MCP server, else the first.
+ * The primary room is the one served by the plain `hivemind` MCP server; without one there is no top-level copy.
  * @param {RoomEntry[]} rooms
  */
 export function configJson(rooms) {
-  const primary = rooms.find((r) => r.mcp === DEFAULT_MCP) ?? rooms[0];
-  if (!primary) throw new CliError('no room to write');
+  if (rooms.length === 0) throw new CliError('no room to write');
+  const primary = rooms.find((r) => r.mcp === DEFAULT_MCP);
   const entry = (/** @type {RoomEntry} */ r) => ({ server: r.server, room: r.room, person: r.person, token: r.token, repos: r.repos, mcp: r.mcp });
   return {
-    server: primary.server, room: primary.room, person: primary.person, token: primary.token, repos: primary.repos,
+    // the copy for older readers is the room behind the plain "hivemind" server, never another room's token under that name
+    ...(primary ? { server: primary.server, room: primary.room, person: primary.person, token: primary.token, repos: primary.repos } : {}),
     rooms: rooms.map(entry),
   };
 }

@@ -7,8 +7,8 @@
 // origin of its URL: `<helper> <name> <origin>`. The helper prints the token of the room stored under that name, and
 // only if that room's server has that origin; anything else fails closed (exit 1, nothing printed), so a stale
 // registration can never send one room's token to another room's server.
-// Only a registration made before there were several rooms has no arguments; it means `hivemind`, and is served only
-// from a config.json in the old single-room format (no `rooms` list).
+// A registration made before there were several rooms has no arguments; it means `hivemind`, and is served only
+// from a config.json in the old single-room format (no `rooms` list). Against a `rooms` list it fails closed.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -19,8 +19,9 @@ try {
   const origin = process.argv[3];
   let entry;
   if (Array.isArray(config.rooms)) {
-    entry = config.rooms.find((/** @type {any} */ r) => r?.mcp === name);
-    if (origin === undefined && name !== 'hivemind') entry = undefined;
+    // Every registration made by a version that writes a rooms list carries its name and origin; one without them is
+    // a leftover (from before, or added by hand) and must not be answered with whatever room owns the name now.
+    if (process.argv[2] !== undefined && origin !== undefined) entry = config.rooms.find((/** @type {any} */ r) => r?.mcp === name);
   } else if (name === 'hivemind') {
     entry = config; // the old single-room format
   }

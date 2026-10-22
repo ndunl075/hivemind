@@ -11,7 +11,7 @@
  * @typedef {import('./context.mjs').Context} Context
  * @typedef {import('./rooms.mjs').RoomEntry} HivemindConfig
  */
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, utimesSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { blockNames, codexMcpBlock, hasOurBlock, removeBlock, setBlock, tomlServerNames } from './codex-config.mjs';
@@ -44,7 +44,7 @@ export const ROOM_HELPER_CMD_FILE = 'headers-helper-room.cmd';
  * @typedef {{
  *   version: 1,
  *   node: string,
- *   claude: { settings: boolean, settingsCreated: boolean, allowAdded: boolean, mcp: boolean, mcpServers: string[], allowRules: string[] },
+ *   claude: { settings: boolean, settingsCreated: boolean, allowAdded: boolean, mcp: boolean, mcpServers: string[], allowRules: string[], legacy?: boolean },
  *   codex: { hooks: boolean, hooksCreated: boolean, config: boolean, configCreated: boolean },
  * }} Manifest
  */
@@ -70,7 +70,10 @@ export function readManifest(ctx) {
     const m = JSON.parse(text);
     const base = emptyManifest();
     const out = { ...base, ...m, claude: { ...base.claude, ...m.claude }, codex: { ...base.codex, ...m.codex } };
-    if (!Array.isArray(m.claude?.mcpServers)) out.claude.mcpServers = m.claude?.mcp === true ? [DEFAULT_MCP] : [];
+    if (!Array.isArray(m.claude?.mcpServers)) {
+      out.claude.mcpServers = m.claude?.mcp === true ? [DEFAULT_MCP] : [];
+      out.claude.legacy = true; // written before several rooms: a "hivemind" server may exist that this record does not name
+    }
     if (!Array.isArray(m.claude?.allowRules)) out.claude.allowRules = m.claude?.allowAdded === true ? [ALLOW_RULE] : [];
     return out;
   } catch {
@@ -118,10 +121,11 @@ export async function withLock(ctx, fn) {
   const p = paths(ctx);
   mkdirSync(p.home, { recursive: true, mode: 0o700 });
   const give = Date.now() + 15000;
+  const mine = `${process.pid}-${Math.random().toString(36).slice(2)}`;
   for (;;) {
     try {
       const fd = openSync(p.lock, 'wx', 0o600);
-      writeSync(fd, String(process.pid));
+      writeSync(fd, mine);
       closeSync(fd);
       break;
     } catch (e) {
@@ -136,10 +140,13 @@ export async function withLock(ctx, fn) {
       await new Promise((r) => setTimeout(r, 50));
     }
   }
+  // While we work the lock is kept fresh, so a long join is never taken for a dead one; and only our own lock is deleted.
+  const beat = setInterval(() => { try { const now = new Date(); utimesSync(p.lock, now, now); } catch { /* gone */ } }, 10000);
   try {
     return await fn();
   } finally {
-    try { unlinkSync(p.lock); } catch { /* gone */ }
+    clearInterval(beat);
+    try { if (readFileSync(p.lock, 'utf8') === mine) unlinkSync(p.lock); } catch { /* gone */ }
     removeDirIfEmpty(p.home); // a leave that removed everything else leaves the folder to us
   }
 }
@@ -152,7 +159,9 @@ export async function withLock(ctx, fn) {
  * @returns {Promise<Set<string>>}
  */
 export async function takenMcpNames(ctx, room) {
-  const taken = new Set(readManifest(ctx)?.claude.mcpServers ?? []);
+  const manifest = readManifest(ctx);
+  const taken = new Set(manifest?.claude.mcpServers ?? []);
+  if (manifest?.claude.legacy) taken.add(DEFAULT_MCP);
   const toml = readText(paths(ctx).codexToml);
   const tomlNames = tomlServerNames(toml);
   const ourBlocks = toml === null ? [] : blockNames(toml);
@@ -161,6 +170,8 @@ export async function takenMcpNames(ctx, room) {
     if (tomlNames.has(n) && !ourBlocks.includes(n)) taken.add(n);
     const got = await ctx.runner('claude', ['mcp', 'get', n]);
     if (got.code === 0 && !isOurHelperText(ctx, got.stdout)) taken.add(n);
+    // Claude Code is set up but cannot be asked: a "hivemind" server could be there that nothing here records.
+    if (got.code === 127 && n === DEFAULT_MCP && existsSync(paths(ctx).claudeDir)) taken.add(n);
   }
   return taken;
 }
@@ -320,8 +331,9 @@ function noteMcp(manifest, name) {
  * @param {Manifest} manifest updated in place
  * @param {boolean} claudeOnPath
  * @param {Report} report
+ * @param {string[]} [left] MCP server names of rooms that were in config.json before this run and are not now
  */
-async function registerClaude(ctx, rooms, manifest, claudeOnPath, report) {
+async function registerClaude(ctx, rooms, manifest, claudeOnPath, report, left = []) {
   const p = paths(ctx);
   const isOursHook = oursMatcher(p.hookScript);
   const { value: settings, existed } = readJsonObject(p.claudeSettings, {});
@@ -355,9 +367,10 @@ async function registerClaude(ctx, rooms, manifest, claudeOnPath, report) {
 
   if (!claudeOnPath) {
     // Servers of rooms that are gone cannot be removed without claude: say so loudly, and keep them on record.
-    for (const gone of manifest.claude.mcpServers.filter((n) => !rooms.some((r) => r.mcp === n))) {
+    const goneNames = [...new Set([...manifest.claude.mcpServers, ...left])].filter((n) => !rooms.some((r) => r.mcp === n));
+    for (const gone of goneNames) {
       report.failed = true;
-      report.warnings.push(`Claude Code: the "claude" program was not found, so the MCP server "${gone}" of a room you left could not be removed. Put claude on your PATH and run hivemind update, or run: claude mcp remove --scope user ${gone}`);
+      report.warnings.push(`Claude Code: the "claude" program was not found, so the MCP server "${gone}" of a room you left could not be removed, and one with that name that you added by hand may remain too. Put claude on your PATH and run hivemind update, or run: claude mcp remove ${gone} -s user`);
     }
     for (const room of rooms) {
       const helper = helperCommandFor(ctx, room.mcp, room.server);
@@ -392,8 +405,9 @@ async function registerClaude(ctx, rooms, manifest, claudeOnPath, report) {
  * @param {string} name
  * @param {Manifest | null} manifest updated in place
  * @param {Report} report
+ * @param {boolean} [loud] warn when claude is missing even if nothing records this server (it is a room being left)
  */
-async function removeClaudeMcp(ctx, name, manifest, report) {
+async function removeClaudeMcp(ctx, name, manifest, report, loud = false) {
   const got = await ctx.runner('claude', ['mcp', 'get', name]);
   if (got.code === 0) {
     if (isOurHelperText(ctx, got.stdout)) {
@@ -409,9 +423,9 @@ async function removeClaudeMcp(ctx, name, manifest, report) {
       report.lines.push(`Claude Code: the MCP server named "${name}" is not the Hivemind one, so it was left alone`);
       if (manifest) manifest.claude.mcpServers = manifest.claude.mcpServers.filter((n) => n !== name);
     }
-  } else if (got.code === 127 && manifest?.claude.mcpServers.includes(name)) {
+  } else if (got.code === 127 && (loud || manifest?.claude.mcpServers.includes(name))) {
     report.failed = true;
-    report.warnings.push(`Claude Code: the "claude" program was not found, so the MCP server "${name}" could not be removed. Put it on your PATH, or run: claude mcp remove --scope user ${name}`);
+    report.warnings.push(`Claude Code: the "claude" program was not found, so the MCP server "${name}" could not be removed (a server with that name that you added by hand may remain too). Put it on your PATH, or run: claude mcp remove ${name} -s user`);
   } else if (manifest) {
     manifest.claude.mcpServers = manifest.claude.mcpServers.filter((n) => n !== name); // already gone
   }
@@ -457,6 +471,8 @@ export async function installAll(ctx, config) {
   const p = paths(ctx);
   /** @type {Report} */
   const report = { lines: [], warnings: [], failed: false };
+  const before = readRooms(ctx) ?? [];
+  const left = before.map((r) => r.mcp).filter((n) => !rooms.some((r) => r.mcp === n));
   writeConfig(ctx, rooms);
   copyRuntime(ctx);
   report.lines.push(`Hook installed in ${p.hookDir}`);
@@ -466,7 +482,7 @@ export async function installAll(ctx, config) {
 
   if (apps.claude) {
     try {
-      await registerClaude(ctx, rooms, manifest, apps.claudeOnPath, report);
+      await registerClaude(ctx, rooms, manifest, apps.claudeOnPath, report, left);
     } catch (e) {
       report.failed = true;
       report.warnings.push(`Claude Code: ${/** @type {Error} */ (e).message}`);
@@ -533,7 +549,7 @@ export async function uninstallAll(ctx) {
   // Claude MCP servers: only entries that are ours (join recorded them, or their helper path is ours).
   try {
     const names = [...new Set([DEFAULT_MCP, ...(manifest?.claude.mcpServers ?? []), ...rooms.map((r) => r.mcp)])];
-    for (const name of names) await removeClaudeMcp(ctx, name, manifest, report);
+    for (const name of names) await removeClaudeMcp(ctx, name, manifest, report, rooms.some((r) => r.mcp === name));
   } catch (e) {
     report.failed = true;
     report.warnings.push(`Claude Code MCP: ${/** @type {Error} */ (e).message}`);
