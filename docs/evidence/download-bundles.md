@@ -1,46 +1,49 @@
 # Evidence: download bundles
 
-Built and checked on Windows 11, Node 22 as the build runtime, 2026-10-23, from `main` at 4315d76.
+Built and checked on Windows 11, Node 22 as the build runtime, 2026-10-23. First pass from `main` at 4315d76; review
+fixes on top of the merge of origin/main (README change, PR 38).
 
 ## Build
 
-`npm ci` then `npm run bundle` (first run downloaded; later runs use `installer/.cache/`):
+`npm ci` then `npm run bundle` (first run downloads; later runs use `installer/.cache/`):
 
 ```
-downloading https://nodejs.org/dist/v20.20.2/win-x64/node.exe
-downloading https://nodejs.org/dist/v20.20.2/node-v20.20.2-darwin-arm64.tar.gz
-downloading https://nodejs.org/dist/v20.20.2/node-v20.20.2-darwin-x64.tar.gz
-hivemind-windows.zip  27.6 MiB  sha256 ecf35cc81101a25609b6a7a0e4a35320993ed921aee5b560e4e024b149be47f6
-hivemind-mac.zip  60.3 MiB  sha256 2419b8268f3bfe349b2b26d1d690c981b5dffa8e01433ceeaeb91963c5a4143c
+downloading https://nodejs.org/dist/v24.22.1/win-x64/node.exe
+downloading https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-arm64.tar.gz
+downloading https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-x64.tar.gz
+hivemind-windows.zip  34.4 MiB  sha256 167207eba2cd706fc59a14fd29405a70596a653767b98035c4bb51b4c2595da7
+hivemind-mac.zip  78.3 MiB  sha256 73fa45adf9ab64048c8f3b0813c884cef1199c8eefd5181447cdd46a2898bd29
 ```
 
-Sizes: windows 28,918,325 bytes, mac 63,275,093 bytes. Every download is checked against `SHASUMS256.txt` of that
-Node release (a mismatch aborts the build; a cached file is re-hashed before use). Node 20.20.2 is pinned in
-`installer/build.mjs`. The zips are repeatable: fixed timestamps, sorted entries.
-
-`unzip -tq` reports no errors for both zips; PowerShell `Expand-Archive` extracted the Windows one.
+Sizes: windows 36,076,015 bytes, mac 82,139,770 bytes. Node 24.22.1 (Active LTS; Node 20 is end of life) is pinned.
+Each file used has its SHA-256 pinned in `build.mjs` and must also match the release's `SHASUMS256.txt`; a cached
+checksum list that does not parse or does not list the files is re-downloaded; a cached archive is re-hashed before
+use. The zips are repeatable (fixed timestamps, sorted entries). `unzip -tq` is clean on both.
 
 ## Windows bundle: run for real
 
-Setup: local server (`wrangler dev`, port 8791, throwaway secrets), room and invite created with
-`hivemind room create` / `hivemind invite` (admin secret in `HIVEMIND_ADMIN_TOKEN`), a temp Git repo with one
-commit, the zip extracted to a temp folder. Launcher run with a PATH of only `C:\Windows\System32` and Git's `cmd`
-folder (no Node), `HIVEMIND_HOME` in a folder **with a space in its name**, and `USERPROFILE`, `CLAUDE_CONFIG_DIR`,
-`CODEX_HOME` all pointed at temp folders, so the real machine config was not touched. Token piped with
-`--token-stdin --yes`; `HIVEMIND_PROJECT` and `HIVEMIND_NO_PAUSE=1` skip the folder question and the final pause.
+A scratch driver (not committed) starts `wrangler dev` (port 8792, throwaway secrets), creates a room and invite with
+`hivemind room create` / `invite`, makes a temp Git repo, extracts the zip with `Expand-Archive`, and runs the
+launcher through `cmd /c chcp 437 & call "Hivemind Setup.cmd" --token-stdin --yes`. Environment: PATH is only
+`C:\Windows\System32` and Git's `cmd` folder (no Node); `USERPROFILE`, `HIVEMIND_HOME`, `CLAUDE_CONFIG_DIR`,
+`CODEX_HOME` are in a temp folder named **`Zoë Smith`** (non-ASCII and a space), so the real config is untouched.
+`HIVEMIND_PROJECT` and `HIVEMIND_NO_PAUSE=1` skip the folder question and the final pause.
 
-Result: `Hivemind Setup.cmd` copied `node.exe` to `<HIVEMIND_HOME>\runtime\node.exe`, `join` accepted the token
-("you are tester in room bundle-test"), installed the hook folder, registered the Claude Code and Codex hooks (with the
-config folders present), and `doctor` ran and printed the self-test prompt. Doctor was all `ok` except the Claude
-Code MCP entry: the `claude` program does not exist in this isolated environment, so `join` printed its normal
-"not found, run hivemind update" warning. Not a bundle problem; Codex's MCP entry and all 6 hooks for both apps passed.
+Results (first and second run both exit 0):
+- Join accepted the token, registered Claude Code and Codex hooks; doctor ran and printed the self-test prompt. The only
+  FAIL is Claude's MCP entry, because there is no `claude` program in the isolated environment (join says so).
+- Doctor reports the recorded node as `...\HMB-OD~1\ZOSMIT~1\HIVEMI~1\runtime\node.exe`: `process.execPath` keeps the 8.3
+  short form, so it is plain ASCII.
+- `hook\headers-helper.cmd` contains no byte above 127 and, run under `chcp 437`, prints the Authorization header JSON
+  (exit 0). This is the check for the non-ASCII username problem. I did not re-run the unfixed launcher to see it
+  fail; the reviewer reproduced that.
+- Second run: the identical `runtime\node.exe` is detected (`fc /b`) and not copied again; `runtime` holds only `node.exe`.
+- A launcher without a `node\` folder next to it (what Explorer's zip view gives) prints "This window was opened from
+  inside the zip file ... Extract All".
 
-**Hook path survives the bundle:** the registered hook command is
-`<HIVEMIND_HOME>\runtime\node.exe <HIVEMIND_HOME>\hook\hook.mjs claude`, not a path inside the zip folder. I renamed
-the extracted folder, deleted its `node` and `app` folders, and ran that registered command with a SessionStart
-payload: it returned the `[Hivemind] You are claude-tester. Room "bundle-test", mode: enforce` briefing and logged `ok:true`.
-(If the launcher had run join with the bundled node in place, hooks would have pointed at the zip folder; that is why the
-launcher copies Node first. No change in `cli/` was needed.)
+Earlier pass (Node 20 bundle, same launcher logic): after renaming the extracted folder and deleting its `node` and
+`app` folders, the registered hook command (`<HIVEMIND_HOME>\runtime\node.exe <HIVEMIND_HOME>\hook\hook.mjs claude`)
+still ran and returned the `[Hivemind] You are ...` briefing. Not repeated for Node 24; the path logic did not change.
 
 ## Mac bundle: NOT run on a Mac
 
@@ -49,18 +52,21 @@ Contents (`unzip -Z`), modes preserved:
 ```
 -rwxr-xr-x  Hivemind/Hivemind Setup.command        (LF line endings)
 -rw-r--r--  Hivemind/README.txt
--rwxr-xr-x  Hivemind/node/node-arm64                89,830,192
--rwxr-xr-x  Hivemind/node/node-x64                  92,324,688
+-rwxr-xr-x  Hivemind/node/node-arm64                122,545,856
+-rwxr-xr-x  Hivemind/node/node-x64                  125,715,808
 -rw-r--r--  Hivemind/app/cli/...  (same files as Windows)
 -rw-r--r--  Hivemind/app/shared/protocol.md, app/package.json, app/node_modules/smol-toml/...
 ```
 
-The `node-*` binaries are extracted from the official `darwin-arm64` / `darwin-x64` tarballs (hash-checked). The
-launcher is untested on macOS: `uname -m` selection, `xattr` quarantine clearing, drag-a-folder path cleanup, and
-Gatekeeper behaviour for an unsigned `.command` (the README tells people to Control-click, Open). I only checked the
-Mac zip's integrity and listing, and the launcher is plain bash with no bash-4 features.
+The `node-*` binaries come from the official `darwin-arm64` / `darwin-x64` tarballs (hash-checked). The launcher is
+`bash -n` clean. The folder-drag cleanup (the line that was broken in the first version) is now a bundled-Node one-liner;
+I ran that exact line from the launcher under Git Bash on Windows with `/tmp/pt/my\ dir\ \(1\) ` (escaped spaces and
+parentheses, trailing space) and got `/tmp/pt/my dir (1)`, and `cd` into it worked; a quoted path and `~/x` also
+came out right. **Untested on macOS:** `uname -m` selection, `xattr`, the copy-and-rename of Node, and Gatekeeper /
+"Open Anyway" for the unsigned `.command`.
 
 ## Other checks
 
-`npm run typecheck`: passes. Not run: `npm test` (nothing under tested code changed), the interactive path (typing a
-token at the hidden prompt, dragging a folder onto the window, and the real `pause`), SmartScreen on a downloaded copy.
+`npm run typecheck` passes. Not run: `npm test` (no tested code changed), the interactive prompts (hidden token, dragging
+a folder, the real `pause`), SmartScreen on a downloaded copy, a machine with 8.3 short names disabled (the launcher
+then keeps the long path and a non-ASCII username would again break the headers helper).

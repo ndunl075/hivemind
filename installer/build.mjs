@@ -1,6 +1,6 @@
 /**
  * Builds the two download bundles a non-technical teammate double-clicks (hivemind-windows.zip, hivemind-mac.zip).
- * Each holds an official Node 20 binary, the CLI files the package ships, the smol-toml dependency and a setup launcher.
+ * Each holds an official Node 24 LTS binary, the CLI files the package ships, the smol-toml dependency and a setup launcher.
  *
  *   npm run bundle        (run `npm ci` first: smol-toml is copied from node_modules)
  *
@@ -13,7 +13,13 @@ import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync, gunzipSync } from 'node:zlib';
 
-const NODE_VERSION = '20.20.2';
+const NODE_VERSION = '24.22.1';
+/** SHA-256 of each file used, checked in addition to the release's SHASUMS256.txt. Update with NODE_VERSION. */
+const PINNED = new Map([
+  ['win-x64/node.exe', 'd702daa815eabbff763c7d3808e235cf031cf2ca70211b56847bc72f51e240e5'],
+  [`node-v${NODE_VERSION}-darwin-arm64.tar.gz`, '89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7'],
+  [`node-v${NODE_VERSION}-darwin-x64.tar.gz`, 'd132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035'],
+]);
 const DIST_URL = `https://nodejs.org/dist/v${NODE_VERSION}`;
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -26,27 +32,31 @@ const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
 // ---------- Node downloads ----------
 
-/** @type {Map<string, string> | undefined} */
-let sums;
-
-async function checksums() {
-  if (sums) return sums;
-  const file = join(cacheDir, 'SHASUMS256.txt');
-  let text;
-  if (existsSync(file)) text = readFileSync(file, 'utf8');
-  else {
-    const res = await fetch(`${DIST_URL}/SHASUMS256.txt`);
-    if (!res.ok) throw new Error(`SHASUMS256.txt: HTTP ${res.status}`);
-    text = await res.text();
-    mkdirSync(cacheDir, { recursive: true });
-    writeFileSync(file, text);
-  }
-  sums = new Map();
+/** @param {string} text */
+function parseSums(text) {
+  /** @type {Map<string, string>} */ const map = new Map();
   for (const line of text.split('\n')) {
     const m = /^([0-9a-f]{64})\s+(\S+)$/.exec(line.trim());
-    if (m) sums.set(m[2], m[1]);
+    if (m) map.set(m[2], m[1]);
   }
-  return sums;
+  return map;
+}
+
+/** The release's checksum list: the cached copy if it parses and lists every file we use, else a fresh download. */
+async function checksums() {
+  const file = join(cacheDir, 'SHASUMS256.txt');
+  if (existsSync(file)) {
+    const cached = parseSums(readFileSync(file, 'utf8'));
+    if ([...PINNED.keys()].every((n) => cached.has(n))) return cached;
+  }
+  const res = await fetch(`${DIST_URL}/SHASUMS256.txt`);
+  if (!res.ok) throw new Error(`SHASUMS256.txt: HTTP ${res.status}`);
+  const text = await res.text();
+  const fresh = parseSums(text);
+  if (![...PINNED.keys()].every((n) => fresh.has(n))) throw new Error('SHASUMS256.txt does not list the Node files this build needs');
+  mkdirSync(cacheDir, { recursive: true });
+  writeFileSync(file, text);
+  return fresh;
 }
 
 /**
@@ -54,8 +64,9 @@ async function checksums() {
  * @param {string} name
  */
 async function fetchNode(name) {
-  const want = (await checksums()).get(name);
-  if (!want) throw new Error(`${name} is not listed in SHASUMS256.txt for v${NODE_VERSION}`);
+  const want = PINNED.get(name);
+  if (!want) throw new Error(`${name} has no pinned SHA-256`);
+  if ((await checksums()).get(name) !== want) throw new Error(`${name}: SHASUMS256.txt for v${NODE_VERSION} disagrees with the pinned hash`);
   const cached = join(cacheDir, name.replaceAll('/', '_'));
   if (existsSync(cached)) {
     const buf = readFileSync(cached);
