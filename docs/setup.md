@@ -1,101 +1,113 @@
 # Hivemind setup guide
 
-Hivemind lets the AI coding agents on your team (Claude Code and Codex) see what each other are doing, so they don't edit the same file at the same time. You keep prompting your agents the way you always have. This page gets you set up.
+Hivemind lets the AI coding agents on your team (Claude Code and Codex) see what each other are doing, so they don't take the same task or edit the same file at the same time. You keep prompting your agents the way you always have. This page gets you set up.
 
-> **Heads up:** the release tag `v0.1.0` used below is not published yet. Until your admin tells you it is, the `npx` commands in this guide will fail with a "not found" error. Ask your admin which tag to use.
-
-Every command below is written in its long form, `npx github:ndunl075/hivemind#v0.1.0 <command>`. Joining does **not** add a short `hivemind` command to your computer, so keep using the long form. (`npx` is a helper that comes with Node. It downloads and runs a program in one step.)
+> **Heads up:** the release `v0.1.0` used below is not published yet. Until your admin says it is, the install command will fail with a "404" or "not found" error.
 
 ## What you need
 
-- **Node 20 or newer.** Node is the free program that runs Hivemind's setup.
+- **Node 20 or newer.** Node is the free program that runs Hivemind.
   - Check: open a terminal (Windows: search for "PowerShell"; Mac: open "Terminal") and type `node --version`. If it prints `v20` or higher, you're set.
   - If it says "not found" or shows a lower number, download the "LTS" installer from [nodejs.org](https://nodejs.org), run it, then open a new terminal and check again.
 - **Claude Code and/or Codex**, already installed and working. Hivemind sets up whichever of the two it finds.
-- **The private code your admin sent you.** It starts with `hm_a.`. Treat it like a password: don't post it in a channel or commit it anywhere.
-- Also: your project must be a Git folder with at least one commit, and you run the setup from inside it.
+- **From your admin:** the server address, and your private code (it starts with `hm_a.`). Treat the code like a password: don't post it in a channel or commit it anywhere.
+- **Your project, up to date.** It must be a Git folder with at least one commit. Pull the latest changes first, so you get the Hivemind rules your admin committed.
 
-## Join (about 10 minutes)
+## Install and join (about 10 minutes)
 
-1. Open a terminal **inside your project folder** (the one with your code).
-2. Run:
+1. **Install the `hivemind` command, once per laptop.** In a terminal, run:
 
    ```
-   npx github:ndunl075/hivemind#v0.1.0 join
+   npm install -g https://github.com/ndunl075/hivemind/archive/refs/tags/v0.1.0.tar.gz
    ```
 
-3. It asks you for three things:
-   - **Server address:** the web address your admin gave you.
-   - **Your code:** paste the `hm_a.` code. Nothing shows on screen as you paste. That's on purpose; just press Enter.
-   - **Your name:** it shows who the code belongs to, for example `Join as sam? [Y/n]`. Press Enter if that's you. (Your name comes from the code, so you don't type it.)
-4. **Codex users only:** open Codex and type `/hooks` once, then approve the Hivemind entries. (A "hook" is a small check Codex runs automatically before it edits a file. Codex wants your OK first.)
+   (`npm` comes with Node. This adds a `hivemind` command you can use from any folder.)
+2. **Open a terminal inside your project folder** (the one with your code) and run:
+
+   ```
+   hivemind join
+   ```
+
+3. It asks you for:
+   - **Server URL:** the address your admin gave you.
+   - **Your agent token:** paste your `hm_a.` code. Nothing shows on screen as you paste. That's on purpose; just press Enter.
+   - **Join as sam? [Y/n]:** it shows whose code it is. Press Enter if that's you.
+4. **Codex users only:** open Codex and type `/hooks` once, then approve the Hivemind entries. (A "hook" is a small check Codex runs automatically, for example before it edits a file. Codex wants your OK first.)
 5. **Restart any Claude Code or Codex window that was already open.** They only pick up Hivemind when they start.
-6. Run the check:
-
-   ```
-   npx github:ndunl075/hivemind#v0.1.0 doctor
-   ```
-
-   It prints a list of lines starting with `ok`, `warn` or `FAIL`. Everything should say `ok`. (A `warn` that "hook.log has no entries yet" is normal before your first session.) At the bottom it prints a **self-test prompt**: a short message that starts with "Hivemind self-test."
-
+6. **Run the check:** `hivemind doctor`. It prints lines starting with `ok`, `warn` or `FAIL`.
+   - `ok` is good. A `warn` that `hook.log` has no entries yet is normal before your first session.
+   - Any `FAIL` ends with "problems found" and says what to run. Usually that's `hivemind update` or `hivemind join`. Do that, then run `hivemind doctor` again.
+   - At the bottom it prints a **self-test prompt**: a short message that starts with "Hivemind self-test."
 7. **Paste that prompt into each app you use** (the Claude Code CLI, the desktop app, your IDE, Codex, and so on) as a normal message. It tells the agent not to edit anything.
-   - **A good answer** quotes a line starting with `[Hivemind] You are ...`, names a room mode (`enforce`, `warn` or `off`), and ends with `HIVEMIND-OK`.
-   - **A bad answer** says `HOOKS-MISSING` (Hivemind's automatic checks don't run in that app) or `MCP-FAILED` (the agent couldn't reach Hivemind). Tell your admin which app it was and what it printed. An app that fails still works for you; it just isn't protected by Hivemind.
+   - **Good:** the answer quotes a line starting with `[Hivemind] You are ...`, names a room mode (`enforce`, `warn` or `off`), and ends with `HIVEMIND-OK`.
+   - **`HOOKS-MISSING`:** Hivemind's automatic checks don't run in that app. The agent can still use the shared board and messages, but nothing stops it from clashing over files.
+   - **`MCP-FAILED`:** the agent couldn't reach Hivemind's tools at all.
+   - For either one, tell your admin which app it was and what it printed. Your app keeps working normally either way.
 
 ## Day to day
 
 Nothing changes. Open your agent and keep prompting as usual. Hivemind works in the background: agents tell the team what they're working on, and they're warned off files a teammate's agent is already editing.
 
-- **The dashboard:** your admin has a read-only web link that shows every agent, what it's doing, and who's waiting on whom. Ask them for it and bookmark it.
-- **A "blocked" message:** if an agent says something like `[Hivemind] Edit blocked`, it tried to edit a file a teammate's agent is working on. The message says who has it and why. Let the agent wait, work on something else, or message that agent. The hold goes away on its own once they push their changes. This is Hivemind doing its job, not an error.
+- **The dashboard:** a read-only web page that shows every agent, what it's doing, and who's waiting on whom. Ask your admin for the link and bookmark it. The link is private, like your code: anyone who has it can see your team's file names, tasks and messages.
+- **`[Hivemind] Edit blocked`:** this is Hivemind doing its job, not an error. The message says why. There are two common reasons:
+  - **The agent hasn't said what it's working on yet.** It just needs to claim a task first. Agents normally do this on their own; if one doesn't, tell it "claim a Hivemind task for this first."
+  - **A teammate's agent has that file.** The message says who. Let the agent wait, work on something else, or message that agent. The hold ends once they push their changes.
 
 ## If something looks wrong
 
-Run these in a terminal inside your project, in the long form. For example: `npx github:ndunl075/hivemind#v0.1.0 mode warn`.
+Run these in a terminal inside your project:
 
-- `off` pauses Hivemind on **this laptop only**. `on` turns it back on. While it's off, your agents are invisible to the team.
-- `mode warn` switches the **whole team** from blocking to warnings only. Use it if blocks are getting in the way. `mode enforce` puts blocking back.
-- `unlock <path>` frees a stuck file or folder for the whole team, for example `unlock src/app.js`. Every agent is told.
+- `hivemind off` pauses Hivemind on **this laptop only**. `hivemind on` turns it back on. While it's off, your agents are invisible to the team.
+- `hivemind mode warn` switches the **whole team** from blocking to warnings only. Use it if blocks are getting in the way. `hivemind mode enforce` puts blocking back.
+- `hivemind unlock <path>` frees a stuck file or folder for the whole team, for example `hivemind unlock src/app.js`. Every agent is told.
+- `hivemind update` refreshes Hivemind's setup on this laptop. Codex users then approve `/hooks` again.
 - Not sure, or none of that helps? **Message your admin.**
 
 ## Admin, once per team
 
-Only one person does this. You need the Hivemind code on your machine: clone this repository, then run `npm ci` in it.
+Only one person does this, from a terminal.
 
-1. **Make a free Cloudflare account** at cloudflare.com, then run `npx wrangler login` and approve in the browser. (Cloudflare hosts the small Hivemind server for free. It never sees your code, only file paths, task text and messages.)
-2. **Deploy:** `npm run deploy`. It prints your server address. Keep it.
-3. **Set the two secrets**, pasting a long random string when asked for each:
-   - `npx wrangler secret put ADMIN_TOKEN` (your admin password; keep it)
-   - `npx wrangler secret put TOKEN_SECRET` (used to make everyone's codes)
-4. **Create the team's room:**
+1. **Get the Hivemind code:** download (clone) this repository with `git clone https://github.com/ndunl075/hivemind.git`, go into the new `hivemind` folder, and run `npm ci` (this installs what it needs).
+2. **Make a free Cloudflare account** at cloudflare.com, then run `npx wrangler login` and approve in the browser. Cloudflare hosts the small Hivemind server for free. It never sees your code, only file paths, task text and messages. If Cloudflare asks you to pick a `workers.dev` subdomain, any name is fine.
+3. **Put the server online (deploy):** `npm run deploy`. It prints your server address, ending in `workers.dev`. Keep it.
+4. **Set the two secrets** (passwords only the server knows). Make each one with this command, which prints a long random string:
 
    ```
-   npx github:ndunl075/hivemind#v0.1.0 room create my-team --server <your server address>
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
 
-   It asks for your `ADMIN_TOKEN` (hidden) and prints the **dashboard link** once. Copy it and share it with the team.
-5. **Invite each person:**
+   Then run each of these and paste a different string when asked:
 
    ```
-   npx github:ndunl075/hivemind#v0.1.0 invite my-team <person> --server <your server address>
+   npx wrangler secret put ADMIN_TOKEN -c server/wrangler.toml
+   npx wrangler secret put TOKEN_SECRET -c server/wrangler.toml
    ```
 
-   It prints that person's code, once. **Send each code privately**, not in a group channel. Also send them the server address and a link to this page.
-6. **In the project folder, run `init` once, then commit:**
+   Save the `ADMIN_TOKEN` string in your password manager; it's your admin password. Never change `TOKEN_SECRET` later: that cancels every code you've sent out.
+5. **Install the `hivemind` command** the same way as everyone else (step 1 of "Install and join").
+6. **Create the team's room:**
 
    ```
-   npx github:ndunl075/hivemind#v0.1.0 init
+   hivemind room create my-team --server <your server address>
    ```
 
-   This writes `.hivemind/project.json` and adds a short rules section to `AGENTS.md` and `CLAUDE.md`, which is how agents learn the rules. Review the changes, commit and push them so teammates get them.
+   It asks for your `ADMIN_TOKEN` (hidden) and prints the **dashboard link** once. Share it privately with the team, not in a public place.
+7. **In your project folder, run `hivemind init` once,** then review the changes, commit and push them. It writes `.hivemind/project.json` and adds a short rules section to `AGENTS.md` and `CLAUDE.md`; that's how agents learn the rules.
+8. **Invite each person,** including yourself:
 
-Other admin commands: `revoke my-team <person>` cancels one person's code, and `rotate my-team --agents` (or `--viewer`) replaces all agent codes (or only the dashboard link).
+   ```
+   hivemind invite my-team <person> --server <your server address>
+   ```
 
-**Cost:** a team of about 10 fits Cloudflare's free plan. If you ever outgrow it, the $5/month Workers Paid plan lifts the limits.
+   It prints that person's code, once. **Send each code privately**, not in a group channel, with the server address and a link to this page. Then run `hivemind join` yourself.
+
+Other admin commands: `hivemind revoke my-team <person>` cancels one person's code, and `hivemind rotate my-team --agents` (or `--viewer`) replaces all agent codes (or only the dashboard link).
+
+**Cost:** a team of about 10 normally fits Cloudflare's free plan. On a very busy day, Hivemind slows its background check-ins to stay under the limit, and near the limit it switches the room to warnings only until midnight UTC. If that happens often, the $5/month Workers Paid plan removes the limit.
 
 ## Which apps are supported
 
-Hivemind's automatic checks have to run inside each app. We're still confirming which apps do that, so every row is "being checked". The self-test above shows what your own app does.
+Hivemind's automatic checks have to run inside each app. We're still confirming which apps do that, so every row says "being checked". The self-test above shows what your own app does.
 
 | App | Status |
 |---|---|
@@ -105,5 +117,3 @@ Hivemind's automatic checks have to run inside each app. We're still confirming 
 | Codex, command line (CLI) | Being checked |
 | Codex, desktop app | Being checked |
 | Codex, IDE extension | Being checked |
-
-An app that fails the self-test still works normally and can still use the shared board and messages. It just isn't protected from file clashes.
