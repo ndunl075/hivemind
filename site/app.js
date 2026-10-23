@@ -3,9 +3,9 @@
   var root = document.documentElement;
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // Download button: label by visitor OS. Windows and Mac computers get one
-  // primary button and the other OS as a small link; anything else (Linux,
-  // Android, ChromeOS, iPhone, iPad) gets both buttons, neither primary.
+  // Download buttons: the visitor's OS gets the filled button and the other OS
+  // the light one; anything else (Linux, Android, ChromeOS, iPhone, iPad) gets
+  // Windows filled, Mac light, and a note that Hivemind is for computers.
   var base = document.querySelector(".dl").dataset.release; // one place to bump per release (data-release in index.html)
   var ua = navigator.userAgent || "";
   var touch = navigator.maxTouchPoints > 1;
@@ -19,8 +19,6 @@
   if (os === "both") {
     main.href = base + "hivemind-windows.zip";
     alt.href = base + "hivemind-mac.zip";
-    alt.className = "pill";
-    alt.textContent = "Download for Mac";
     document.querySelector(".dl").classList.add("both");
     document.getElementById("dl-note").hidden = false;
   } else {
@@ -28,7 +26,7 @@
     main.href = base + "hivemind-" + os + ".zip";
     main.textContent = "Download for " + names[os];
     alt.href = base + "hivemind-" + other + ".zip";
-    alt.textContent = "Or download for " + names[other];
+    alt.textContent = "Download for " + names[other];
   }
 
   // Scroll-in, headline words, floating download button.
