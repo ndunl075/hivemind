@@ -19,7 +19,6 @@
   if (os === "both") {
     main.href = base + "hivemind-windows.zip";
     alt.href = base + "hivemind-mac.zip";
-    document.querySelector(".dl").classList.add("both");
     document.getElementById("dl-note").hidden = false;
   } else {
     var other = os === "mac" ? "windows" : "mac";
