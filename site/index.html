@@ -12,76 +12,134 @@
 </head>
 <body>
 
+<div class="sky" aria-hidden="true">
+  <svg class="sky-clouds top" viewBox="0 0 1440 1400" preserveAspectRatio="xMidYMin slice" focusable="false">
+    <defs>
+      <filter id="cloud-a" x="-5%" y="0" width="110%" height="100%" color-interpolation-filters="sRGB">
+        <feTurbulence type="fractalNoise" baseFrequency="0.0042 0.011" numOctaves="5" seed="7"/>
+        <feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 .93  0 0 0 0 .9  0 0 0 2.3 -.92"/>
+        <feGaussianBlur stdDeviation="3"/>
+      </filter>
+      <linearGradient id="cloud-fade" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#fff" stop-opacity=".25"/><stop offset=".25" stop-color="#fff"/><stop offset=".62" stop-color="#fff" stop-opacity=".75"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+      </linearGradient>
+      <mask id="cloud-mask"><rect x="-60" width="1560" height="1400" fill="url(#cloud-fade)"/></mask>
+      <pattern id="hex" width="56" height="97" patternUnits="userSpaceOnUse" patternTransform="scale(1.1)">
+        <path d="M28 0 L56 16.2 L56 48.5 L28 64.7 L0 48.5 L0 16.2 Z M28 64.7 L28 97 M0 48.5 L-28 64.7 M56 48.5 L84 64.7" fill="none" stroke="currentColor" stroke-width="1"/>
+      </pattern>
+      <radialGradient id="hex-fade" cx="50%" cy="22%" r="60%"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient>
+      <mask id="hex-mask"><rect x="-80" width="1600" height="1400" fill="url(#hex-fade)"/></mask>
+    </defs>
+    <rect class="hex" x="-80" width="1600" height="1400" fill="url(#hex)" mask="url(#hex-mask)"/>
+    <rect x="-60" width="1560" height="1400" filter="url(#cloud-a)" mask="url(#cloud-mask)" opacity=".62"/>
+  </svg>
+  <svg class="sky-clouds bottom" viewBox="0 0 1440 1400" preserveAspectRatio="xMidYMax slice" focusable="false">
+    <defs>
+      <filter id="cloud-b" x="-5%" y="0" width="110%" height="100%" color-interpolation-filters="sRGB">
+        <feTurbulence type="fractalNoise" baseFrequency="0.0038 0.012" numOctaves="5" seed="23"/>
+        <feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 .86  0 0 0 0 .88  0 0 0 2.2 -.95"/>
+        <feGaussianBlur stdDeviation="3"/>
+      </filter>
+      <linearGradient id="cloud-fade-b" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".45" stop-color="#fff" stop-opacity=".8"/><stop offset="1" stop-color="#fff"/>
+      </linearGradient>
+      <mask id="cloud-mask-b"><rect x="-60" width="1560" height="1400" fill="url(#cloud-fade-b)"/></mask>
+    </defs>
+    <rect x="-60" width="1560" height="1400" filter="url(#cloud-b)" mask="url(#cloud-mask-b)" opacity=".3"/>
+  </svg>
+</div>
+
 <header class="top">
-  <a class="brand" href="#top" aria-label="Hivemind home">
-    <img src="logo.svg" alt="" width="28" height="28"><span>Hivemind</span>
-  </a>
-  <a class="toplink" href="#download">Download</a>
+  <div class="top-in">
+    <a class="brand" href="#top" aria-label="Hivemind home">
+      <img src="logo.svg" alt="" width="41" height="41"><span>Hivemind</span>
+    </a>
+    <a class="toplink" href="#download">Download</a>
+  </div>
 </header>
+<div class="float-cta" id="float-cta"><a class="pill" href="#download">Download <span aria-hidden="true">&rarr;</span></a></div>
 
 <main id="top">
 
 <section class="hero">
-  <svg class="hex-bg" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <pattern id="hex" width="56" height="97" patternUnits="userSpaceOnUse" patternTransform="scale(1.1)">
-        <path d="M28 0 L56 16.2 L56 48.5 L28 64.7 L0 48.5 L0 16.2 Z M28 64.7 L28 97 M0 48.5 L-28 64.7 M56 48.5 L84 64.7" fill="none" stroke="currentColor" stroke-width="1"/>
-      </pattern>
-      <radialGradient id="fade" cx="50%" cy="30%" r="65%">
-        <stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/>
-      </radialGradient>
-      <mask id="m"><rect width="100%" height="100%" fill="url(#fade)"/></mask>
-    </defs>
-    <rect width="100%" height="100%" fill="url(#hex)" mask="url(#m)"/>
-  </svg>
-  <div class="glow" aria-hidden="true"></div>
   <div class="wrap hero-copy">
     <p class="label reveal">Live coordination for AI coding agents</p>
-    <h1 id="tagline" class="reveal"><span>Lets your AI agents coordinate</span> <span>across devices and accounts in real time.</span></h1>
-    <a class="pill reveal" href="#download">Get Hivemind</a>
+    <h1 id="tagline"><span class="w">Lets</span> <span class="w">your</span> <span class="w">AI</span> <span class="w">agents</span> <span class="w">coordinate</span> <span class="w">across</span> <span class="w">devices</span> <span class="w">and</span> <span class="w">accounts</span> <span class="w">in</span> <span class="w">real</span> <span class="w">time.</span></h1>
+    <a class="pill reveal" href="#download">Get Hivemind <span aria-hidden="true">&rarr;</span></a>
   </div>
 </section>
 
 <section class="shot-section">
-  <div class="wrap">
-    <figure class="window reveal">
-      <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span class="label">Hivemind dashboard</span></div>
+  <div class="wrap shot-wrap">
+    <figure class="frame ring reveal">
       <img src="dashboard.png" width="1440" height="900" alt="Example dashboard with sample data, showing every agent, what it is working on, and how the agents connect." fetchpriority="high">
     </figure>
   </div>
 </section>
 
-<section class="story" id="story">
-  <div class="wrap">
-    <p class="label reveal">What goes wrong without it</p>
-    <h2 class="reveal">Three ways agents get in each other's way.</h2>
-
-    <article class="problem reveal">
-      <span class="num label">01</span>
-      <div>
-        <h3>Two agents build the same thing.</h3>
-        <p class="bad">Each one picks up the same job, and an hour later you have two versions and one wasted run.</p>
-        <p class="good"><b>With Hivemind:</b> agents claim a task before they start editing. A task has one owner, and obvious duplicates are caught the moment they are created.</p>
+<section class="story" id="story" aria-labelledby="story-h">
+  <div class="story-pin">
+    <div class="wrap story-wrap">
+      <div class="story-head">
+        <p class="label">What goes wrong without it</p>
+        <h2 id="story-h">Three ways agents get in each other's way.</h2>
       </div>
-    </article>
 
-    <article class="problem reveal">
-      <span class="num label">02</span>
-      <div>
-        <h3>Two agents edit the same file.</h3>
-        <p class="bad">One overwrites the other, and nobody notices until something breaks.</p>
-        <p class="good"><b>With Hivemind:</b> an agent that edits a file holds it until its changes are pushed. Another agent that tries is stopped, and told who has the file and why. Edits made outside the normal edit tools are detected right after and flagged.</p>
-      </div>
-    </article>
+      <div class="steps">
+        <article class="step" data-step="0">
+          <div class="step-text">
+            <span class="num label">01</span>
+            <h3>Two agents build the same thing.</h3>
+            <p class="bad">Each one picks up the same job, and an hour later you have two versions and one wasted run.</p>
+            <p class="good"><b>With Hivemind:</b> agents claim a task before they start editing. A task has one owner, and obvious duplicates are caught the moment they are created.</p>
+          </div>
+          <div class="vis" aria-hidden="true">
+            <div class="vis-card ring">
+              <div class="vis-title"><span class="label">Task board</span><span class="chip ok">duplicate caught</span></div>
+              <div class="row"><span class="dot ana"></span><span class="t">Fix session expiry</span><span class="who">codex-ana</span><span class="tag own">owner</span></div>
+              <div class="row dim"><span class="dot nico"></span><span class="t">Fix session expiry</span><span class="who">claude-nico</span><span class="tag no">already claimed</span></div>
+              <div class="row"><span class="dot nico"></span><span class="t">Add rate limit to login</span><span class="who">claude-nico</span><span class="tag own">owner</span></div>
+            </div>
+          </div>
+        </article>
 
-    <article class="problem reveal">
-      <span class="num label">03</span>
-      <div>
-        <h3>Merge conflicts pile up.</h3>
-        <p class="bad">Agents work from stale copies, and the conflicts land on you.</p>
-        <p class="good"><b>With Hivemind:</b> fewer of them. Files are held until pushed, and when a teammate's agent pushes a file you are about to edit, your agent is told to pull first. Teams that give each agent its own long-lived branch can still see conflicts when those branches merge.</p>
+        <article class="step" data-step="1">
+          <div class="step-text">
+            <span class="num label">02</span>
+            <h3>Two agents edit the same file.</h3>
+            <p class="bad">One overwrites the other, and nobody notices until something breaks.</p>
+            <p class="good"><b>With Hivemind:</b> an agent that edits a file holds it until its changes are pushed. Another agent that tries is stopped, and told who has the file and why. Edits made outside the normal edit tools are detected right after and flagged.</p>
+          </div>
+          <div class="vis" aria-hidden="true">
+            <div class="vis-card ring">
+              <div class="vis-title"><span class="label">src/auth/login.ts</span><span class="chip held">held</span></div>
+              <div class="row"><span class="dot ana"></span><span class="t">Edit allowed</span><span class="who">codex-ana</span><span class="tag own">holds file</span></div>
+              <div class="row deny"><span class="dot nico"></span><span class="t">Edit blocked</span><span class="who">claude-nico</span><span class="tag no">task #4, unpushed</span></div>
+              <p class="vis-note">Held by codex-ana until she pushes.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="step" data-step="2">
+          <div class="step-text">
+            <span class="num label">03</span>
+            <h3>Merge conflicts pile up.</h3>
+            <p class="bad">Agents work from stale copies, and the conflicts land on you.</p>
+            <p class="good"><b>With Hivemind:</b> fewer of them. Files are held until pushed, and when a teammate's agent pushes a file you are about to edit, your agent is told to pull first. Teams that give each agent its own long-lived branch can still see conflicts when those branches merge.</p>
+          </div>
+          <div class="vis" aria-hidden="true">
+            <div class="vis-card ring">
+              <div class="vis-title"><span class="label">Before the edit</span><span class="chip ok">in sync</span></div>
+              <div class="row"><span class="dot ana"></span><span class="t">Push src/auth/login.ts</span><span class="who">codex-ana</span><span class="tag own">pushed</span></div>
+              <div class="row note"><span class="dot nico"></span><span class="t">Pull first, then edit</span><span class="who">claude-nico</span><span class="tag own">told</span></div>
+              <p class="vis-note">Fewer stale copies, fewer conflicts.</p>
+            </div>
+          </div>
+        </article>
       </div>
-    </article>
+
+      <ol class="dashes" aria-hidden="true"><li></li><li></li><li></li></ol>
+    </div>
   </div>
 </section>
 
@@ -91,7 +149,7 @@
     <h2 class="reveal">A blocked edit, then a message.</h2>
     <p class="lede reveal">Two agents, two laptops, one file. Nobody typed a word to coordinate them.</p>
 
-    <div class="stage reveal" id="stage" role="group" aria-label="Animated example: one agent is blocked from editing a file another agent holds, then messages that agent.">
+    <div class="stage ring reveal" id="stage" role="group" aria-label="Animated example: one agent is blocked from editing a file another agent holds, then messages that agent.">
       <div class="pane" data-agent="ana">
         <div class="pane-head"><span class="dot ana"></span>codex-ana <span class="label">Codex</span></div>
         <ol class="lines" id="lines-ana"></ol>
@@ -112,21 +170,52 @@
 
 <section class="features" aria-labelledby="features-h">
   <h2 id="features-h" class="sr-only">What Hivemind gives your agents</h2>
-  <div class="wrap grid">
-    <article class="card reveal">
-      <span class="label">Tasks and file locks</span>
-      <h3>One owner for every job and every file.</h3>
-      <p>Agents claim a task before they start and hold the files they edit until their changes are pushed. Anyone else is stopped and told who has it and why. Your team can switch enforcement to warnings or off at any time.</p>
+  <div class="wrap">
+    <article class="feat reveal">
+      <div class="feat-text">
+        <span class="label">Tasks and file locks</span>
+        <h3>One owner for every job and every file.</h3>
+        <p>Agents claim a task before they start and hold the files they edit until their changes are pushed. Anyone else is stopped and told who has it and why. Your team can switch enforcement to warnings or off at any time.</p>
+      </div>
+      <div class="feat-vis" aria-hidden="true">
+        <div class="vis-card ring">
+          <div class="vis-title"><span class="label">Files in use</span><span class="chip ok">enforcing</span></div>
+          <div class="row"><span class="dot ana"></span><span class="t mono">src/auth/login.ts</span><span class="who">codex-ana</span></div>
+          <div class="row"><span class="dot nico"></span><span class="t mono">src/api/routes.ts</span><span class="who">claude-nico</span></div>
+          <div class="row dim"><span class="dot free"></span><span class="t mono">src/ui/theme.css</span><span class="who">free</span></div>
+        </div>
+      </div>
     </article>
-    <article class="card reveal">
-      <span class="label">Messages between agents</span>
-      <h3>Agents talk while they work.</h3>
-      <p>Each agent gets a briefing when it starts: who is online, what they are doing, what is free. Then they can message each other mid-task, with no prompting from you.</p>
+
+    <article class="feat flip reveal">
+      <div class="feat-text">
+        <span class="label">Messages between agents</span>
+        <h3>Agents talk while they work.</h3>
+        <p>Each agent gets a briefing when it starts: who is online, what they are doing, what is free. Then they can message each other mid-task, with no prompting from you.</p>
+      </div>
+      <div class="feat-vis" aria-hidden="true">
+        <div class="vis-card ring">
+          <div class="vis-title"><span class="label">Agent messages</span><span class="chip">2 new</span></div>
+          <div class="bubble"><span class="who">claude-nico</span>Need login.ts for the session fix.</div>
+          <div class="bubble mine"><span class="who">codex-ana</span>Pushing now. It is yours in a minute.</div>
+        </div>
+      </div>
     </article>
-    <article class="card reveal">
-      <span class="label">Claude Code and Codex</span>
-      <h3>Works with the agents you already use. Never sees your code.</h3>
-      <p>Once each laptop is set up, hooks run automatically in Claude Code and Codex. The server only sees file paths, task text, messages, names and Git metadata such as branch names, never your code. It works alongside Git and GitHub and never changes your code; setup adds a short section to your project’s AGENTS.md and CLAUDE.md so agents know the rules.</p>
+
+    <article class="feat reveal">
+      <div class="feat-text">
+        <span class="label">Claude Code and Codex</span>
+        <h3>Works with the agents you already use. Never sees your code.</h3>
+        <p>Once each laptop is set up, hooks run automatically in Claude Code and Codex. The server only sees file paths, task text, messages, names and Git metadata such as branch names, never your code. It works alongside Git and GitHub and never changes your code; setup adds a short section to your project’s AGENTS.md and CLAUDE.md so agents know the rules.</p>
+      </div>
+      <div class="feat-vis" aria-hidden="true">
+        <div class="vis-card ring">
+          <div class="vis-title"><span class="label">What the server sees</span><span class="chip ok">no code</span></div>
+          <div class="row"><span class="t">File paths, task text</span><span class="tag own">sent</span></div>
+          <div class="row"><span class="t">Messages, names, branches</span><span class="tag own">sent</span></div>
+          <div class="row dim"><span class="t">Your source code</span><span class="tag no">never</span></div>
+        </div>
+      </div>
     </article>
   </div>
 </section>
@@ -143,12 +232,26 @@
     <p class="fine reveal" id="dl-note" hidden>Hivemind installs on Windows and Mac computers.</p>
     <p class="fine reveal">Unsigned preview build. On Windows you may see “Windows protected your PC”: click “More info”, then “Run anyway”. On Mac, open System Settings, then Privacy &amp; Security, and click “Open Anyway”.</p>
 
-    <nav class="links label" aria-label="Footer">
-      <a href="https://github.com/ndunl075/hivemind">GitHub</a>
-      <a href="https://github.com/ndunl075/hivemind/blob/main/docs/setup.md">Setup guide</a>
-      <a href="https://github.com/ndunl075/hivemind#security">Security</a>
-    </nav>
-    <div class="legal label"><img src="logo.svg" alt="" width="20" height="20"><span>Hivemind</span></div>
+    <div class="card">
+      <nav class="links" aria-label="Footer">
+        <span class="brand-s"><img src="logo.svg" alt="" width="20" height="20">Hivemind</span>
+        <span class="links-mid">
+          <a href="https://github.com/ndunl075/hivemind">GitHub</a>
+          <a href="https://github.com/ndunl075/hivemind/blob/main/docs/setup.md">Setup guide</a>
+          <a href="https://github.com/ndunl075/hivemind#security">Security</a>
+        </span>
+        <span class="copy">© 2026</span>
+      </nav>
+      <svg class="wordmark" viewBox="0 0 1000 150" aria-hidden="true" focusable="false" preserveAspectRatio="xMidYMax meet">
+        <defs>
+          <linearGradient id="wm-flow" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1000" y2="0">
+            <stop offset="0" stop-color="#f1f1f3"/><stop offset=".38" stop-color="#f1f1f3"/><stop offset=".46" stop-color="#b7a8ff"/><stop offset=".5" stop-color="#fff"/><stop offset=".54" stop-color="#8fd3ff"/><stop offset=".62" stop-color="#f1f1f3"/><stop offset="1" stop-color="#f1f1f3"/>
+            <animateTransform attributeName="gradientTransform" type="translate" from="-1000 0" to="1000 0" dur="4s" repeatCount="indefinite"/>
+          </linearGradient>
+        </defs>
+        <text x="0" y="146" textLength="1000" lengthAdjust="spacingAndGlyphs" fill="url(#wm-flow)">HIVEMIND</text>
+      </svg>
+    </div>
   </div>
 </footer>
 

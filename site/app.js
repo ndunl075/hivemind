@@ -29,8 +29,10 @@
     alt.textContent = "Or download for " + names[other];
   }
 
-  // Scroll-in.
+  // Scroll-in, headline words, floating download button.
   var items = document.querySelectorAll(".reveal");
+  var hero = document.querySelector(".hero");
+  document.querySelectorAll("#tagline .w").forEach(function (w, i) { w.style.setProperty("--i", i); });
   if (!reduce && "IntersectionObserver" in window) {
     root.classList.add("js");
     var io = new IntersectionObserver(function (es) {
@@ -39,7 +41,46 @@
       });
     }, { threshold: 0.12, rootMargin: "0px 0px -6% 0px" });
     items.forEach(function (el) { io.observe(el); });
+    requestAnimationFrame(function () { requestAnimationFrame(function () { hero.classList.add("in"); }); });
   }
+  var cta = document.getElementById("float-cta");
+  var shot = document.querySelector(".shot-section");
+  function onScroll() { cta.classList.toggle("on", window.scrollY > shot.offsetTop - 120); }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+
+  // Story: below 861px or with reduced motion the three problems stack. Otherwise the
+  // scene is pinned and the active problem follows scroll progress through the section.
+  var story = document.getElementById("story");
+  var storySteps = story.querySelectorAll(".step");
+  var dashes = story.querySelectorAll(".dashes li");
+  var wide = window.matchMedia("(min-width: 861px)");
+  var active = -1;
+  function setActive(i) {
+    if (i === active) return;
+    active = i;
+    storySteps.forEach(function (s, k) { s.classList.toggle("on", k === i); s.setAttribute("aria-hidden", k === i ? "false" : "true"); });
+    dashes.forEach(function (d, k) { d.classList.toggle("on", k <= i); });
+  }
+  function storyScroll() {
+    var r = story.getBoundingClientRect();
+    var total = story.offsetHeight - window.innerHeight;
+    var p = total > 0 ? Math.min(0.999, Math.max(0, -r.top / total)) : 0;
+    setActive(Math.floor(p * storySteps.length));
+  }
+  function layoutStory() {
+    var pin = !reduce && wide.matches;
+    story.classList.toggle("pinned", pin);
+    if (pin) { active = -1; storyScroll(); }
+    else { active = -2; storySteps.forEach(function (s) { s.classList.remove("on"); s.removeAttribute("aria-hidden"); }); dashes.forEach(function (d) { d.classList.remove("on"); }); }
+  }
+  window.addEventListener("scroll", function () { if (story.classList.contains("pinned")) storyScroll(); }, { passive: true });
+  window.addEventListener("resize", function () { if (story.classList.contains("pinned")) storyScroll(); });
+  if (wide.addEventListener) wide.addEventListener("change", layoutStory);
+  layoutStory();
+
+  // Footer wordmark shimmer follows the reduced-motion setting.
+  if (reduce) document.querySelectorAll(".wordmark animateTransform").forEach(function (a) { a.remove(); });
 
   // Demo: scripted from the sequence in ARCHITECTURE.md section 3.
   var ana = document.getElementById("lines-ana");
