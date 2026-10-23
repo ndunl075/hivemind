@@ -87,7 +87,7 @@
     timer = setTimeout(tick, 700);
   }
   replay.addEventListener("click", function () {
-    if (idx >= steps.length && !timer) { play(); return; }
+    if (idx >= steps.length && !timer && !paused) { play(); return; }
     if (paused) { paused = false; label("Pause"); timer = setTimeout(tick, 400); }
     else { paused = true; clearTimeout(timer); timer = null; label("Play"); }
   });
