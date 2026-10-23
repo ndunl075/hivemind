@@ -45,8 +45,11 @@
   }
   var cta = document.getElementById("float-cta");
   var shot = document.querySelector(".shot-section");
-  function onScroll() { cta.classList.toggle("on", window.scrollY > shot.offsetTop - 120); }
-  window.addEventListener("scroll", onScroll, { passive: true });
+  function onScroll() {
+    var on = window.scrollY > shot.offsetTop - 120;
+    cta.classList.toggle("on", on);
+    cta.inert = !on;
+  }
   onScroll();
 
   // Story: below 861px or with reduced motion the three problems stack. Otherwise the
@@ -54,12 +57,12 @@
   var story = document.getElementById("story");
   var storySteps = story.querySelectorAll(".step");
   var dashes = story.querySelectorAll(".dashes li");
-  var wide = window.matchMedia("(min-width: 861px)");
+  var wide = window.matchMedia("(min-width: 861px) and (min-height: 620px)");
   var active = -1;
   function setActive(i) {
     if (i === active) return;
     active = i;
-    storySteps.forEach(function (s, k) { s.classList.toggle("on", k === i); s.setAttribute("aria-hidden", k === i ? "false" : "true"); });
+    storySteps.forEach(function (s, k) { s.classList.toggle("on", k === i); });
     dashes.forEach(function (d, k) { d.classList.toggle("on", k <= i); });
   }
   function storyScroll() {
@@ -72,16 +75,17 @@
     var pin = !reduce && wide.matches;
     story.classList.toggle("pinned", pin);
     if (pin) { active = -1; storyScroll(); }
-    else { active = -2; storySteps.forEach(function (s) { s.classList.remove("on"); s.removeAttribute("aria-hidden"); }); dashes.forEach(function (d) { d.classList.remove("on"); }); }
+    else { active = -2; storySteps.forEach(function (s) { s.classList.remove("on"); }); dashes.forEach(function (d) { d.classList.remove("on"); }); }
   }
-  window.addEventListener("scroll", function () { if (story.classList.contains("pinned")) storyScroll(); }, { passive: true });
-  window.addEventListener("resize", function () { if (story.classList.contains("pinned")) storyScroll(); });
+  var ticking = false;
+  function frame() { ticking = false; onScroll(); if (story.classList.contains("pinned")) storyScroll(); }
+  function queue() { if (!ticking) { ticking = true; requestAnimationFrame(frame); } }
+  window.addEventListener("scroll", queue, { passive: true });
+  window.addEventListener("resize", queue);
   if (wide.addEventListener) wide.addEventListener("change", layoutStory);
   layoutStory();
 
-  // Footer wordmark shimmer follows the reduced-motion setting.
-  if (reduce) document.querySelectorAll(".wordmark animateTransform").forEach(function (a) { a.remove(); });
-
+  
   // Demo: scripted from the sequence in ARCHITECTURE.md section 3.
   var ana = document.getElementById("lines-ana");
   var nico = document.getElementById("lines-nico");

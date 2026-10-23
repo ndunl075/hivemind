@@ -1,23 +1,33 @@
 # Landing page polish: design measurements
 
-Design measurements only, taken with headless Playwright at 1440x900 and 390x844 while scrolling the reference slowly. No text, imagery, code or assets from the reference are in this repo; the page uses its own copy, CSS/SVG sky, UI illustrations and implementation. Reference screenshots stayed in a scratch folder.
+Plain design measurements of the reference (a marketing site Nico likes), taken with headless Playwright at 1440x900 and 390x844 while scrolling slowly: sizes, spacing and layout proportions only. The reference's text, images, icons, markup, class names, stylesheet values copied verbatim, and animation code or timing are not used. The page here has its own copy, its own generated sky, its own UI illustrations and its own implementation; our values for colors, shadows, easing and durations were chosen independently. Reference screenshots stayed in a scratch folder. (An earlier revision of the footer wordmark mirrored the reference's gradient-sweep construction too closely; it was replaced in review by a static hex-textured wordmark.)
 
-| Item | Reference | Ours before | Ours now |
+| Item | Reference (measured) | Ours before | Ours now |
 |---|---|---|---|
-| Background | Full-page twilight gradient photo, cloud layers at top and bottom | Flat near-black, hex glow | Generated sky: CSS gradient (dusk to navy to violet) plus SVG fractal-noise clouds top and bottom, faint hex motif. Light theme gets a dawn sky |
-| Body font / weight | Inter, 300 for headings and large copy | Inter 600 headings | Inter 300 headings, 300 body |
-| H1 | 75.6px at 1440 (`clamp(38px,5.25vw,80px)`), weight 300, line-height 1.06, centered, 1088px wide, starts y=171 | clamp(30,3.9vw,56) weight 600, line-height 1.08 | `clamp(36px,5.25vw,76px)`, 300, 1.06, max 1088px, top padding 171px (three balanced lines for our longer headline) |
-| H1 motion | Per word: opacity 0 to 1, blur 10px to 0, translateY about 0.38em to 0, about 0.65s each, about 0.14s stagger | Block fade | Per word, same blur/rise, 0.65s, 90ms stagger |
-| H2 / H3 | H2 38px (feature headings), 300, tracking -0.025em, line-height 1.1 | H2 56px 600 | H2 `clamp(30,3.6vw,48)`, H3 `clamp(26,2.6vw,38)`, 300, -0.025em, 1.1 |
-| Feature copy | 22px / 29.7px, weight 300, white at 48% | 16px, muted | `clamp(17,1.5vw,21)` / 1.45, 300, white at 62% (kept higher for contrast) |
-| Header | 1280px max, 24px vertical padding, 41px logo tile radius 9px, 1px white/22 border, blur; wordmark 22px 300; right link 14px/500 white/70 | 1120px, 28px logo, 17px text | Same 41px tile, 22px/300 wordmark, 14px/500 link, 1280px |
-| Sticky corner button | Fixed top-right, 149x42, md and up, appears after the hero | None | Fixed top-right glass button, shown from the screenshot onward, hidden under 768px |
-| Buttons | 48px tall, radius 5px, 1px white/30, bg white/8, blur 12px, 14px/500, padding 0 28px, arrow | 999px pill, 16px | Same: 48px, 5px radius, white/30 border, white/8, blur 12px, 14px/500, arrow |
-| Screenshot frame | 1280px wide, 8px padding, 1px white/22 border, white/6 fill, blur, radius 4px, inner radius 4px, gradient ring; overlaps the hero from y=483 | 14px radius, fake window bar, offset shadow | Same padding, border, fill, blur and 4px radii, gradient ring via masked border, begins in the hero at about y=560 |
-| Story section | Height 5040px (5.6 viewports) with a `sticky top-0 h-[100svh]` inner; scroll position selects one of nine steps; headline fixed top-left; progress dashes bottom-left; step crossfade 0.5s `cubic-bezier(.4,0,.2,1)` | Three stacked rows | Height 4 viewports, sticky 100svh inner, three problems advance by scroll progress, crossfade 0.5s same easing (opacity, rise, blur), dashes bottom-left. Stacks under 861px and with reduced motion |
-| Feature rows | 12-col grid, text 4 cols and image 8, gap 40 (64 at xl), section padding 128px, alternating | Three equal cards | 12-col grid, text 5 and panel 6, gap 40, rows alternate, padding 128px section / 64px row |
-| Panels | `rounded-[6px]`, border white/12, bg `#090a0d`, shadow `0 40px 120px -40px rgba(0,0,0,.78)` | 12-14px radii, solid | 6px radius (4-5px inside), white/12 to 22 borders, glass dark fill, same shadow |
-| Footer | Overlaps the sky by -160px, top padding 256px; dark card max 1280, radius 6, closing line 40px/300 left and button right; link row 14px white/70 over a 1px white/10 rule; wordmark SVG 258px bold, gradient highlight sweeping on a 3.4s loop, cropped at the card bottom | Plain centered footer | Closing line (`clamp(40,6.4vw,96)`, 300) over the sky with the download buttons, then a dark card with the same border, radius, shadow, link row, and a bold HIVEMIND wordmark with a 4s gradient sweep cropped at the bottom |
-| Scroll reveal | Fade, rise and blur on entry | 28px rise, fade | 24px rise, 8px blur, 0.8s `cubic-bezier(.22,.8,.2,1)` |
+| Background | Photographic dusk sky spanning the whole page, cloud layers at the top and bottom | Flat near-black with hex glow | Generated sky: CSS gradient, SVG fractal-noise clouds top and bottom, faint hex motif; a dawn variant for light theme |
+| Heading weight | Light (300) for headings and large copy | 600 | 300 |
+| H1 | About 76px at 1440, line-height 1.06, centered, about 1090px wide, starts about 170px from top, two lines | 56px, 600 | `clamp(36px,5.25vw,76px)`, 1.06, max 1088px, 171px top padding; three balanced lines because our headline is longer |
+| H2 / H3 | Feature headings 38px; section text 26-32px on small screens | H2 56px | H2 up to 48px, H3 up to 38px, line-height 1.1 |
+| Feature copy | 22px / 1.35, light, white at about 48% | 16px | 17-21px / 1.45, light, higher contrast than the reference |
+| Header | 1280px max width, 24px vertical padding, 41px logo tile with 9px radius, light 22px wordmark, 14px medium link | 1120px, 28px logo | Same sizes |
+| Corner button | Fixed top-right, about 149x42, desktop only, shown after the hero | None | Fixed top-right button, shown after the hero, removed from tab order while hidden |
+| Buttons | 48px tall, 5px radius, 1px translucent border, blur, 14px medium, 28px side padding, arrow | Pill | 48px, 5px radius, blur, 14px medium, arrow |
+| Screenshot frame | 1280px wide, 8px padding, 1px border, translucent fill, 4px radii, gradient edge; overlaps the hero from about y=483 | 14px radius, fake window bar | Same padding and radii, own gradient edge, overlaps from about y=560 |
+| Story section | About 5.6 viewport heights tall with a full-height pinned inner scene; headline top-left, centered visual, progress dashes bottom-left | Three stacked rows | 4 viewport heights, pinned scene, three problems advance by scroll, dashes bottom-left; stacked below 861px wide, below 620px tall and with reduced motion; all three problems stay readable to assistive tech |
+| Feature rows | 12-column grid, text 4 columns / image 8, gap 40-64px, section padding 128px, alternating | Three cards | 12-column grid, text 5 / panel 6, gap 40px, 128px section padding, alternating |
+| Panels | 6px outer radius, thin translucent borders, near-black fill, large soft shadow | 12-14px radii | 6px outer radius, 4-5px inner, own fill (`#0b0c14`) and shadow |
+| Footer | Overlaps the sky, about 256px top padding; dark card at 1280px; closing line about 40px; link row 14px; very large bold wordmark cropped at the bottom | Plain centered footer | Large closing line over the sky with the download buttons, dark card with link row and a large HIVEMIND wordmark (static, hex-cell texture over a lavender gradient, cropped at the bottom) |
 
-Not matched on purpose: our headline is longer, so it sets in three lines at the same scale; nine-step story becomes three; copy stays contrast-safe in light and dark.
+## Contrast of hero text over the sky
+
+Measured with `docs/evidence/landing-polish/contrast.mjs`: hides all text, screenshots, samples every background pixel under each text box, and reports the worst WCAG ratio for the real text color. The hero text sits on a deepened sky top plus a soft scrim. Large text needs 3:1, small text 4.5:1.
+
+| Element | 1440 dark | 390 dark | 1440 light | 390 light |
+|---|---|---|---|---|
+| Tagline (76px / 36px, large) | 4.01 | 3.44 | 4.42 | 4.74 |
+| Hero label (12px) | 6.74 | 5.03 | 8.41 | 7.46 |
+| Download link (14px) | 10.09 | 9.98 | 13.22 | 11.87 |
+| Brand name (22px light) | 7.72 | 6.13 | 9.68 | 6.80 |
+| Get Hivemind button (14px, includes its own fill) | 4.85 | 4.77 | 8.50 | 5.86 |
+
+Before the fix, dark mode measured as low as 1.7:1 for the tagline and 1.8:1 for the Download link.
