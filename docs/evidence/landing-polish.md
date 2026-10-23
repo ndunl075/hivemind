@@ -27,11 +27,11 @@ Plain design measurements of the reference (a marketing site Nico likes), taken 
 | Dashboard frame top | y=527, 1280px wide | y=544, 1248px wide |
 | Dashboard visible above the fold | about 553px | about 536px |
 
-Screenshot: .
+Screenshot: `desktop-1920-fold.jpg`.
 
 ## Contrast of hero text over the sky
 
-Measured with : hides all text, screenshots, samples every background pixel under each text box, and reports the worst WCAG ratio for the real text color. The hero text sits on a deepened sky top plus a soft scrim. Large text needs 3:1, small text 4.5:1.
+Measured with `docs/evidence/landing-polish/contrast.mjs`: hides all text, screenshots, samples every background pixel under each text box, and reports the worst WCAG ratio for the real text color. The hero text sits on a deepened sky top plus a soft scrim. Large text needs 3:1, small text 4.5:1.
 
 | Element | 1920 | 1440 | 390 |
 |---|---|---|---|
@@ -45,4 +45,4 @@ Before the fix, dark mode measured as low as 1.7:1 for the tagline and 1.8:1 for
 
 ## Downloads and paths
 
-Download links are built from one constant,  on the  element in  (currently the v0.1.0-preview release); without JavaScript they fall back to the releases page. All asset references are relative, so the page works from a sub-path.
+Download links are built from one constant, `data-release` on the `.dl` element in `index.html` (currently the v0.1.0-preview release); without JavaScript they fall back to the releases page. All asset references are relative, so the page works from a sub-path.
