@@ -42,7 +42,8 @@ h3{font-size:clamp(20px,2.4vw,26px);line-height:1.2}
 .glow{position:absolute;z-index:-1;inset:auto 0 -30% 0;height:90%;
   background:radial-gradient(60% 70% at 50% 100%,var(--accent-dim),transparent 70%),radial-gradient(40% 40% at 50% 10%,rgba(169,155,255,.07),transparent 70%)}
 .hero::after{content:"";position:absolute;inset:auto 0 0 0;height:160px;background:linear-gradient(transparent,var(--bg));z-index:-1}
-.hero h1{font-size:clamp(40px,8vw,92px);max-width:18ch;margin:22px auto 36px}
+.hero h1{font-size:clamp(30px,3.9vw,56px);max-width:1088px;margin:22px auto 36px}
+@media (min-width:861px){.hero h1 span{display:block;white-space:nowrap}}
 .pill{display:inline-block;padding:13px 28px;border:1px solid var(--line-strong);border-radius:999px;text-decoration:none;font-weight:500;font-size:16px;background:rgba(255,255,255,.03);backdrop-filter:blur(6px);transition:background .2s,border-color .2s}
 .pill:hover{background:var(--accent-dim);border-color:var(--accent)}
 .pill:focus-visible,.alt:focus-visible,a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
