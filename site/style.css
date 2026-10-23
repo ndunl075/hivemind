@@ -58,8 +58,8 @@ h3{font-size:clamp(26px,2.6vw,38px)}
 .hero .pill,.dl .pill{height:44px;padding:0 22px;font-size:15px;border-radius:12px}
 .float-cta .pill{height:34px;padding:0 14px;gap:6px;font-size:13px;border-radius:10px}
 /* logos: Simple Icons (CC0); Claude and OpenAI marks belong to Anthropic and OpenAI */
-.works{display:flex;width:max-content;align-items:center;justify-content:center;gap:14px;margin:22px auto 0;padding:7px 16px;border-radius:999px;background:rgba(20,12,36,.74);border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);font-size:13px;font-weight:500;color:#fff}
-.works-logo{display:inline-flex;color:rgba(255,255,255,.88)}
+.works{display:flex;align-items:center;justify-content:center;gap:14px;margin:0 0 20px;font-size:13px;font-weight:500;color:#fff;text-shadow:0 1px 2px rgba(10,6,30,.55),0 1px 14px rgba(10,6,30,.75)}
+.works-logo{display:inline-flex;color:#fff;filter:drop-shadow(0 1px 8px rgba(10,6,30,.7))}
 .works-logo svg{display:block;width:22px;height:22px}
 .pill:focus-visible,a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .edge{position:relative}
@@ -161,6 +161,15 @@ h3{font-size:clamp(26px,2.6vw,38px)}
 .feat-text .label{display:block;margin-bottom:16px}
 .feat-text h3{margin-bottom:16px}
 .feat-text p{font-size:clamp(17px,1.5vw,21px);line-height:1.45;color:var(--muted)}
+/* overlapping agent badges */
+.duo{display:flex;align-items:center;margin-top:8px}
+.duo-badge{position:relative;display:grid;place-items:center;width:64px;height:64px;border-radius:50%;background:radial-gradient(circle at 30% 25%,#2a2550,#120f26 70%);border:3px solid var(--bg);box-shadow:0 0 0 1px rgba(196,184,255,.35),0 14px 34px -10px rgba(125,105,242,.65);transition:transform .35s cubic-bezier(.22,.8,.2,1)}
+.duo-badge.claude{color:#e08a6a;z-index:2}
+.duo-badge.codex{color:#fff;margin-left:-18px;z-index:1}
+@media (prefers-reduced-motion:no-preference){
+  .duo:hover .duo-badge.claude{transform:translateX(-6px) rotate(-6deg)}
+  .duo:hover .duo-badge.codex{transform:translateX(6px) rotate(6deg)}
+}
 
 /* footer */
 .foot{position:relative;padding:260px 0 80px;margin-top:-80px;text-align:center;overflow:hidden;isolation:isolate}
