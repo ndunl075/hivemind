@@ -6,7 +6,7 @@
   // Download button: label by visitor OS. Windows and Mac computers get one
   // primary button and the other OS as a small link; anything else (Linux,
   // Android, ChromeOS, iPhone, iPad) gets both buttons, neither primary.
-  var base = "https://github.com/ndunl075/hivemind/releases/latest/download/";
+  var base = document.querySelector(".dl").dataset.release; // one place to bump per release (data-release in index.html)
   var ua = navigator.userAgent || "";
   var touch = navigator.maxTouchPoints > 1;
   var os = "both";
@@ -17,6 +17,8 @@
   var main = document.getElementById("dl-main");
   var alt = document.getElementById("dl-alt");
   if (os === "both") {
+    main.href = base + "hivemind-windows.zip";
+    alt.href = base + "hivemind-mac.zip";
     alt.className = "pill";
     alt.textContent = "Download for Mac";
     document.querySelector(".dl").classList.add("both");
@@ -29,8 +31,10 @@
     alt.textContent = "Or download for " + names[other];
   }
 
-  // Scroll-in.
+  // Scroll-in, headline words, floating download button.
   var items = document.querySelectorAll(".reveal");
+  var hero = document.querySelector(".hero");
+  document.querySelectorAll("#tagline .w").forEach(function (w, i) { w.style.setProperty("--i", i); });
   if (!reduce && "IntersectionObserver" in window) {
     root.classList.add("js");
     var io = new IntersectionObserver(function (es) {
@@ -39,8 +43,51 @@
       });
     }, { threshold: 0.12, rootMargin: "0px 0px -6% 0px" });
     items.forEach(function (el) { io.observe(el); });
+    requestAnimationFrame(function () { requestAnimationFrame(function () { hero.classList.add("in"); }); });
   }
+  var cta = document.getElementById("float-cta");
+  var shot = document.querySelector(".shot-section");
+  function onScroll() {
+    var on = window.scrollY > shot.offsetTop - 120;
+    cta.classList.toggle("on", on);
+    cta.inert = !on;
+  }
+  onScroll();
 
+  // Story: below 861px or with reduced motion the three problems stack. Otherwise the
+  // scene is pinned and the active problem follows scroll progress through the section.
+  var story = document.getElementById("story");
+  var storySteps = story.querySelectorAll(".step");
+  var dashes = story.querySelectorAll(".dashes li");
+  var wide = window.matchMedia("(min-width: 861px) and (min-height: 620px)");
+  var active = -1;
+  function setActive(i) {
+    if (i === active) return;
+    active = i;
+    storySteps.forEach(function (s, k) { s.classList.toggle("on", k === i); });
+    dashes.forEach(function (d, k) { d.classList.toggle("on", k <= i); });
+  }
+  function storyScroll() {
+    var r = story.getBoundingClientRect();
+    var total = story.offsetHeight - window.innerHeight;
+    var p = total > 0 ? Math.min(0.999, Math.max(0, -r.top / total)) : 0;
+    setActive(Math.floor(p * storySteps.length));
+  }
+  function layoutStory() {
+    var pin = !reduce && wide.matches;
+    story.classList.toggle("pinned", pin);
+    if (pin) { active = -1; storyScroll(); }
+    else { active = -2; storySteps.forEach(function (s) { s.classList.remove("on"); }); dashes.forEach(function (d) { d.classList.remove("on"); }); }
+  }
+  var ticking = false;
+  function frame() { ticking = false; onScroll(); if (story.classList.contains("pinned")) storyScroll(); }
+  function queue() { if (!ticking) { ticking = true; requestAnimationFrame(frame); } }
+  window.addEventListener("scroll", queue, { passive: true });
+  window.addEventListener("resize", queue);
+  if (wide.addEventListener) wide.addEventListener("change", layoutStory);
+  layoutStory();
+
+  
   // Demo: scripted from the sequence in ARCHITECTURE.md section 3.
   var ana = document.getElementById("lines-ana");
   var nico = document.getElementById("lines-nico");
