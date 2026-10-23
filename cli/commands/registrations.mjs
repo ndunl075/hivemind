@@ -4,8 +4,8 @@
  */
 import { CliError } from './context.mjs';
 
-const CLAUDE_EDIT_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|mcp__hivemind__.*';
-const CODEX_EDIT_MATCHER = 'apply_patch|Edit|Write|mcp__hivemind__.*';
+const CLAUDE_EDIT_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|mcp__hivemind(-[a-z0-9]+)*__.*';
+const CODEX_EDIT_MATCHER = 'apply_patch|Edit|Write|mcp__hivemind(-[a-z0-9]+)*__.*';
 
 /** @type {HookSpec[]} */
 export const CLAUDE_SPECS = [
@@ -107,19 +107,29 @@ export function shellWord(path) {
  * @param {string} node
  * @param {string} helperScript
  * @param {string} helperCmd the Windows wrapper
+ * @param {string} [mcp] which room's token the helper prints, as the MCP server name
+ * @param {string} [origin] the server's origin (scheme, host, port). With it the helper refuses unless the room it finds
+ *   under `mcp` is on that server, so a stale registration can never send one room's token to another room's server.
+ *   Without it (and with the plain `hivemind` name) the string is what older versions wrote.
  */
-export function headersHelperCommand(platform, node, helperScript, helperCmd) {
-  if (platform === 'win32') return shellWord(helperCmd);
-  return `${posixQuote(node)} ${posixQuote(helperScript)}`;
+export function headersHelperCommand(platform, node, helperScript, helperCmd, mcp = 'hivemind', origin = undefined) {
+  if (!/^hivemind(?:-[a-z0-9]+)*$/.test(mcp)) throw new CliError(`"${mcp}" is not a Hivemind MCP server name`);
+  if (origin !== undefined && !/^https?:\/\/[A-Za-z0-9.:[\]-]+$/.test(origin)) {
+    throw new CliError('the server address has a character that cannot be put in the helper command');
+  }
+  const arg = origin !== undefined ? ` ${mcp} ${origin}` : mcp === 'hivemind' ? '' : ` ${mcp}`;
+  if (platform === 'win32') return shellWord(helperCmd) + arg;
+  return `${posixQuote(node)} ${posixQuote(helperScript)}${arg}`;
 }
 
 /**
  * The Windows wrapper next to headers-helper.mjs: runs it with the node recorded at join time.
  * @param {string} node
+ * @param {string} [script] the helper script it runs, next to it
  */
-export function helperCmdText(node) {
+export function helperCmdText(node, script = 'headers-helper.mjs') {
   if (/["\r\n]/.test(node)) throw new CliError('the node path has a character a Windows script cannot hold');
-  return `@echo off\r\n"${node.replace(/%/g, '%%')}" "%~dp0headers-helper.mjs"\r\n`;
+  return `@echo off\r\n"${node.replace(/%/g, '%%')}" "%~dp0${script}" %*\r\n`;
 }
 
 /**
@@ -174,3 +184,9 @@ export function claudeMcpJson(server, helperCommand) {
 }
 
 export const ALLOW_RULE = 'mcp__hivemind';
+
+/**
+ * The permission rule that lets one Hivemind MCP server's tools run without a prompt.
+ * @param {string} mcp the MCP server name
+ */
+export const allowRule = (mcp) => `mcp__${mcp}`;

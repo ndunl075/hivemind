@@ -6,12 +6,13 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { parseArgs } from './args.mjs';
 import { call, normalizeServer } from './api.mjs';
-import { readBlock } from './codex-config.mjs';
+import { blockNames, readBlock } from './codex-config.mjs';
 import { paths } from './context.mjs';
 import { readJsonObject, readText } from './files.mjs';
 import { oursMatcher } from './hooks-merge.mjs';
-import { HELPER_CMD_FILE, HELPER_FILE, HOOK_FILES, readConfig, readManifest } from './install.mjs';
-import { ALLOW_RULE, CLAUDE_SPECS, CODEX_SPECS, isOurHelper } from './registrations.mjs';
+import { HELPER_CMD_FILE, HELPER_FILE, HOOK_FILES, ROOM_HELPER_CMD_FILE, ROOM_HELPER_FILE, isOurHelperText, readManifest, readRooms } from './install.mjs';
+import { roomForRepo } from './rooms.mjs';
+import { CLAUDE_SPECS, CODEX_SPECS, allowRule } from './registrations.mjs';
 import { identity } from '../hook/git.mjs';
 
 export const SELF_TEST_PROMPT = [
@@ -51,36 +52,42 @@ export async function doctor(argv, ctx) {
   line(major >= 20 ? 'ok' : 'FAIL', `Node ${process.versions.node} (20 or newer is needed)`);
 
   // config.json
-  const config = readConfig(ctx);
-  if (!config) {
+  const rooms = readRooms(ctx);
+  if (!rooms) {
     line('FAIL', `${p.config} is missing or unreadable. Run: hivemind join`);
     return finish(ctx, failures);
   }
-  line('ok', `config: room "${config.room}", person "${config.person}", ${config.repos.length} repo${config.repos.length === 1 ? '' : 's'} mapped`);
+  line('ok', `config: ${rooms.length} room${rooms.length === 1 ? '' : 's'}`);
+  for (const r of rooms) {
+    line('ok', `room "${r.room}" as "${r.person}", ${r.repos.length} repo${r.repos.length === 1 ? '' : 's'} mapped, tools via the MCP server "${r.mcp}"`);
+  }
   if (ctx.platform !== 'win32') {
     try {
       const mode = statSync(p.config).mode & 0o777;
-      line((mode & 0o077) === 0 ? 'ok' : 'warn', `config.json permissions ${mode.toString(8)}${(mode & 0o077) === 0 ? '' : ' (should be 600: it holds your token)'}`);
+      line((mode & 0o077) === 0 ? 'ok' : 'warn', `config.json permissions ${mode.toString(8)}${(mode & 0o077) === 0 ? '' : ' (should be 600: it holds your tokens)'}`);
     } catch { /* ignore */ }
   }
   if (existsSync(p.off)) line('warn', 'Hivemind is paused on this laptop (hivemind off). Resume with: hivemind on');
 
-  // Server and token
-  try {
-    const server = normalizeServer(config.server);
-    const who = await call(ctx, server, '/whoami', { token: config.token });
-    line('ok', `server ${server} accepts the token: ${who.person} in "${who.room}", mode ${who.mode}`);
-  } catch (e) {
-    line('FAIL', `server check failed: ${/** @type {Error} */ (e).message}`);
+  // Server and token, for every room
+  for (const r of rooms) {
+    try {
+      const server = normalizeServer(r.server);
+      const who = await call(ctx, server, '/whoami', { token: r.token });
+      line('ok', `room "${r.room}": server ${server} accepts the token: ${who.person} in "${who.room}", mode ${who.mode}`);
+    } catch (e) {
+      line('FAIL', `room "${r.room}": server check failed: ${/** @type {Error} */ (e).message}`);
+    }
   }
 
   // This repository
   const ident = await identity(ctx.cwd);
+  const here = ident ? roomForRepo(rooms, ident.repo) : undefined;
   if (!ident) line('warn', 'the current folder is not a Git repository with a commit, so the repo mapping was not checked');
-  else line(config.repos.includes(ident.repo) ? 'ok' : 'warn', config.repos.includes(ident.repo) ? 'this repository is mapped to the room' : 'this repository is NOT mapped to the room; run hivemind join inside it');
+  else line(here ? 'ok' : 'warn', here ? `this repository is mapped to room "${here.room}"` : 'this repository is NOT mapped to any room; run hivemind join inside it');
 
   // Hook files and node
-  const missing = [...HOOK_FILES, HELPER_FILE, ...(ctx.platform === 'win32' ? [HELPER_CMD_FILE] : [])].filter((f) => !existsSync(`${p.hookDir}/${f}`));
+  const missing = [...HOOK_FILES, HELPER_FILE, ROOM_HELPER_FILE, ...(ctx.platform === 'win32' ? [HELPER_CMD_FILE, ROOM_HELPER_CMD_FILE] : [])].filter((f) => !existsSync(`${p.hookDir}/${f}`));
   line(missing.length === 0 ? 'ok' : 'FAIL', missing.length === 0 ? `hook files present in ${p.hookDir}` : `hook files missing: ${missing.join(', ')}. Run: hivemind update`);
   const manifest = readManifest(ctx);
   if (manifest?.node) line(existsSync(manifest.node) ? 'ok' : 'FAIL', `node recorded for the hooks: ${manifest.node}${existsSync(manifest.node) ? '' : ' (no longer exists; run hivemind update)'}`);
@@ -96,13 +103,28 @@ export async function doctor(argv, ctx) {
       apps.push('Claude Code');
       checkHooks(settings, CLAUDE_SPECS.map((s) => s.event), isOurs, 'Claude Code', line, (h) => existsSync(String(h.command)) && existsSync(String(h.args?.[0])));
       const allow = settings.permissions?.allow;
-      line(Array.isArray(allow) && allow.includes(ALLOW_RULE) ? 'ok' : 'FAIL', `Claude Code: permission rule "${ALLOW_RULE}" ${Array.isArray(allow) && allow.includes(ALLOW_RULE) ? 'present' : 'missing (tools would prompt); run hivemind update'}`);
-      const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
-      if (got.code === 127) line('warn', 'Claude Code: the "claude" program is not on PATH, so the MCP server was not checked');
-      else if (got.code !== 0) line('FAIL', 'Claude Code: MCP server "hivemind" is missing; run hivemind update');
-      else if (!isOurHelper(got.stdout, p.helperScript, p.helperCmd) && !manifest?.claude.mcp) line('FAIL', 'Claude Code: the MCP server named "hivemind" is not the Hivemind one (its helper is not ours); rename or remove it, then run hivemind update');
-      else if (!got.stdout.includes(`${normalizeServer(config.server)}/mcp`)) line('FAIL', 'Claude Code: MCP server "hivemind" points at a different URL than config.json; run hivemind update');
-      else line('ok', 'Claude Code: MCP server "hivemind" is set up and is ours');
+      for (const r of rooms) {
+        const rule = allowRule(r.mcp);
+        const has = Array.isArray(allow) && allow.includes(rule);
+        line(has ? 'ok' : 'FAIL', `Claude Code: permission rule "${rule}" ${has ? 'present' : 'missing (tools would prompt); run hivemind update'}`);
+      }
+      for (const r of rooms) {
+        const got = await ctx.runner('claude', ['mcp', 'get', r.mcp]);
+        if (got.code === 127) {
+          line('warn', 'Claude Code: the "claude" program is not on PATH, so the MCP servers were not checked');
+          break;
+        }
+        if (got.code !== 0) line('FAIL', `Claude Code: MCP server "${r.mcp}" (room "${r.room}") is missing; run hivemind update`);
+        else if (!isOurHelperText(ctx, got.stdout) && !manifest?.claude.mcpServers.includes(r.mcp)) line('FAIL', `Claude Code: the MCP server named "${r.mcp}" is not the Hivemind one (its helper is not ours); rename or remove it, then run hivemind update`);
+        else if (!got.stdout.includes(`${normalizeServer(r.server)}/mcp`)) line('FAIL', `Claude Code: MCP server "${r.mcp}" points at a different URL than config.json; run hivemind update`);
+        else line('ok', `Claude Code: MCP server "${r.mcp}" (room "${r.room}") is set up and is ours`);
+      }
+      // Servers Hivemind registered for rooms that are no longer in config.json: they could still be reached.
+      for (const name of manifest?.claude.mcpServers ?? []) {
+        if (rooms.some((r) => r.mcp === name)) continue;
+        const got = await ctx.runner('claude', ['mcp', 'get', name]);
+        if (got.code === 0 && isOurHelperText(ctx, got.stdout)) line('FAIL', `Claude Code: MCP server "${name}" is a leftover of a room that is not in config.json; remove it with: claude mcp remove --scope user ${name}`);
+      }
     }
   } catch (e) {
     line('FAIL', `Claude Code: ${/** @type {Error} */ (e).message}`);
@@ -115,11 +137,16 @@ export async function doctor(argv, ctx) {
       apps.push('Codex');
       checkHooks(hooks, CODEX_SPECS.map((s) => s.event), isOurs, 'Codex', line, codexHandlerValid);
       const toml = readText(p.codexToml);
-      const block = toml === null ? null : readBlock(toml);
-      if (!block) line('FAIL', 'Codex: [mcp_servers.hivemind] is missing from config.toml; run hivemind update');
-      else {
-        const urlOk = block.url === `${normalizeServer(config.server)}/mcp`;
-        line(urlOk && block.hasAuth && block.approve ? 'ok' : 'FAIL', `Codex: MCP server ${urlOk ? 'URL matches' : 'URL differs from config.json'}, ${block.hasAuth ? 'has' : 'lacks'} a token header, tools ${block.approve ? 'pre-approved' : 'NOT pre-approved'}`);
+      for (const r of rooms) {
+        const block = toml === null ? null : readBlock(toml, r.mcp);
+        if (!block) line('FAIL', `Codex: [mcp_servers.${r.mcp}] is missing from config.toml; run hivemind update`);
+        else {
+          const urlOk = block.url === `${normalizeServer(r.server)}/mcp`;
+          line(urlOk && block.hasAuth && block.approve ? 'ok' : 'FAIL', `Codex: MCP server "${r.mcp}" ${urlOk ? 'URL matches' : 'URL differs from config.json'}, ${block.hasAuth ? 'has' : 'lacks'} a token header, tools ${block.approve ? 'pre-approved' : 'NOT pre-approved'}`);
+        }
+      }
+      for (const name of toml === null ? [] : blockNames(toml)) {
+        if (!rooms.some((r) => r.mcp === name)) line('FAIL', `Codex: [mcp_servers.${name}] in config.toml is a leftover of a room that is not in config.json; run hivemind update`);
       }
     }
   } catch (e) {

@@ -41,9 +41,10 @@
  *   lastAttemptAt: number;
  *   outageSince: number | null;
  *   outageNotified: boolean;
+ *   roomKey?: string | null;
  * }} SessionState
  *
- * @typedef {{ server: string; token: string; repos: string[] }} HookConfig
+ * @typedef {{ server: string; token: string; repos: string[]; room: string; mcp: string }} HookConfig
  */
 import {
   appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync,
@@ -78,9 +79,9 @@ const CALLSIGN_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const OUTAGE_NOTICE =
   "[Hivemind] Can't reach the server (3 failed attempts). Coordination is paused and edits aren't being checked. Retrying every minute.";
 
-/** @type {{ home: string | null; event: string | null; tool: string | null; token: string | null; started: number; deadline: number; statePath: string | null; watchdog: ReturnType<typeof setTimeout> | null }} */
+/** @type {{ home: string | null; event: string | null; tool: string | null; tokens: string[]; roomKey?: string; started: number; deadline: number; statePath: string | null; watchdog: ReturnType<typeof setTimeout> | null }} */
 const ctx = {
-  home: null, event: null, tool: null, token: null, started: Date.now(), deadline: Date.now() + DEADLINE_MS, statePath: null, watchdog: null,
+  home: null, event: null, tool: null, tokens: [], started: Date.now(), deadline: Date.now() + DEADLINE_MS, statePath: null, watchdog: null,
 };
 
 const remaining = () => ctx.deadline - Date.now();
@@ -137,7 +138,7 @@ const stripBom = (text) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
 function freshState() {
   return {
     v: 2, idents: {}, callsign: null, mode: null, heartbeatMs: null, lastHeartbeat: 0, shellSeq: 0, shellAck: 0,
-    gitMemory: null, gitMemoryAt: 0, baselineAt: 0, settingsHash: null, failures: 0, lastAttemptAt: 0, outageSince: null, outageNotified: false,
+    gitMemory: null, gitMemoryAt: 0, baselineAt: 0, settingsHash: null, failures: 0, lastAttemptAt: 0, outageSince: null, outageNotified: false, roomKey: null,
   };
 }
 
@@ -207,6 +208,7 @@ function updateState(fn) {
   const s = loadState(ctx.statePath);
   if (!s) return undefined;
   const result = fn(s);
+  if (ctx.roomKey && !s.roomKey) s.roomKey = ctx.roomKey;
   try { writeStateFile(ctx.statePath, s); } catch { /* state is a cache */ }
   return result;
 }
@@ -240,7 +242,7 @@ function log(ok, error, ms) {
     let msg;
     if (error instanceof SyntaxError) msg = 'SyntaxError: invalid JSON';
     else if (error !== undefined) msg = String(error instanceof Error ? `${error.name}: ${error.message}` : error);
-    if (msg !== undefined && ctx.token) msg = msg.split(ctx.token).join('[token]');
+    if (msg !== undefined) for (const t of ctx.tokens) if (t) msg = msg.split(t).join('[token]');
     appendFileSync(path, `${JSON.stringify({
       ts: Date.now(), event: ctx.event, tool: ctx.tool, ok, ms: ms ?? Date.now() - ctx.started, ...(msg !== undefined ? { error: msg.slice(0, 200) } : {}),
     })}\n`);
@@ -262,15 +264,28 @@ function serverAllowed(server) {
 }
 
 /**
+ * The rooms in config.json. A laptop can be in several (ARCHITECTURE.md §6.1): the file has a `rooms` list, each
+ * entry with its server, token and repos. A file without `rooms` is the older single-room format and reads as one
+ * room. An entry that is unusable (no token, a server that isn't https or loopback) is skipped, not fatal to the others.
  * @param {string} home
- * @returns {HookConfig | null}
+ * @returns {HookConfig[] | null} null when there is no usable room
  */
 function readConfig(home) {
   try {
     const c = JSON.parse(stripBom(readFileSync(join(home, 'config.json'), 'utf8')));
-    if (typeof c?.server !== 'string' || typeof c?.token !== 'string' || !Array.isArray(c?.repos)) return null;
-    if (!serverAllowed(c.server)) return null;
-    return { server: c.server.replace(/\/+$/, ''), token: c.token, repos: c.repos.filter((/** @type {unknown} */ r) => typeof r === 'string') };
+    const raw = Array.isArray(c?.rooms) ? c.rooms : [c];
+    /** @type {HookConfig[]} */
+    const rooms = [];
+    for (const e of raw) {
+      if (typeof e?.server !== 'string' || typeof e?.token !== 'string' || !Array.isArray(e?.repos)) continue;
+      if (!serverAllowed(e.server)) continue;
+      const mcp = typeof e.mcp === 'string' && /^hivemind(?:-[a-z0-9]+)*$/.test(e.mcp) ? e.mcp : 'hivemind';
+      rooms.push({
+        server: e.server.replace(/\/+$/, ''), token: e.token, repos: e.repos.filter((/** @type {unknown} */ r) => typeof r === 'string'),
+        room: typeof e.room === 'string' ? e.room : '', mcp,
+      });
+    }
+    return rooms.length > 0 ? rooms : null;
   } catch {
     return null;
   }
@@ -441,6 +456,16 @@ function meCheck(input, state) {
   };
 }
 
+/**
+ * The MCP server a tool call goes to (`mcp__<server>__<tool>`), or null for any other tool.
+ * @param {string | null} tool
+ * @returns {string | null}
+ */
+function mcpServerOf(tool) {
+  const m = tool === null ? null : /^mcp__(.+?)__/.exec(tool);
+  return m ? (m[1] ?? null) : null;
+}
+
 /** @type {typeof import('./limits.mjs').HOOK_LIMITS | null} */
 let LIM = null;
 
@@ -499,9 +524,9 @@ async function run() {
   ctx.home = process.env.HIVEMIND_HOME || installedHome() || join(homedir(), '.hivemind');
   const home = ctx.home;
   if (existsSync(join(home, 'off'))) return { out: null, event: null, adapter: null };
-  const config = readConfig(home);
-  if (!config) return { out: null, event: null, adapter: null };
-  ctx.token = config.token;
+  const rooms = readConfig(home);
+  if (!rooms) return { out: null, event: null, adapter: null };
+  ctx.tokens = rooms.map((r) => r.token); // every token is redacted from the log, whichever room ends up used
 
   const stdin = await readStdin();
   if (stdin === null) return { out: null, event: null, adapter: null };
@@ -537,18 +562,27 @@ async function run() {
 
   const now = Date.now();
   const done = (/** @type {HookOutcome | null} */ out) => ({ out, event, adapter });
+  // A tool of one of the Hivemind servers in config.json (a user's own "hivemind-notes" server is not one).
+  const hmServer = mcpServerOf(input.tool);
+  const isHmTool = event === 'PreToolUse' && hmServer !== null && rooms.some((r) => r.mcp === hmServer);
+  /** No room for this folder: its Hivemind tools are refused, so a session can't act in a room through the wrong repo. */
+  const noRoom = () => done(isHmTool ? {
+    decision: 'deny',
+    reason: "[Hivemind] This folder is not mapped to a Hivemind room, so Hivemind tools can't be used here. Run hivemind join inside the project.",
+    context: null,
+  } : null);
 
   // Resolve the checkout (cached per cwd; "not a repo" too) and check that its root commit is mapped.
   const entry = state.idents[input.cwd];
   /** @type {Identity | null} */
   let ident = entry ? entry.ident : null;
-  if (entry && !entry.ident && now - entry.at < NOT_REPO_TTL_MS) return done(null);
+  if (entry && !entry.ident && now - entry.at < NOT_REPO_TTL_MS) return noRoom();
   if (!ident) {
     try {
       ident = await within(gitMod.identity(input.cwd), gitBudget());
     } catch (e) {
       log(false, e);
-      return done(null);
+      return noRoom();
     }
     const found = ident;
     updateState((s) => {
@@ -561,13 +595,33 @@ async function run() {
     });
     if (!ident) {
       log(false, 'no git identity for cwd');
-      return done(null);
+      return noRoom();
     }
   }
-  if (!config.repos.includes(ident.repo)) return done(null);
+  // The room is the one whose repos include this checkout's root commit (first match). No match: do nothing.
+  const repo = ident.repo;
+  const config = rooms.find((r) => r.repos.includes(repo));
+  if (!config) return noRoom();
+  // The session's saved callsign, heartbeat timing and Git memory belong to one room: moving to a repo of another room starts them afresh.
+  const roomKey = sha(`${config.room}|${config.token}`).slice(0, 16);
+  ctx.roomKey = roomKey;
+  if (state.roomKey && state.roomKey !== roomKey) {
+    updateState((s) => { Object.assign(s, freshState(), { idents: s.idents, roomKey }); });
+    state = loadState(statePath) ?? freshState();
+  }
 
   // Local fast paths: no network.
-  if (event === 'PreToolUse' && input.isHivemindTool) return done(meCheck(input, state));
+  if (isHmTool) {
+    // Callsigns repeat across rooms, so a tool of another room's server is refused outright.
+    if (hmServer !== config.mcp) {
+      return done({
+        decision: 'deny',
+        reason: `[Hivemind] This project's room is served by mcp__${config.mcp}__*; use those tools, not mcp__${hmServer}__*.`,
+        context: null,
+      });
+    }
+    return done(meCheck(input, state));
+  }
   /** @type {string[]} */
   let paths = [];
   if (event === 'PreToolUse') {
@@ -717,6 +771,10 @@ async function run() {
 
   /** @type {HookOutcome} */
   const outcome = { decision: 'allow', reason: null, context: resp.context };
+  if (event === 'SessionStart' && (rooms.length > 1 || config.mcp !== 'hivemind')) {
+    const line = `[Hivemind] This project's room is "${config.room}"; its tools are mcp__${config.mcp}__*.`;
+    outcome.context = outcome.context ? `${outcome.context}\n${line}` : line;
+  }
   if (event === 'PreToolUse' && resp.decision === 'deny') {
     outcome.decision = 'deny';
     outcome.reason = resp.reason;
