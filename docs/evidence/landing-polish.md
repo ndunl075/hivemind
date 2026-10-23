@@ -4,7 +4,7 @@ Plain design measurements of the reference (a marketing site Nico likes), taken 
 
 | Item | Reference (measured) | Ours before | Ours now |
 |---|---|---|---|
-| Background | Photographic dusk sky spanning the whole page, cloud layers at the top and bottom | Flat near-black with hex glow | Generated sky: CSS gradient, SVG fractal-noise clouds top and bottom, faint hex motif; a dawn variant for light theme |
+| Background | Photographic dusk sky spanning the whole page, cloud layers at the top and bottom | Flat near-black with hex glow | Generated sky: CSS gradient, SVG fractal-noise clouds top and bottom, faint hex motif; dark only, like the reference (`color-scheme: dark`, no light theme) |
 | Heading weight | Light (300) for headings and large copy | 600 | 300 |
 | H1 | About 76px at 1440, line-height 1.06, centered, about 1090px wide, starts about 170px from top, two lines | 56px, 600 | `clamp(36px,5.25vw,76px)`, 1.06, max 1088px, 171px top padding; three balanced lines because our headline is longer |
 | H2 / H3 | Feature headings 38px; section text 26-32px on small screens | H2 56px | H2 up to 48px, H3 up to 38px, line-height 1.1 |
@@ -18,16 +18,31 @@ Plain design measurements of the reference (a marketing site Nico likes), taken 
 | Panels | 6px outer radius, thin translucent borders, near-black fill, large soft shadow | 12-14px radii | 6px outer radius, 4-5px inner, own fill (`#0b0c14`) and shadow |
 | Footer | Overlaps the sky, about 256px top padding; dark card at 1280px; closing line about 40px; link row 14px; very large bold wordmark cropped at the bottom | Plain centered footer | Large closing line over the sky with the download buttons, dark card with link row and a large HIVEMIND wordmark (static, hex-cell texture over a lavender gradient, cropped at the bottom) |
 
+## First screen at 1920x1080
+
+| Measure | Reference | Ours |
+|---|---|---|
+| Headline | 80px, two lines, top at y=205 | 68px (our headline is longer), two lines, top at y=228 |
+| Button | y=415, 169x48 | y=412, 168x48 |
+| Dashboard frame top | y=527, 1280px wide | y=544, 1248px wide |
+| Dashboard visible above the fold | about 553px | about 536px |
+
+Screenshot: .
+
 ## Contrast of hero text over the sky
 
-Measured with `docs/evidence/landing-polish/contrast.mjs`: hides all text, screenshots, samples every background pixel under each text box, and reports the worst WCAG ratio for the real text color. The hero text sits on a deepened sky top plus a soft scrim. Large text needs 3:1, small text 4.5:1.
+Measured with : hides all text, screenshots, samples every background pixel under each text box, and reports the worst WCAG ratio for the real text color. The hero text sits on a deepened sky top plus a soft scrim. Large text needs 3:1, small text 4.5:1.
 
-| Element | 1440 dark | 390 dark | 1440 light | 390 light |
-|---|---|---|---|---|
-| Tagline (76px / 36px, large) | 4.01 | 3.44 | 4.42 | 4.74 |
-| Hero label (12px) | 6.74 | 5.03 | 8.41 | 7.46 |
-| Download link (14px) | 10.09 | 9.98 | 13.22 | 11.87 |
-| Brand name (22px light) | 7.72 | 6.13 | 9.68 | 6.80 |
-| Get Hivemind button (14px, includes its own fill) | 4.85 | 4.77 | 8.50 | 5.86 |
+| Element | 1920 | 1440 | 390 |
+|---|---|---|---|
+| Tagline (68px / 76px / 36px, large) | 4.55 | 4.01 | 3.44 |
+| Hero label (12px) | 7.42 | 6.74 | 5.03 |
+| Download link (14px) | 11.41 | 10.09 | 9.98 |
+| Brand name (22px light) | 7.53 | 7.72 | 6.13 |
+| Get Hivemind button (14px, includes its own fill) | 4.71 | 4.78 | 4.77 |
 
 Before the fix, dark mode measured as low as 1.7:1 for the tagline and 1.8:1 for the Download link.
+
+## Downloads and paths
+
+Download links are built from one constant,  on the  element in  (currently the v0.1.0-preview release); without JavaScript they fall back to the releases page. All asset references are relative, so the page works from a sub-path.

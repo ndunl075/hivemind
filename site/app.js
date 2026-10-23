@@ -6,7 +6,7 @@
   // Download button: label by visitor OS. Windows and Mac computers get one
   // primary button and the other OS as a small link; anything else (Linux,
   // Android, ChromeOS, iPhone, iPad) gets both buttons, neither primary.
-  var base = "https://github.com/ndunl075/hivemind/releases/latest/download/";
+  var base = document.querySelector(".dl").dataset.release; // one place to bump per release (data-release in index.html)
   var ua = navigator.userAgent || "";
   var touch = navigator.maxTouchPoints > 1;
   var os = "both";
@@ -17,6 +17,8 @@
   var main = document.getElementById("dl-main");
   var alt = document.getElementById("dl-alt");
   if (os === "both") {
+    main.href = base + "hivemind-windows.zip";
+    alt.href = base + "hivemind-mac.zip";
     alt.className = "pill";
     alt.textContent = "Download for Mac";
     document.querySelector(".dl").classList.add("both");

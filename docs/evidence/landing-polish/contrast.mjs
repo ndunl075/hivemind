@@ -4,7 +4,7 @@
 import { chromium } from "playwright";
 const [, , url] = process.argv;
 const b = await chromium.launch();
-for (const [w, h, scheme] of [[1440, 900, "dark"], [390, 844, "dark"], [1440, 900, "light"], [390, 844, "light"]]) {
+for (const [w, h, scheme] of [[1920, 1080, "dark"], [1440, 900, "dark"], [390, 844, "dark"]]) {
   const p = await b.newPage({ viewport: { width: w, height: h }, colorScheme: scheme, reducedMotion: "reduce" });
   await p.goto(url); await p.waitForLoadState("networkidle");
   const sel = [["tagline", "#tagline"], ["hero label", ".hero .label"], ["Download link", ".toplink"], ["brand name", ".brand span"], ["Get Hivemind", ".hero .pill"]];

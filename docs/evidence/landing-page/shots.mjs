@@ -3,7 +3,7 @@
 import { chromium } from "playwright";
 const [, , url, out] = process.argv;
 const b = await chromium.launch();
-const shots = [["desktop-1440", 1440, 900, "dark"], ["mobile-390", 390, 844, "dark"], ["desktop-1440-light", 1440, 900, "light"], ["mobile-320", 320, 640, "dark"]];
+const shots = [["desktop-1440", 1440, 900, "dark"], ["mobile-390", 390, 844, "dark"], ["desktop-1920-fold", 1920, 1080, "dark"], ["mobile-320", 320, 640, "dark"]];
 for (const [name, w, h, scheme] of shots) {
   const ctx = await b.newContext({ viewport: { width: w, height: h }, colorScheme: scheme, reducedMotion: "reduce" });
   const p = await ctx.newPage();
@@ -15,7 +15,7 @@ for (const [name, w, h, scheme] of shots) {
   const over = await p.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   const lines = await p.evaluate(() => { const h = document.getElementById("tagline"); return Math.round(h.getBoundingClientRect().height / parseFloat(getComputedStyle(h).lineHeight)); });
   console.log(name, "overflow:", over, "errors:", errs.length, "tagline lines:", lines);
-  await p.screenshot({ path: `${out}/${name}.jpg`, type: "jpeg", quality: 55, fullPage: true });
+  await p.screenshot({ path: `${out}/${name}.jpg`, type: "jpeg", quality: 55, fullPage: !name.endsWith("fold") });
   await ctx.close();
 }
 // Animation with motion on: pause stops it, play resumes, it finishes with 8 lines.

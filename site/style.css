@@ -3,6 +3,7 @@
 @font-face{font-family:"Geist Mono";src:url(fonts/geist-mono-latin-500-normal.woff2) format("woff2");font-weight:500;font-display:swap}
 
 :root{
+  color-scheme:dark;
   --bg:#14172f; --text:#fff; --muted:rgba(255,255,255,.62); --soft:rgba(255,255,255,.48);
   --glass:rgba(255,255,255,.06); --glass-line:rgba(255,255,255,.22); --line:rgba(255,255,255,.12);
   --panel:rgba(9,10,13,.72); --panel-in:rgba(255,255,255,.04);
@@ -13,17 +14,6 @@
   --sans:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
   --mono:"Geist Mono",ui-monospace,Consolas,monospace;
   --gutter:16px; --vh:100svh;
-}
-@media (prefers-color-scheme:light){
-  :root:not([data-theme=dark]){
-    --bg:#d6daf0; --text:#17162a; --muted:rgba(23,22,42,.7); --soft:rgba(23,22,42,.6);
-    --glass:rgba(255,255,255,.5); --glass-line:rgba(255,255,255,.85); --line:rgba(23,22,42,.14);
-    --panel:rgba(255,255,255,.62); --panel-in:rgba(255,255,255,.55);
-    --btn:rgba(255,255,255,.72); --btn-line:rgba(23,22,42,.28); --btn-hover:rgba(255,255,255,.9); --scrim:rgba(255,250,252,.6); --scrim-top:rgba(255,250,252,.5);
-    --accent:#5239c9; --bad:#b3261e; --ok:#17775c; --hex:rgba(60,50,130,.05); --shadow:rgba(40,30,90,.28);
-    --sky:linear-gradient(180deg,#f7ddcc 0,#efd5dc 480px,#dcd8ee 1100px,#d3d9f1 1800px,#cdd3ee 40%,#d0d3ef 75%,#d9cde8 90%,#d3bfdc 100%);
-    --cloud-op:1;
-  }
 }
 *{box-sizing:border-box;margin:0}
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
@@ -71,9 +61,10 @@ h3{font-size:clamp(26px,2.6vw,38px)}
 .hero h1{font-size:clamp(36px,5.25vw,76px);line-height:1.06;letter-spacing:-.025em;max-width:1088px;margin:20px auto 40px;filter:drop-shadow(0 2px 28px rgba(60,20,50,.18))}
 .hero .label{color:var(--text)}
 .w{display:inline-block}
+@media (min-width:1600px){.hero h1{font-size:68px;max-width:1500px}}
 
 /* screenshot, overlapping the hero */
-.shot-section{position:relative;z-index:2;padding-bottom:140px;margin-top:24px}
+.shot-section{position:relative;z-index:2;padding-bottom:140px;margin-top:64px}
 .shot-wrap{padding:0 var(--gutter)}
 .frame{padding:8px;border:1px solid var(--glass-line);border-radius:4px;background:var(--glass);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);box-shadow:0 40px 120px -40px var(--shadow)}
 .frame img{width:100%;border-radius:4px;background:#0a0a0a}
