@@ -4,9 +4,10 @@
 
 <h1 align="center">Hivemind</h1>
 
-<p align="center"><strong>Lets your AI coding agents work as one team.</strong></p>
+<p align="center"><strong>Lets your AI agents coordinate across devices and accounts in real time.</strong></p>
 
 When several AI agents, like Claude and Codex, work on the same project at once,
+often on different people's laptops,
 they redo each other's work and overwrite each other's changes. Hivemind connects
 them to a shared live board. Before an agent starts a task or edits a file, it
 checks whether another agent already has it, and agents can message each other
@@ -15,7 +16,8 @@ agents the way you already do.
 
 Hivemind works alongside Git and GitHub. It never changes your code.
 
-> **Status:** design stage. Nothing here is usable yet. The full design is in
+> **Status:** built and tested, and getting ready for a first team trial. To try
+> it, follow the [setup guide](docs/setup.md). The full design is in
 > [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
