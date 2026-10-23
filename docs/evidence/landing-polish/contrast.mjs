@@ -7,9 +7,9 @@ const b = await chromium.launch();
 for (const [w, h, scheme] of [[1920, 1080, "dark"], [1440, 900, "dark"], [390, 844, "dark"]]) {
   const p = await b.newPage({ viewport: { width: w, height: h }, colorScheme: scheme, reducedMotion: "reduce" });
   await p.goto(url); await p.waitForLoadState("networkidle");
-  const sel = [["tagline", "#tagline"], ["hero label", ".hero .label"], ["Download link", ".toplink"], ["brand name", ".brand span"], ["Get Hivemind", ".hero .pill"]];
+  const sel = [["tagline", "#tagline"], ["Download link", ".toplink"], ["brand name", ".brand span"], ["Get Hivemind", ".hero .pill"]];
   const boxes = await p.evaluate(sel => sel.map(([n, s]) => { const e = document.querySelector(s), r = e.getBoundingClientRect(), c = getComputedStyle(e).color; return [n, r.x, r.y, r.width, r.height, c, parseFloat(getComputedStyle(e).fontSize), getComputedStyle(e).fontWeight]; }), sel);
-  await p.addStyleTag({ content: "h1,.hero .label,.toplink,.brand span,.hero .pill{color:transparent!important;text-shadow:none!important;transition:none!important}.w{opacity:1!important;filter:none!important}h1{filter:none!important}" });
+  await p.addStyleTag({ content: "h1,.toplink,.brand span,.hero .pill{color:transparent!important;text-shadow:none!important;transition:none!important}.w{opacity:1!important;filter:none!important}h1{filter:none!important}" });
   const png = (await p.screenshot()).toString("base64");
   const res = await p.evaluate(async ([png, boxes]) => {
     const img = new Image(); img.src = "data:image/png;base64," + png; await img.decode();
