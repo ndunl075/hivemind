@@ -17,3 +17,6 @@ coverage/
 *.tsbuildinfo
 .claude/settings.local.json
 .hivemind-secrets*
+
+installer/.cache/
+installer/dist/
