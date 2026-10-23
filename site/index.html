@@ -46,7 +46,7 @@
   <div class="wrap">
     <figure class="window reveal">
       <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span class="label">Hivemind dashboard</span></div>
-      <img src="dashboard.png" width="1440" height="900" alt="The Hivemind dashboard showing every agent, what it is working on, and how the agents connect." fetchpriority="high">
+      <img src="dashboard.png" width="1440" height="900" alt="Example dashboard with sample data, showing every agent, what it is working on, and how the agents connect." fetchpriority="high">
     </figure>
   </div>
 </section>
@@ -87,11 +87,11 @@
 
 <section class="demo" id="demo">
   <div class="wrap">
-    <p class="label reveal">Watch it work</p>
+    <p class="label reveal">One edit, two agents</p>
     <h2 class="reveal">A blocked edit, then a message.</h2>
     <p class="lede reveal">Two agents, two laptops, one file. Nobody typed a word to coordinate them.</p>
 
-    <div class="stage reveal" id="stage" aria-label="Animated example: one agent is blocked from editing a file another agent holds, then messages that agent.">
+    <div class="stage reveal" id="stage" role="group" aria-label="Animated example: one agent is blocked from editing a file another agent holds, then messages that agent.">
       <div class="pane" data-agent="ana">
         <div class="pane-head"><span class="dot ana"></span>codex-ana <span class="label">Codex</span></div>
         <ol class="lines" id="lines-ana"></ol>
@@ -105,12 +105,13 @@
         <code id="board-state">src/auth/login.ts is free</code>
       </div>
     </div>
-    <button class="replay label" id="replay" type="button" hidden>Replay</button>
+    <button class="replay label" id="replay" type="button" aria-label="Pause the animation" hidden>Pause</button>
     <noscript><p class="lede">Animation needs JavaScript. In short: Ana's agent takes src/auth/login.ts, Nico's agent is refused with the reason, then sends her a message, and her agent sees it on its next step.</p></noscript>
   </div>
 </section>
 
-<section class="features">
+<section class="features" aria-labelledby="features-h">
+  <h2 id="features-h" class="sr-only">What Hivemind gives your agents</h2>
   <div class="wrap grid">
     <article class="card reveal">
       <span class="label">Tasks and file locks</span>
@@ -125,7 +126,7 @@
     <article class="card reveal">
       <span class="label">Claude Code and Codex</span>
       <h3>Works with the agents you already use. Never sees your code.</h3>
-      <p>Hooks run automatically in Claude Code and Codex. The server only sees file paths, task text, messages, names and Git branch names. It works alongside Git and GitHub, and never changes your code.</p>
+      <p>Once each laptop is set up, hooks run automatically in Claude Code and Codex. The server only sees file paths, task text, messages, names and Git metadata such as branch names, never your code. It works alongside Git and GitHub and never changes your code; setup adds a short section to your project’s AGENTS.md and CLAUDE.md so agents know the rules.</p>
     </article>
   </div>
 </section>
@@ -139,7 +140,8 @@
       <a class="pill" id="dl-main" href="https://github.com/ndunl075/hivemind/releases/latest/download/hivemind-windows.zip" data-os="windows">Download for Windows</a>
       <a class="alt" id="dl-alt" href="https://github.com/ndunl075/hivemind/releases/latest/download/hivemind-mac.zip" data-os="mac">Or download for Mac</a>
     </div>
-    <p class="fine reveal">Unsigned preview build. Windows may show an “unknown publisher” warning; on Mac, right-click and choose Open.</p>
+    <p class="fine reveal" id="dl-note" hidden>Hivemind installs on Windows and Mac computers.</p>
+    <p class="fine reveal">Unsigned preview build. On Windows you may see “Windows protected your PC”: click “More info”, then “Run anyway”. On Mac, open System Settings, then Privacy &amp; Security, and click “Open Anyway”.</p>
 
     <nav class="links label" aria-label="Footer">
       <a href="https://github.com/ndunl075/hivemind">GitHub</a>

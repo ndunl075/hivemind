@@ -3,17 +3,31 @@
   var root = document.documentElement;
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // Download button: label by visitor OS, other OS as the small link.
+  // Download button: label by visitor OS. Windows and Mac computers get one
+  // primary button and the other OS as a small link; anything else (Linux,
+  // Android, ChromeOS, iPhone, iPad) gets both buttons, neither primary.
   var base = "https://github.com/ndunl075/hivemind/releases/latest/download/";
-  var os = /Mac|iPhone|iPad/.test(navigator.platform || "") || /Mac OS X/.test(navigator.userAgent) ? "mac" : "windows";
+  var ua = navigator.userAgent || "";
+  var touch = navigator.maxTouchPoints > 1;
+  var os = "both";
+  if (/iPhone|iPad|iPod|Android|CrOS|Linux/.test(ua) || (/Macintosh/.test(ua) && touch)) os = "both";
+  else if (/Macintosh|Mac OS X/.test(ua)) os = "mac";
+  else if (/Windows/.test(ua)) os = "windows";
   var names = { windows: "Windows", mac: "Mac" };
-  var other = os === "mac" ? "windows" : "mac";
   var main = document.getElementById("dl-main");
   var alt = document.getElementById("dl-alt");
-  main.href = base + "hivemind-" + os + ".zip";
-  main.textContent = "Download for " + names[os];
-  alt.href = base + "hivemind-" + other + ".zip";
-  alt.textContent = "Or download for " + names[other];
+  if (os === "both") {
+    alt.className = "pill";
+    alt.textContent = "Download for Mac";
+    document.querySelector(".dl").classList.add("both");
+    document.getElementById("dl-note").hidden = false;
+  } else {
+    var other = os === "mac" ? "windows" : "mac";
+    main.href = base + "hivemind-" + os + ".zip";
+    main.textContent = "Download for " + names[os];
+    alt.href = base + "hivemind-" + other + ".zip";
+    alt.textContent = "Or download for " + names[other];
+  }
 
   // Scroll-in.
   var items = document.querySelectorAll(".reveal");
@@ -43,7 +57,7 @@
     [ana, "ok", "Push. File released", null, F + " is free"],
     [nico, "ok", "Edit " + F + ' <span class="t">· allowed</span>', null, F + " held by claude-nico"]
   ];
-  var timers = [];
+  var timer = null, idx = 0, paused = false;
 
   function add(s) {
     var li = document.createElement("li");
@@ -55,18 +69,28 @@
     if (s[4]) board.textContent = s[4];
   }
   function clear() {
-    timers.forEach(clearTimeout); timers = [];
+    clearTimeout(timer); timer = null; idx = 0; paused = false;
     ana.innerHTML = ""; nico.innerHTML = "";
     board.textContent = F + " is free";
   }
+  function label(text) { replay.textContent = text; replay.setAttribute("aria-label", text === "Pause" ? "Pause the animation" : text === "Play" ? "Resume the animation" : "Replay the animation"); }
+  function tick() {
+    if (idx >= steps.length) { timer = null; label("Replay"); return; }
+    add(steps[idx++]);
+    timer = setTimeout(tick, 1500);
+  }
   function play() {
     clear();
-    if (reduce) { steps.forEach(add); return; }
-    replay.hidden = true;
-    steps.forEach(function (s, i) { timers.push(setTimeout(function () { add(s); }, 700 + i * 1500)); });
-    timers.push(setTimeout(function () { replay.hidden = false; }, 700 + steps.length * 1500));
+    if (reduce) { steps.forEach(add); replay.hidden = true; return; }
+    replay.hidden = false;
+    label("Pause");
+    timer = setTimeout(tick, 700);
   }
-  replay.addEventListener("click", play);
+  replay.addEventListener("click", function () {
+    if (idx >= steps.length && !timer) { play(); return; }
+    if (paused) { paused = false; label("Pause"); timer = setTimeout(tick, 400); }
+    else { paused = true; clearTimeout(timer); timer = null; label("Play"); }
+  });
 
   var stage = document.getElementById("stage");
   if (reduce || !("IntersectionObserver" in window)) {

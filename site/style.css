@@ -130,3 +130,8 @@ h3{font-size:clamp(20px,2.4vw,26px);line-height:1.2}
   .demo,.features{padding:80px 0}
   .links{margin-top:70px}
 }
+
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.dl.both{flex-direction:row;flex-wrap:wrap;justify-content:center}
+.dl.both .alt{font-size:16px;color:var(--text);text-decoration:none}
+.fine[hidden]{display:none}
