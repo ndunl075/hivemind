@@ -47,6 +47,7 @@
     "build": "node dashboard/build.mjs",
     "dev": "npm run build && wrangler dev -c server/wrangler.toml",
     "deploy": "npm run build && wrangler deploy -c server/wrangler.toml",
-    "dev:dashboard": "node dashboard/build.mjs --serve"
+    "dev:dashboard": "node dashboard/build.mjs --serve",
+    "bundle": "node installer/build.mjs"
   }
 }
