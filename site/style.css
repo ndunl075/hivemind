@@ -13,7 +13,7 @@
   --cloud-op:.55;
   --sans:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
   --mono:"Geist Mono",ui-monospace,Consolas,monospace;
-  --gutter:16px; --vh:100svh;
+  --gutter:clamp(16px,5vw,80px); --vh:100svh;
 }
 *{box-sizing:border-box;margin:0}
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
@@ -29,20 +29,21 @@ h3{font-size:clamp(26px,2.6vw,38px)}
 /* sky: generated, no photos */
 .sky{position:absolute;inset:0;z-index:-1;overflow:hidden;background:var(--sky);pointer-events:none}
 .sky-clouds{position:absolute;left:0;width:100%;height:1400px;opacity:var(--cloud-op)}
+.sky .sky-clouds{padding:0} /* the top layer shares the header's .top class; keep any header padding off the art */
 .hero::before{content:"";position:absolute;inset:0 0 -40px;z-index:-1;background:radial-gradient(60% 70% at 50% 45%,var(--scrim),transparent 78%);pointer-events:none}
 .sky-clouds.top{top:0}
 .sky-clouds.bottom{bottom:0}
 .sky .hex{color:var(--hex)}
 
 /* header */
-.top{position:absolute;inset:0 0 auto 0;z-index:5;padding:0 var(--gutter)}
+.top{position:absolute;inset:0 0 auto 0;z-index:5}
 .top::before{content:"";position:absolute;inset:0 0 -30px;z-index:-1;background:linear-gradient(var(--scrim-top),transparent);pointer-events:none}
-.top-in{max-width:1280px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;padding:20px 0}
+.top-in{max-width:1280px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;padding:20px var(--gutter)}
 .brand{display:flex;align-items:center;gap:10px;text-decoration:none;font-size:22px;font-weight:300;letter-spacing:-.025em}
 .brand img{width:41px;height:41px;padding:7px;border-radius:9px;border:1px solid var(--glass-line);background:var(--glass);backdrop-filter:blur(12px)}
 .toplink{font-size:14px;font-weight:500;text-decoration:none;color:var(--text);transition:color .2s}
 .toplink:hover{text-decoration:underline;text-underline-offset:4px}
-.float-cta{position:fixed;right:16px;top:16px;z-index:50;opacity:0;visibility:hidden;transform:translateY(-8px);pointer-events:none;transition:opacity .4s cubic-bezier(.4,0,.2,1),transform .4s cubic-bezier(.4,0,.2,1),visibility 0s .4s}
+.float-cta{position:fixed;right:max(16px,calc((100vw - 1280px) / 2 + var(--gutter)));top:16px;z-index:50;opacity:0;visibility:hidden;transform:translateY(-8px);pointer-events:none;transition:opacity .4s cubic-bezier(.4,0,.2,1),transform .4s cubic-bezier(.4,0,.2,1),visibility 0s .4s}
 .float-cta.on{opacity:1;visibility:visible;transform:none;pointer-events:auto;transition-delay:0s}
 @media (max-width:767px){.float-cta{display:none}}
 
@@ -55,6 +56,11 @@ h3{font-size:clamp(26px,2.6vw,38px)}
 .pill.pill-light:active{box-shadow:inset 0 1px 3px rgba(90,70,190,.2),0 4px 12px -6px rgba(6,4,30,.5)}
 .pill.pill-light:hover{box-shadow:inset 0 -1px 0 rgba(90,70,190,.18),0 14px 32px -10px rgba(6,4,30,.65),0 2px 4px rgba(6,4,30,.25)}
 .hero .pill,.dl .pill{height:44px;padding:0 22px;font-size:15px;border-radius:12px}
+.float-cta .pill{height:34px;padding:0 14px;gap:6px;font-size:13px;border-radius:10px}
+/* logos: Simple Icons (CC0); Claude and OpenAI marks belong to Anthropic and OpenAI */
+.works{display:flex;width:max-content;align-items:center;justify-content:center;gap:14px;margin:22px auto 0;padding:7px 16px;border-radius:999px;background:rgba(20,12,36,.74);border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);font-size:13px;font-weight:500;color:#fff}
+.works-logo{display:inline-flex;color:rgba(255,255,255,.88)}
+.works-logo svg{display:block;width:22px;height:22px}
 .pill:focus-visible,a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .edge{position:relative}
 .edge::after{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;pointer-events:none;
@@ -65,7 +71,6 @@ h3{font-size:clamp(26px,2.6vw,38px)}
 .hero{position:relative;display:grid;place-items:center;text-align:center;padding:171px 0 0;min-height:480px}
 .hero-copy{display:flex;flex-direction:column;align-items:center}
 .hero h1{font-size:clamp(36px,5.25vw,76px);line-height:1.06;letter-spacing:-.025em;max-width:1088px;margin:20px auto 40px;filter:drop-shadow(0 2px 28px rgba(60,20,50,.18))}
-.hero .label{color:var(--text)}
 .w{display:inline-block}
 @media (min-width:1600px){.hero h1{font-size:68px;max-width:1500px}}
 
