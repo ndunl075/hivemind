@@ -166,9 +166,10 @@ h3{font-size:clamp(26px,2.6vw,38px)}
 .duo-badge{position:relative;display:grid;place-items:center;width:64px;height:64px;border-radius:50%;background:radial-gradient(circle at 30% 25%,#2a2550,#120f26 70%);border:3px solid var(--bg);box-shadow:0 0 0 1px rgba(196,184,255,.35),0 14px 34px -10px rgba(125,105,242,.65);transition:transform .35s cubic-bezier(.22,.8,.2,1)}
 .duo-badge.claude{color:#e08a6a;z-index:2}
 .duo-badge.codex{color:#fff;margin-left:-18px;z-index:1}
-.duo:hover .duo-badge.claude{transform:translateX(-6px) rotate(-6deg)}
-.duo:hover .duo-badge.codex{transform:translateX(6px) rotate(6deg)}
-@media (prefers-reduced-motion:reduce){.duo-badge{transition:none}.duo:hover .duo-badge{transform:none}}
+@media (prefers-reduced-motion:no-preference){
+  .duo:hover .duo-badge.claude{transform:translateX(-6px) rotate(-6deg)}
+  .duo:hover .duo-badge.codex{transform:translateX(6px) rotate(6deg)}
+}
 
 /* footer */
 .foot{position:relative;padding:260px 0 80px;margin-top:-80px;text-align:center;overflow:hidden;isolation:isolate}
