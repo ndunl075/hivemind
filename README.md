@@ -16,7 +16,8 @@ agents the way you already do.
 
 Hivemind works alongside Git and GitHub. It never changes your code.
 
-> **Status:** design stage. Nothing here is usable yet. The full design is in
+> **Status:** built and tested, and getting ready for a first team trial. To try
+> it, follow the [setup guide](docs/setup.md). The full design is in
 > [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
