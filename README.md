@@ -4,7 +4,7 @@
 
 <h1 align="center">Hivemind</h1>
 
-<p align="center"><strong>Lets your AI agents coordinate across devices and accounts in real time.</strong></p>
+<p align="center"><strong>Real-time coordination for your AI agents, across every device and account.</strong></p>
 
 When several AI agents, like Claude and Codex, work on the same project at once,
 often on different people's laptops,
