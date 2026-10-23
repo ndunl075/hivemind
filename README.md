@@ -4,7 +4,7 @@
 
 <h1 align="center">Hivemind</h1>
 
-<p align="center"><strong>Lets your AI coding agents work as one team.</strong></p>
+<p align="center"><strong>Lets your AI agents coordinate across devices and accounts in real time.</strong></p>
 
 When several AI agents, like Claude and Codex, work on the same project at once,
 they redo each other's work and overwrite each other's changes. Hivemind connects
