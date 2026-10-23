@@ -46,3 +46,23 @@ Before the fix, dark mode measured as low as 1.7:1 for the tagline and 1.8:1 for
 ## Downloads and paths
 
 Download links are built from one constant, `data-release` on the `.dl` element in `index.html` (currently the v0.1.0-preview release); without JavaScript they fall back to the releases page. All asset references are relative, so the page works from a sub-path.
+
+## Polish follow-up (after PR 41's second review)
+
+Small-text contrast, measured with `small-contrast.mjs` (hides one element's text at a time, samples the pixels behind it, transitions off) against a served copy of `site/`, at 1920x1080, 1440x900, 390x844 and 320x640:
+
+| Text | Before (worst) | After (worst) |
+|---|---|---|
+| © line | 3.53 | 8.64 |
+| row names (`.row .who`) | 2.56 | 7.60 |
+| dimmed rows | 2.56 (opacity .6) | 9.02 |
+| tags | 3.95 | 8.81 |
+| "Without it" lines (phone) | 4.03 | 4.81 |
+| "With Hivemind:" (phone) | 3.96 | 4.59 |
+| small labels and step numbers (phone) | 2.79 | 4.83 |
+
+Every element measured is at least 4.5:1 at all four sizes. Hero, from `contrast.mjs`: tagline 4.55 (1920), 4.01 (1440), 3.44 (390), all above the 3:1 needed for large text.
+
+Other changes: the wordmark box is sized by its own width (`aspect-ratio`), not the viewport, so it's 156px at 1440 and 1920 with no empty band under the letters; the panel colour, the image backing and the large shadows use new values of our own.
+
+Commands: `python -m http.server 8772 --directory site`, then `node docs/evidence/landing-polish/small-contrast.mjs http://127.0.0.1:8772/`, `node docs/evidence/landing-polish/contrast.mjs http://127.0.0.1:8772/` and `node docs/evidence/landing-page/replay-check.mjs http://127.0.0.1:8772/` (`{"lines":8,"label":"Replay"}`).
