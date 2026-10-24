@@ -1,5 +1,6 @@
 /**
- * Builds the two download bundles a non-technical teammate double-clicks (hivemind-windows.zip, hivemind-mac.zip).
+ * Builds the download bundles a non-technical teammate double-clicks (hivemind-windows.zip, hivemind-mac.zip, and on
+ * Windows hivemind-setup.exe, a self-extracting wrapper around the Windows zip).
  * Each holds an official Node 24 LTS binary, the CLI files the package ships, the smol-toml dependency and a setup launcher.
  *
  *   npm run bundle        (run `npm ci` first: smol-toml is copied from node_modules)
@@ -8,7 +9,8 @@
  * Zips are written to installer/dist/. Builds are unsigned. Only Node built-ins are used.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync, gunzipSync } from 'node:zlib';
@@ -225,6 +227,43 @@ function appFiles() {
 /** A launcher or readme with the line endings its platform expects. @param {string} file @param {string} eol */
 const template = (file, eol) => Buffer.from(readFileSync(join(here, 'templates', file), 'utf8').replace(/\r\n/g, '\n').replaceAll('\n', eol));
 
+/**
+ * hivemind-setup.exe: a self-extracting wrapper, built with IExpress (part of Windows), around hivemind-windows.zip and
+ * a small install.cmd that unpacks it to %LOCALAPPDATA%\Hivemind and runs the usual setup from there.
+ */
+function setupExe() {
+  const stage = join(outDir, 'exe-stage');
+  rmSync(stage, { recursive: true, force: true });
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(join(stage, 'install.cmd'), template('windows-install.cmd', '\r\n'));
+  copyFileSync(join(outDir, 'hivemind-windows.zip'), join(stage, 'hivemind-windows.zip'));
+  const target = join(outDir, 'hivemind-setup.exe');
+  rmSync(target, { force: true });
+  const sed = [
+    '[Version]', 'Class=IEXPRESS', 'SEDVersion=3',
+    '[Options]', 'PackagePurpose=InstallApp', 'ShowInstallProgramWindow=0', 'HideExtractAnimation=1', 'UseLongFileName=1',
+    'InsideCompressed=0', 'CAB_FixedSize=0', 'CAB_ResvCodeSigning=0', 'RebootMode=N',
+    'InstallPrompt=%InstallPrompt%', 'DisplayLicense=%DisplayLicense%', 'FinishMessage=%FinishMessage%',
+    'TargetName=%TargetName%', 'FriendlyName=%FriendlyName%', 'AppLaunched=%AppLaunched%',
+    'PostInstallCmd=%PostInstallCmd%', 'AdminQuietInstCmd=%AdminQuietInstCmd%', 'UserQuietInstCmd=%UserQuietInstCmd%',
+    'SourceFiles=SourceFiles',
+    '[Strings]', 'InstallPrompt=', 'DisplayLicense=', 'FinishMessage=', `TargetName=${target}`,
+    'FriendlyName=Hivemind Setup', 'AppLaunched=cmd /c .\\install.cmd', 'PostInstallCmd=<None>',
+    'AdminQuietInstCmd=', 'UserQuietInstCmd=', 'FILE0="install.cmd"', 'FILE1="hivemind-windows.zip"',
+    '[SourceFiles]', `SourceFiles0=${stage}\\`,
+    '[SourceFiles0]', '%FILE0%=', '%FILE1%=', '',
+  ].join('\r\n');
+  const sedFile = join(stage, 'hivemind-setup.sed');
+  writeFileSync(sedFile, sed);
+  try {
+    const run = spawnSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'iexpress.exe'), ['/N', '/Q', sedFile], { stdio: 'inherit' });
+    if (run.error) throw new Error(`IExpress: ${run.error.message}`);
+    if (run.status !== 0 || !existsSync(target) || statSync(target).size === 0) throw new Error(`IExpress did not produce ${target} (exit ${run.status})`);
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const app = appFiles().map((e) => ({ ...e, name: `Hivemind/${e.name}` }));
   mkdirSync(outDir, { recursive: true });
@@ -249,7 +288,15 @@ async function main() {
     ...app,
   ]));
 
-  for (const f of ['hivemind-windows.zip', 'hivemind-mac.zip']) {
+  const outputs = ['hivemind-windows.zip', 'hivemind-mac.zip'];
+  if (process.platform === 'win32') {
+    setupExe();
+    outputs.push('hivemind-setup.exe');
+  } else {
+    console.log('hivemind-setup.exe skipped: IExpress only runs on Windows');
+  }
+
+  for (const f of outputs) {
     const buf = readFileSync(join(outDir, f));
     console.log(`${f}  ${(buf.length / 1048576).toFixed(1)} MiB  sha256 ${sha256(buf)}`);
   }
