@@ -860,6 +860,48 @@ describe('leave when something cannot be removed', () => {
     expect(existsSync(lap.path('.hivemind', 'hook', 'hook.mjs'))).toBe(true);
   });
 
+  it('says so when claude cannot be run at all, instead of quietly leaving the MCP server behind', async () => {
+    const lap = laptop();
+    await join_(lap);
+    // Windows with claude.exe off PATH: the runner's shell fallback exits 1, not 127.
+    const unrecognized = async (cmd, args, opts) => (cmd === 'claude'
+      ? { code: 1, stdout: '', stderr: "'\"claude\"' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n" }
+      : lap.stub.runner(cmd, args, opts));
+    const r = await lap.run(main, ['leave'], { runner: unrecognized });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('claude mcp remove --scope user hivemind');
+    expect(readJson(lap.path('.claude.json')).mcpServers.hivemind).toBeTruthy();
+    expect(existsSync(lap.path('.hivemind', 'install.json'))).toBe(true);
+    // Once claude can be run again, a second leave finishes the job.
+    const again = await lap.run(main, ['leave']);
+    expect(again.code, again.err).toBe(0);
+    expect(readJson(lap.path('.claude.json')).mcpServers?.hivemind).toBeUndefined();
+  });
+});
+
+describe('leave and the copied Node runtime', () => {
+  it('deletes the runtime folder the Windows setup copies Node into', async () => {
+    const lap = laptop();
+    await join_(lap);
+    mkdirSync(lap.path('.hivemind', 'runtime'), { recursive: true });
+    write(lap.path('.hivemind', 'runtime', 'node.exe'), 'not really node');
+    const r = await lap.run(main, ['leave']);
+    expect(r.code, r.err).toBe(0);
+    expect(existsSync(lap.path('.hivemind', 'runtime'))).toBe(false);
+    expect(existsSync(lap.path('.hivemind'))).toBe(false);
+  });
+
+  it('keeps the runtime when leave could not finish, so the hooks that use it still work', async () => {
+    const lap = laptop();
+    await join_(lap);
+    mkdirSync(lap.path('.hivemind', 'runtime'), { recursive: true });
+    write(lap.path('.hivemind', 'runtime', 'node.exe'), 'not really node');
+    const failing = async (cmd, args, opts) => (args.includes('remove') ? { code: 1, stdout: '', stderr: 'boom' } : lap.stub.runner(cmd, args, opts));
+    const r = await lap.run(main, ['leave'], { runner: failing });
+    expect(r.code).toBe(1);
+    expect(existsSync(lap.path('.hivemind', 'runtime', 'node.exe'))).toBe(true);
+  });
+
   it('a config.toml whose block was edited is not touched, and the folder stays', async () => {
     const lap = laptop();
     await join_(lap);

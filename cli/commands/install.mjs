@@ -181,13 +181,14 @@ async function registerClaude(ctx, config, manifest, claudeOnPath, report) {
   }
   const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
   if (got.code === 0) {
+    const entry = claudeConfigEntry(ctx);
     // An entry named "hivemind" that is not ours belongs to the user: never replace it.
-    if (!isOurHelper(got.stdout, p.helperScript, p.helperCmd) && !manifest.claude.mcp) {
+    if (!isOurClaudeEntry(got, entry, p) && !manifest.claude.mcp) {
       throw new CliError(
         'Claude Code already has its own MCP server named "hivemind", so the Hivemind one was not added. Rename or remove yours (claude mcp remove --scope user hivemind), then run hivemind update.',
       );
     }
-    if (got.stdout.includes(`${config.server}/mcp`) && got.stdout.includes(helper)) {
+    if (entry?.url === `${config.server}/mcp` && entry?.headersHelper === helper) {
       manifest.claude.mcp = true;
       report.lines.push('Claude Code: MCP server "hivemind" already set up');
       return;
@@ -279,6 +280,33 @@ function firstLine(s) {
 }
 
 /**
+ * Hivemind's entry in Claude Code's user config, read from the file. `claude mcp get` prints the type and URL but not
+ * the headers helper, and the helper path is how our entry is told apart from one the user made.
+ * @param {Context} ctx
+ * @returns {{ url?: unknown, headersHelper?: unknown } | null}
+ */
+function claudeConfigEntry(ctx) {
+  try {
+    const { value } = readJsonObject(join(ctx.env.CLAUDE_CONFIG_DIR || ctx.homedir, '.claude.json'), {});
+    const entry = value.mcpServers?.hivemind;
+    return entry && typeof entry === 'object' ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the "hivemind" entry names our exact helper path, in `claude mcp get`'s output or in the config file.
+ * @param {{ stdout: string }} got
+ * @param {{ headersHelper?: unknown } | null} entry
+ * @param {ReturnType<typeof paths>} p
+ */
+function isOurClaudeEntry(got, entry, p) {
+  const helper = typeof entry?.headersHelper === 'string' ? entry.headersHelper : '';
+  return isOurHelper(`${got.stdout}\n${helper}`, p.helperScript, p.helperCmd);
+}
+
+/**
  * Remove exactly what join added.
  * @param {Context} ctx
  * @returns {Promise<Report>}
@@ -311,11 +339,11 @@ export async function uninstallAll(ctx) {
     report.warnings.push(`Claude Code settings: ${/** @type {Error} */ (e).message}`);
   }
 
-  // Claude MCP server: only an entry that is ours (join recorded it, or its helper path is ours).
+  // Claude MCP server: only an entry whose helper path is ours.
   try {
     const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
     if (got.code === 0) {
-      if (isOurHelper(got.stdout, p.helperScript, p.helperCmd)) {
+      if (isOurClaudeEntry(got, claudeConfigEntry(ctx), p)) {
         const r = await ctx.runner('claude', ['mcp', 'remove', '--scope', 'user', 'hivemind']);
         if (r.code === 0) report.lines.push('Claude Code: MCP server "hivemind" removed');
         else {
@@ -325,9 +353,14 @@ export async function uninstallAll(ctx) {
       } else {
         report.lines.push('Claude Code: the MCP server named "hivemind" is not the Hivemind one, so it was left alone');
       }
-    } else if (got.code === 127 && manifest?.claude.mcp === true) {
+    } else if (!/No MCP server named/i.test(`${got.stdout}\n${got.stderr}`) && (manifest?.claude.mcp === true || claudeConfigEntry(ctx))) {
+      // claude could not be run (127, or on Windows the shell fallback's "not recognized", exit 1): say so, never skip.
       report.failed = true;
-      report.warnings.push('Claude Code: the "claude" program was not found, so the MCP server could not be removed. Put it on your PATH, or run: claude mcp remove --scope user hivemind');
+      report.warnings.push(
+        got.code === 127
+          ? 'Claude Code: the "claude" program was not found, so the MCP server could not be removed. Put it on your PATH, or run: claude mcp remove --scope user hivemind'
+          : `Claude Code: could not check the MCP server (${firstLine(got.stderr || got.stdout) || `exit ${got.code}`}). Run: claude mcp remove --scope user hivemind`,
+      );
     }
   } catch (e) {
     report.failed = true;
@@ -372,6 +405,15 @@ export async function uninstallAll(ctx) {
   removeDirIfEmpty(p.hookDir);
   for (const f of [p.config, p.manifest, p.off, p.hookLog, `${p.hookLog}.1`]) removeFile(f);
   if (existsSync(p.state)) rmSync(p.state, { recursive: true, force: true });
+  // The Node copy the Windows setup puts here for the hooks. Only now: until every hook is gone, they still use it.
+  const runtime = join(p.home, 'runtime');
+  if (existsSync(runtime)) {
+    try {
+      rmSync(runtime, { recursive: true, force: true });
+    } catch (e) {
+      report.warnings.push(`Could not delete ${runtime} (${/** @type {NodeJS.ErrnoException} */ (e).code ?? 'in use'}). Close Claude Code and Codex, then delete that folder.`);
+    }
+  }
   if (existsSync(p.home) && readdirSync(p.home).length === 0) removeDirIfEmpty(p.home);
   report.lines.push(`Removed Hivemind's files from ${p.home}`);
   return report;
