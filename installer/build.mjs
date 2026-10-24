@@ -1,5 +1,6 @@
 /**
- * Builds the two download bundles a non-technical teammate double-clicks (hivemind-windows.zip, hivemind-mac.zip).
+ * Builds the download bundles a non-technical teammate double-clicks (hivemind-windows.zip, hivemind-mac.zip, and on
+ * Windows hivemind-setup.exe, a self-extracting wrapper around the Windows zip).
  * Each holds an official Node 24 LTS binary, the CLI files the package ships, the smol-toml dependency and a setup launcher.
  *
  *   npm run bundle        (run `npm ci` first: smol-toml is copied from node_modules)
@@ -247,17 +248,20 @@ function setupExe() {
     'PostInstallCmd=%PostInstallCmd%', 'AdminQuietInstCmd=%AdminQuietInstCmd%', 'UserQuietInstCmd=%UserQuietInstCmd%',
     'SourceFiles=SourceFiles',
     '[Strings]', 'InstallPrompt=', 'DisplayLicense=', 'FinishMessage=', `TargetName=${target}`,
-    'FriendlyName=Hivemind Setup', 'AppLaunched=cmd /c install.cmd', 'PostInstallCmd=<None>',
+    'FriendlyName=Hivemind Setup', 'AppLaunched=cmd /c .\\install.cmd', 'PostInstallCmd=<None>',
     'AdminQuietInstCmd=', 'UserQuietInstCmd=', 'FILE0="install.cmd"', 'FILE1="hivemind-windows.zip"',
     '[SourceFiles]', `SourceFiles0=${stage}\\`,
     '[SourceFiles0]', '%FILE0%=', '%FILE1%=', '',
   ].join('\r\n');
   const sedFile = join(stage, 'hivemind-setup.sed');
   writeFileSync(sedFile, sed);
-  const run = spawnSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'iexpress.exe'), ['/N', '/Q', sedFile], { stdio: 'inherit' });
-  if (run.error) throw new Error(`IExpress: ${run.error.message}`);
-  if (!existsSync(target)) throw new Error(`IExpress did not produce ${target} (exit ${run.status})`);
-  rmSync(stage, { recursive: true, force: true });
+  try {
+    const run = spawnSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'iexpress.exe'), ['/N', '/Q', sedFile], { stdio: 'inherit' });
+    if (run.error) throw new Error(`IExpress: ${run.error.message}`);
+    if (run.status !== 0 || !existsSync(target) || statSync(target).size === 0) throw new Error(`IExpress did not produce ${target} (exit ${run.status})`);
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
 }
 
 async function main() {
