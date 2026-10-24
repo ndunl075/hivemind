@@ -25,7 +25,12 @@ rmdir "%DEST%\new"
 
 rem -ExecutionPolicy Bypass applies to this one PowerShell process only; it changes no system setting.
 "%PS%" -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%DEST%\Hivemind\setup-window.ps1"
-exit /b %errorlevel%
+if errorlevel 1 goto :windowfailed
+exit /b 0
+
+:windowfailed
+set "MSG=The Hivemind setup window could not run on this computer. Download hivemind-windows.zip instead, extract it, and run Hivemind Setup.cmd."
+goto :fail
 
 :unpackfailed
 set "MSG=Could not unpack Hivemind into your AppData folder. Download hivemind-windows.zip instead, extract it, and run Hivemind Setup.cmd."
