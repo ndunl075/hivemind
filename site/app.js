@@ -14,17 +14,18 @@
   else if (/Macintosh|Mac OS X/.test(ua)) os = "mac";
   else if (/Windows/.test(ua)) os = "windows";
   var names = { windows: "Windows", mac: "Mac" };
+  var files = { windows: "hivemind-setup.exe", mac: "hivemind-mac.zip" }; // release asset per OS
   var main = document.getElementById("dl-main");
   var alt = document.getElementById("dl-alt");
   if (os === "both") {
-    main.href = base + "hivemind-windows.zip";
-    alt.href = base + "hivemind-mac.zip";
+    main.href = base + files.windows;
+    alt.href = base + files.mac;
     document.getElementById("dl-note").hidden = false;
   } else {
     var other = os === "mac" ? "windows" : "mac";
-    main.href = base + "hivemind-" + os + ".zip";
+    main.href = base + files[os];
     main.textContent = "Download for " + names[os];
-    alt.href = base + "hivemind-" + other + ".zip";
+    alt.href = base + files[other];
     alt.textContent = "Download for " + names[other];
   }
 
