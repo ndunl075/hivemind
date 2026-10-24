@@ -10,8 +10,8 @@ import { readBlock } from './codex-config.mjs';
 import { paths } from './context.mjs';
 import { readJsonObject, readText } from './files.mjs';
 import { oursMatcher } from './hooks-merge.mjs';
-import { HELPER_CMD_FILE, HELPER_FILE, HOOK_FILES, readConfig, readManifest } from './install.mjs';
-import { ALLOW_RULE, CLAUDE_SPECS, CODEX_SPECS, isOurHelper } from './registrations.mjs';
+import { HELPER_CMD_FILE, HELPER_FILE, HOOK_FILES, claudeConfigEntry, isOurClaudeEntry, readConfig, readManifest } from './install.mjs';
+import { ALLOW_RULE, CLAUDE_SPECS, CODEX_SPECS } from './registrations.mjs';
 import { identity } from '../hook/git.mjs';
 
 export const SELF_TEST_PROMPT = [
@@ -98,10 +98,14 @@ export async function doctor(argv, ctx) {
       const allow = settings.permissions?.allow;
       line(Array.isArray(allow) && allow.includes(ALLOW_RULE) ? 'ok' : 'FAIL', `Claude Code: permission rule "${ALLOW_RULE}" ${Array.isArray(allow) && allow.includes(ALLOW_RULE) ? 'present' : 'missing (tools would prompt); run hivemind update'}`);
       const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
+      // `claude mcp get` doesn't print the headers helper, so ownership and URL are read from Claude's config file.
+      const { entry } = claudeConfigEntry(ctx);
+      const missing = /No MCP server named/i.test(`${got.stdout}\n${got.stderr}`);
       if (got.code === 127) line('warn', 'Claude Code: the "claude" program is not on PATH, so the MCP server was not checked');
+      else if (got.code !== 0 && !missing) line('warn', `Claude Code: "claude" could not be run, so the MCP server was not checked`);
       else if (got.code !== 0) line('FAIL', 'Claude Code: MCP server "hivemind" is missing; run hivemind update');
-      else if (!isOurHelper(got.stdout, p.helperScript, p.helperCmd) && !manifest?.claude.mcp) line('FAIL', 'Claude Code: the MCP server named "hivemind" is not the Hivemind one (its helper is not ours); rename or remove it, then run hivemind update');
-      else if (!got.stdout.includes(`${normalizeServer(config.server)}/mcp`)) line('FAIL', 'Claude Code: MCP server "hivemind" points at a different URL than config.json; run hivemind update');
+      else if (!isOurClaudeEntry(got, entry, p)) line('FAIL', 'Claude Code: the MCP server named "hivemind" is not the Hivemind one (its helper is not ours); rename or remove it, then run hivemind update');
+      else if ((typeof entry?.url === 'string' ? entry.url : got.stdout).indexOf(`${normalizeServer(config.server)}/mcp`) === -1) line('FAIL', 'Claude Code: MCP server "hivemind" points at a different URL than config.json; run hivemind update');
       else line('ok', 'Claude Code: MCP server "hivemind" is set up and is ours');
     }
   } catch (e) {

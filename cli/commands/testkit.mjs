@@ -39,7 +39,8 @@ export function makeProject(base, name = 'proj') {
 
 /**
  * The stubbed `claude` and `codex`. `claude mcp ...` keeps its servers in <home>/.claude.json like the real one, so
- * tests can check that other servers survive. Every call is recorded in `calls`.
+ * tests can check that other servers survive. Every call is recorded in `calls`. Like the real CLI (2.1.x), `mcp get`
+ * prints the type and URL but not the headers helper, and a missing name exits 1 with "No MCP server named ...".
  */
 export function makeRunner(home, { claude = true, codex = true } = {}) {
   const calls = [];
@@ -56,7 +57,9 @@ export function makeRunner(home, { claude = true, codex = true } = {}) {
       o.mcpServers ??= {};
       if (args[1] === 'get') {
         const s = o.mcpServers[args[2]];
-        return s ? { code: 0, stdout: `${args[2]}:\n  Type: ${s.type}\n  URL: ${s.url}\n  Headers helper: ${s.headersHelper}\n`, stderr: '' } : { code: 1, stdout: '', stderr: 'No MCP server found' };
+        return s
+          ? { code: 0, stdout: `${args[2]}:\n  Scope: User config (available in all your projects)\n  Type: ${s.type}\n  URL: ${s.url}\n`, stderr: '' }
+          : { code: 1, stdout: `No MCP server named "${args[2]}". Configured servers: ${Object.keys(o.mcpServers).join(', ')}\n`, stderr: '' };
       }
       if (args[1] === 'add-json') {
         if (args[2] !== '--scope' || args[3] !== 'user') return { code: 1, stdout: '', stderr: 'scope?' };
