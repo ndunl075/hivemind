@@ -241,7 +241,7 @@ function setupExe() {
   rmSync(target, { force: true });
   const sed = [
     '[Version]', 'Class=IEXPRESS', 'SEDVersion=3',
-    '[Options]', 'PackagePurpose=InstallApp', 'ShowInstallProgramWindow=0', 'HideExtractAnimation=1', 'UseLongFileName=1',
+    '[Options]', 'PackagePurpose=InstallApp', 'ShowInstallProgramWindow=1', 'HideExtractAnimation=1', 'UseLongFileName=1',
     'InsideCompressed=0', 'CAB_FixedSize=0', 'CAB_ResvCodeSigning=0', 'RebootMode=N',
     'InstallPrompt=%InstallPrompt%', 'DisplayLicense=%DisplayLicense%', 'FinishMessage=%FinishMessage%',
     'TargetName=%TargetName%', 'FriendlyName=%FriendlyName%', 'AppLaunched=%AppLaunched%',
@@ -271,6 +271,7 @@ async function main() {
   const winNode = await fetchNode('win-x64/node.exe');
   writeFileSync(join(outDir, 'hivemind-windows.zip'), zip([
     { name: 'Hivemind/Hivemind Setup.cmd', data: template('windows-setup.cmd', '\r\n') },
+    { name: 'Hivemind/setup-window.ps1', data: template('setup-window.ps1', '\r\n') },
     { name: 'Hivemind/README.txt', data: template('README-windows.txt', '\r\n') },
     { name: 'Hivemind/node/node.exe', data: winNode },
     ...app,
