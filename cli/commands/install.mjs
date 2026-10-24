@@ -23,6 +23,8 @@ export const HOOK_FILES = ['hook.mjs', 'claude.mjs', 'codex.mjs', 'git.mjs', 'li
 export const HELPER_FILE = 'headers-helper.mjs';
 /** The Windows wrapper that runs it (written on Windows only, removed everywhere). */
 export const HELPER_CMD_FILE = 'headers-helper.cmd';
+/** The Node the download's setup copies into <home>/runtime (Windows, Mac), and its temporary names. */
+const RUNTIME_FILES = ['node.exe', 'node.exe.new', 'node', 'node.new'];
 
 /**
  * @typedef {{ server: string, room: string, person: string, token: string, repos: string[] }} HivemindConfig
@@ -181,7 +183,7 @@ async function registerClaude(ctx, config, manifest, claudeOnPath, report) {
   }
   const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
   if (got.code === 0) {
-    const entry = claudeConfigEntry(ctx);
+    const { entry } = claudeConfigEntry(ctx);
     // An entry named "hivemind" that is not ours belongs to the user: never replace it.
     if (!isOurClaudeEntry(got, entry, p) && !manifest.claude.mcp) {
       throw new CliError(
@@ -276,22 +278,28 @@ export async function installAll(ctx, config) {
  * @param {string} s
  */
 function firstLine(s) {
-  return s.trim().split('\n')[0] || 'no message';
+  return s.trim().split(/\r?\n/)[0] || 'no message';
 }
 
 /**
  * Hivemind's entry in Claude Code's user config, read from the file. `claude mcp get` prints the type and URL but not
- * the headers helper, and the helper path is how our entry is told apart from one the user made.
+ * the headers helper, and the helper path is how our entry is told apart from one the user made. Claude Code keeps
+ * user-scope servers in .claude.json (in CLAUDE_CONFIG_DIR, else the home folder), or in a legacy .config.json when
+ * one exists. `readable` is false only when the file exists but can't be parsed.
  * @param {Context} ctx
- * @returns {{ url?: unknown, headersHelper?: unknown } | null}
+ * @returns {{ file: string, readable: boolean, entry: { url?: unknown, headersHelper?: unknown } | null }}
  */
-function claudeConfigEntry(ctx) {
+export function claudeConfigEntry(ctx) {
+  const dir = ctx.env.CLAUDE_CONFIG_DIR;
+  const legacy = dir ? join(dir, '.config.json') : join(ctx.homedir, '.claude', '.config.json');
+  const current = join(dir || ctx.homedir, '.claude.json');
+  const file = existsSync(legacy) ? legacy : current;
   try {
-    const { value } = readJsonObject(join(ctx.env.CLAUDE_CONFIG_DIR || ctx.homedir, '.claude.json'), {});
+    const { value } = readJsonObject(file, {});
     const entry = value.mcpServers?.hivemind;
-    return entry && typeof entry === 'object' ? entry : null;
+    return { file, readable: true, entry: entry && typeof entry === 'object' ? entry : null };
   } catch {
-    return null;
+    return { file, readable: false, entry: null };
   }
 }
 
@@ -301,7 +309,7 @@ function claudeConfigEntry(ctx) {
  * @param {{ headersHelper?: unknown } | null} entry
  * @param {ReturnType<typeof paths>} p
  */
-function isOurClaudeEntry(got, entry, p) {
+export function isOurClaudeEntry(got, entry, p) {
   const helper = typeof entry?.headersHelper === 'string' ? entry.headersHelper : '';
   return isOurHelper(`${got.stdout}\n${helper}`, p.helperScript, p.helperCmd);
 }
@@ -343,7 +351,7 @@ export async function uninstallAll(ctx) {
   try {
     const got = await ctx.runner('claude', ['mcp', 'get', 'hivemind']);
     if (got.code === 0) {
-      if (isOurClaudeEntry(got, claudeConfigEntry(ctx), p)) {
+      if (isOurClaudeEntry(got, claudeConfigEntry(ctx).entry, p)) {
         const r = await ctx.runner('claude', ['mcp', 'remove', '--scope', 'user', 'hivemind']);
         if (r.code === 0) report.lines.push('Claude Code: MCP server "hivemind" removed');
         else {
@@ -353,14 +361,18 @@ export async function uninstallAll(ctx) {
       } else {
         report.lines.push('Claude Code: the MCP server named "hivemind" is not the Hivemind one, so it was left alone');
       }
-    } else if (!/No MCP server named/i.test(`${got.stdout}\n${got.stderr}`) && (manifest?.claude.mcp === true || claudeConfigEntry(ctx))) {
-      // claude could not be run (127, or on Windows the shell fallback's "not recognized", exit 1): say so, never skip.
-      report.failed = true;
-      report.warnings.push(
-        got.code === 127
-          ? 'Claude Code: the "claude" program was not found, so the MCP server could not be removed. Put it on your PATH, or run: claude mcp remove --scope user hivemind'
-          : `Claude Code: could not check the MCP server (${firstLine(got.stderr || got.stdout) || `exit ${got.code}`}). Run: claude mcp remove --scope user hivemind`,
-      );
+    } else if (!/No MCP server named/i.test(`${got.stdout}\n${got.stderr}`)) {
+      // claude could not be run (127, or on Windows the shell fallback's "not recognized", exit 1). Decide from the
+      // config file: our entry still there means say so and keep the record; no entry, or the user's own, is fine.
+      const cfg = claudeConfigEntry(ctx);
+      const ours = cfg.entry !== null && isOurClaudeEntry({ stdout: '' }, cfg.entry, p);
+      if (ours || (!cfg.readable && manifest?.claude.mcp === true)) {
+        report.failed = true;
+        const why = got.code === 127 ? 'the "claude" program was not found' : `"claude" could not be run (${firstLine(got.stderr || got.stdout)})`;
+        report.warnings.push(
+          `Claude Code: ${why}, so the MCP server could not be removed. Run: claude mcp remove --scope user hivemind (or delete "hivemind" under "mcpServers" in ${cfg.file}), then run hivemind leave again.`,
+        );
+      }
     }
   } catch (e) {
     report.failed = true;
@@ -406,12 +418,16 @@ export async function uninstallAll(ctx) {
   for (const f of [p.config, p.manifest, p.off, p.hookLog, `${p.hookLog}.1`]) removeFile(f);
   if (existsSync(p.state)) rmSync(p.state, { recursive: true, force: true });
   // The Node copy the Windows setup puts here for the hooks. Only now: until every hook is gone, they still use it.
+  // Only the files the setup writes there; anything else in that folder is left alone.
   const runtime = join(p.home, 'runtime');
   if (existsSync(runtime)) {
     try {
-      rmSync(runtime, { recursive: true, force: true });
+      for (const f of RUNTIME_FILES) removeFile(join(runtime, f));
+      removeDirIfEmpty(runtime);
     } catch (e) {
-      report.warnings.push(`Could not delete ${runtime} (${/** @type {NodeJS.ErrnoException} */ (e).code ?? 'in use'}). Close Claude Code and Codex, then delete that folder.`);
+      report.warnings.push(
+        `Could not delete ${runtime} (${/** @type {NodeJS.ErrnoException} */ (e).code ?? 'in use'}): the Node in it is still running, maybe this very command. Close Claude Code, Codex and this window, then delete that folder.`,
+      );
     }
   }
   if (existsSync(p.home) && readdirSync(p.home).length === 0) removeDirIfEmpty(p.home);

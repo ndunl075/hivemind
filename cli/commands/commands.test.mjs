@@ -879,7 +879,58 @@ describe('leave when something cannot be removed', () => {
   });
 });
 
+describe('leave when claude cannot be run', () => {
+  const unrecognizedFor = (lap) => async (cmd, args, opts) => (cmd === 'claude'
+    ? { code: 1, stdout: '', stderr: "'\"claude\"' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n" }
+    : lap.stub.runner(cmd, args, opts));
+
+  it("never tells the user to remove their own \"hivemind\" entry, and finishes", async () => {
+    const lap = laptop();
+    const theirs = { type: 'stdio', command: 'my-own-server' };
+    write(lap.path('.claude.json'), `${JSON.stringify({ mcpServers: { hivemind: theirs } }, null, 2)}\n`);
+    await lap.run(main, ['join', '--server', SERVER, '--yes']);
+    const r = await lap.run(main, ['leave'], { runner: unrecognizedFor(lap) });
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).not.toContain('claude mcp remove');
+    expect(readJson(lap.path('.claude.json')).mcpServers.hivemind).toEqual(theirs);
+    expect(existsSync(lap.path('.hivemind', 'install.json'))).toBe(false);
+  });
+
+  it('finishes when our entry is already gone from the config file, even though join recorded adding it', async () => {
+    const lap = laptop();
+    await join_(lap);
+    const file = readJson(lap.path('.claude.json'));
+    delete file.mcpServers.hivemind;
+    writeFileSync(lap.path('.claude.json'), JSON.stringify(file));
+    const r = await lap.run(main, ['leave'], { runner: async (cmd, args, opts) => (cmd === 'claude' ? { code: 127, stdout: '', stderr: 'not found' } : lap.stub.runner(cmd, args, opts)) });
+    expect(r.code, r.err).toBe(0);
+    expect(existsSync(lap.path('.hivemind', 'install.json'))).toBe(false);
+  });
+
+  it('reads a legacy .claude/.config.json and names that file in what to do', async () => {
+    const lap = laptop();
+    await join_(lap);
+    const ours = readJson(lap.path('.claude.json')).mcpServers.hivemind;
+    write(lap.path('.claude', '.config.json'), JSON.stringify({ mcpServers: { hivemind: ours } }));
+    const r = await lap.run(main, ['leave'], { runner: unrecognizedFor(lap) });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(lap.path('.claude', '.config.json'));
+    expect(r.err).not.toContain('\r');
+  });
+});
+
 describe('leave and the copied Node runtime', () => {
+  it('removes only the Node it put in runtime/, leaving anything else there', async () => {
+    const lap = laptop();
+    await join_(lap);
+    write(lap.path('.hivemind', 'runtime', 'node.exe'), 'not really node');
+    write(lap.path('.hivemind', 'runtime', 'notes.txt'), 'mine');
+    const r = await lap.run(main, ['leave']);
+    expect(r.code, r.err).toBe(0);
+    expect(existsSync(lap.path('.hivemind', 'runtime', 'node.exe'))).toBe(false);
+    expect(readFileSync(lap.path('.hivemind', 'runtime', 'notes.txt'), 'utf8')).toBe('mine');
+  });
+
   it('deletes the runtime folder the Windows setup copies Node into', async () => {
     const lap = laptop();
     await join_(lap);
