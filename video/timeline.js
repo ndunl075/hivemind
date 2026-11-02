@@ -1,242 +1,234 @@
 // Deterministic timeline: renderFrame(t) sets every property from time t alone,
-// so any frame can be rendered in any order.
+// so any frame renders the same in any order. Cuts sit on a 120 BPM grid (0.5 s beats).
 (function () {
-  var DUR = 49, FPS = 60;
+  var DUR = 28, FPS = 60;
 
-  // cubic-bezier solver
   function bez(x1, y1, x2, y2) {
-    function a(p1, p2) { return 1 - 3 * p2 + 3 * p1; }
-    function b(p1, p2) { return 3 * p2 - 6 * p1; }
-    function c(p1) { return 3 * p1; }
-    function at(t, p1, p2) { return ((a(p1, p2) * t + b(p1, p2)) * t + c(p1)) * t; }
-    function slope(t, p1, p2) { return 3 * a(p1, p2) * t * t + 2 * b(p1, p2) * t + c(p1); }
+    function A(a, b) { return 1 - 3 * b + 3 * a; }
+    function B(a, b) { return 3 * b - 6 * a; }
+    function C(a) { return 3 * a; }
+    function at(t, a, b) { return ((A(a, b) * t + B(a, b)) * t + C(a)) * t; }
     return function (x) {
       if (x <= 0) return 0; if (x >= 1) return 1;
-      var t = x;
-      for (var i = 0; i < 8; i++) {
-        var s = slope(t, x1, x2); if (Math.abs(s) < 1e-6) break;
-        t -= (at(t, x1, x2) - x) / s;
-      }
-      var lo = 0, hi = 1;
-      for (var j = 0; j < 20 && Math.abs(at(t, x1, x2) - x) > 1e-6; j++) {
-        if (at(t, x1, x2) < x) lo = t; else hi = t; t = (lo + hi) / 2;
-      }
+      var lo = 0, hi = 1, t = x;
+      for (var i = 0; i < 40; i++) { var v = at(t, x1, x2); if (Math.abs(v - x) < 1e-7) break; if (v < x) lo = t; else hi = t; t = (lo + hi) / 2; }
       return at(t, y1, y2);
     };
   }
   var E = {
-    out: bez(0.16, 1, 0.3, 1),     // expo-like decelerate
-    soft: bez(0.25, 1, 0.5, 1),    // quart out
-    io: bez(0.65, 0, 0.35, 1),     // symmetric in-out
-    inn: bez(0.55, 0, 0.75, 0.2),  // accelerate out of frame
+    out: bez(0.16, 1, 0.3, 1),   // fast arrival, long settle
+    io: bez(0.83, 0, 0.17, 1),   // whip moves
+    inn: bez(0.7, 0, 0.84, 0),   // exits
     lin: function (x) { return x; }
   };
   function clamp(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
   function p(t, a, b, e) { return (e || E.out)(clamp((t - a) / (b - a))); }
   function lerp(a, b, k) { return a + (b - a) * k; }
   function $(s) { return document.querySelector(s); }
-  function $$(s) { return Array.prototype.slice.call(document.querySelectorAll(s)); }
+  function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
+  // keyframe track: [[t, v], [t, v, ease], ...]; ease applies to the segment ending at that key
+  function track(t, keys) {
+    if (t <= keys[0][0]) return keys[0][1];
+    for (var i = 1; i < keys.length; i++) {
+      if (t <= keys[i][0]) {
+        var a = keys[i - 1], b = keys[i], k = (keys[i][2] || E.io)(clamp((t - a[0]) / (b[0] - a[0])));
+        return Array.isArray(a[1]) ? a[1].map(function (v, j) { return lerp(v, b[1][j], k); }) : lerp(a[1], b[1], k);
+      }
+    }
+    return keys[keys.length - 1][1];
+  }
+  function show(el, on) { el.style.visibility = on ? "visible" : "hidden"; }
+  // scenes and blocks toggle display, so nothing inside them can leak past their window
+  function on(el, v) { el.style.display = v ? "" : "none"; }
+  function win(id, t, a, b) { var v = t >= a && t < b; on($(id), v); if (v) $(id).style.visibility = "visible"; return v; }
+  // masked line: slides up into its mask, and out of the top on exit
+  function mask(el, t, tin, tout, dur) {
+    var ki = p(t, tin, tin + (dur || 0.45), E.out);
+    var ko = tout == null ? 0 : p(t, tout, tout + 0.3, E.inn);
+    el.style.transform = "translate3d(0," + ((1 - ki) * 105 - ko * 105) + "%,0)";
+  }
+  function inner(sel) { return $$(sel + " .mask > span"); }
+  function offsetIn(el, root) {
+    var x = 0, y = 0;
+    while (el && el !== root) { x += el.offsetLeft; y += el.offsetTop; el = el.offsetParent; }
+    return { x: x, y: y };
+  }
 
-  // split headlines into masked words
-  var splits = {};
-  $$(".split").forEach(function (el) {
-    var words = el.textContent.trim().split(/\s+/);
-    el.innerHTML = '<span class="line">' + words.map(function (w) { return '<span class="word">' + w + "</span>"; }).join(" ") + "</span>";
-    splits[el.dataset.k] = $$('[data-k="' + el.dataset.k + '"] .word');
+  // ---------- chrome ----------
+  var secs = $$("#sec span");
+  var secCuts = [[0, 0], [11.0, 1], [17.5, 2], [20.5, 3]];
+  function chrome(t) {
+    var vis = (t >= 0 && t < 5.75) || (t >= 11.0 && t < 20.5);
+    on($("#chrome"), vis);
+    var cur = 0, at = -1, prev = -1;
+    secCuts.forEach(function (c, i) { if (t >= c[0]) { prev = i ? secCuts[i - 1][1] : -1; cur = c[1]; at = c[0]; } });
+    var k = p(t, at + 0.05, at + 0.4, E.out);
+    secs.forEach(function (s, i) {
+      var y = 100;
+      if (i === cur) y = (1 - k) * 100;
+      else if (i === prev && at > 11.0) y = -k * 100;
+      s.style.transform = "translate3d(0," + y + "%,0)";
+    });
+  }
+
+  // ---------- terminal lines ----------
+  var lines = $$("#c1 .ln").map(function (el) {
+    var body = el.querySelector(".body");
+    return { el: el, t: +el.dataset.t, typed: el.hasAttribute("data-type"), body: body, text: body.textContent };
   });
-  function words(key, t, tin, tout) {
-    var ws = splits[key];
-    ws.forEach(function (w, i) {
-      var ki = p(t, tin + i * 0.045, tin + i * 0.045 + 0.95, E.out);
-      var ko = tout == null ? 0 : p(t, tout + i * 0.025, tout + i * 0.025 + 0.55, E.inn);
-      w.style.transform = "translate3d(0," + ((1 - ki) * 108 - ko * 108) + "%,0)";
-    });
+  var cursor = document.createElement("span"); cursor.className = "cursor";
+  var boardSpans = $$("#slot span");
+  var boardCuts = [[11.0, 0], [12.27, 1], [14.12, 2], [15.85, 3], [16.6, 4]];
+  var cam = $("#cam"), flight = $("#flight");
+  var fromPt, toPt;
+  function measure() {
+    var s = offsetIn($("#send"), cam), d = offsetIn($("#land"), cam);
+    fromPt = { x: s.x + 40, y: s.y + 36 };
+    toPt = { x: d.x, y: d.y };
   }
-  // fade + rise in, fade + lift out
-  function rise(el, t, tin, tout, dy, dur) {
-    dy = dy == null ? 28 : dy; dur = dur || 0.9;
-    var ki = p(t, tin, tin + dur, E.out);
-    var ko = tout == null ? 0 : p(t, tout, tout + 0.55, E.inn);
-    el.style.opacity = ki * (1 - ko);
-    el.style.transform = "translate3d(0," + ((1 - ki) * dy - ko * 16) + "px,0)";
-  }
-  function scene(id, t, a, b) {
-    var el = $(id); var on = t >= a && t < b;
-    el.style.opacity = on ? 1 : 0; el.style.visibility = on ? "visible" : "hidden";
-    return on;
-  }
-
-  // film grain, a few fixed noise tiles cycled per frame
-  var grain = $("#grain"), gctx = grain.getContext("2d"), tiles = [];
-  var seed = 1; function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
-  for (var g = 0; g < 6; g++) {
-    var img = gctx.createImageData(960, 540);
-    for (var i = 0; i < img.data.length; i += 4) { var v = rnd() * 255 | 0; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255; }
-    tiles.push(img);
-  }
-
-  if (/[?&]bgonly/.test(location.search)) document.documentElement.classList.add("bgonly");
-
-  // connectors from each agent card down to the file chip
-  (function () {
-    var file = $("#s3-file"), fy = file.offsetTop, fx = 960;
-    [["#s3-ana", "#s3-la", -150], ["#s3-nico", "#s3-lb", 150]].forEach(function (c) {
-      var card = $(c[0]), x = card.offsetLeft + card.offsetWidth / 2, y = card.offsetTop + card.offsetHeight;
-      var ex = fx + c[2], my = (y + fy) / 2;
-      $(c[1]).setAttribute("d", "M " + x + " " + y + " C " + x + " " + my + ", " + ex + " " + my + ", " + ex + " " + fy);
-    });
-  })();
-
-  var boardCodes = $$("#board code");
-  var laItems = $$("#la li"), lnItems = $$("#ln li");
-  var demoSteps = [
-    [laItems[0], 20.6, null], [laItems[1], 21.7, 1], [lnItems[0], 22.9, null], [lnItems[1], 23.9, null],
-    [lnItems[2], 25.3, 2], [laItems[2], 26.6, null], [laItems[3], 27.9, 3], [lnItems[3], 29.0, 4]
-  ];
 
   function renderFrame(t) {
-    var frame = Math.round(t * FPS);
-    gctx.putImageData(tiles[frame % tiles.length], 0, 0);
+    chrome(t);
 
-    // backdrop: slow, constant drift
-    $("#bg").style.transform = "translate3d(" + (-t * 0.9) + "px," + (-t * 0.35) + "px,0)";
-
-    // 1. logo build
-    if (scene("#s1", t, 0, 4.45)) {
-      var da = p(t, 0.35, 1.65, E.io), db = p(t, 0.6, 1.9, E.io);
-      $("#s1-a").style.strokeDashoffset = 1 - da;
-      $("#s1-b").style.strokeDashoffset = 1 - db;
-      var kc = p(t, 1.5, 2.4, E.out);
-      $("#s1-core").style.opacity = kc;
-      $("#s1-core").style.transform = "scale(" + lerp(0.55, 1, kc) + ")";
-      var mark = $("#s1-mark"), word = $("#s1-word");
-      var shift = (word.offsetWidth + 40) / 2;
-      var kl = p(t, 2.2, 3.3, E.io);
-      mark.style.transform = "translate3d(" + lerp(shift, 0, kl) + "px,0,0)";
-      var kw = p(t, 2.45, 3.45, E.out);
-      word.style.clipPath = "inset(-10% " + ((1 - kw) * 100) + "% -10% 0)";
-      word.style.transform = "translate3d(" + lerp(shift - 60, 0, p(t, 2.2, 3.3, E.io)) + "px,0,0)";
-      var ko = p(t, 3.85, 4.45, E.inn);
-      $("#s1-lock").style.opacity = 1 - ko;
-      $("#s1-lock").style.transform = "scale(" + lerp(1, 0.97, ko) + ")";
+    // A1: two agents, one file
+    if (win("#a1", t, 0, 1.5)) {
+      mask($("#a1-l1"), t, 0.06, 1.2);
+      mask($("#a1-l2"), t, 0.75, 1.25);
     }
 
-    // 2. problem
-    if (scene("#s2", t, 4.3, 8.3)) {
-      words("s2a", t, 4.45, 7.5);
-      words("s2b", t, 5.35, 7.62);
+    // A2: the collision
+    if (win("#a2", t, 1.5, 4.0)) {
+      var punch = t >= 2.75 ? 0.035 * Math.exp(-(t - 2.75) * 9) : 0;
+      $("#a2-cam").style.transform = "scale(" + (lerp(1, 1.05, p(t, 1.5, 4.0, E.lin)) + punch) + ")";
+      $("#a-path").parentElement.style.transform = "";
+      mask($("#a-path"), t, 1.5, null, 0.5);
+      var ka = p(t, 1.62, 2.1), kn = p(t, 1.82, 2.3);
+      $("#a2-ana").style.transform = "translate3d(" + ((1 - ka) * -900) + "px,0,0)";
+      $("#a2-nico").style.transform = "translate3d(" + ((1 - kn) * -900) + "px,0,0)";
+      var hit = t >= 2.75;
+      $("#a2-ana-s").textContent = hit ? "overwritten" : t >= 2.25 ? "writing" : "editing";
+      $("#a2-nico-s").textContent = t >= 2.25 ? "writing" : "editing";
+      $("#a2-ana-s").style.color = hit ? "var(--bad)" : "";
+      $("#a-path").style.color = hit ? "var(--bad)" : "";
+      $("#a-strike").style.transform = "scaleX(" + p(t, 2.75, 3.05) + ")";
+      mask($("#a2-k .mask > span"), t, 3.05, null, 0.4);
     }
 
-    // 3. collision
-    if (scene("#s3", t, 8.0, 14.6)) {
-      var x3 = 13.9;
-      rise($("#s3-label"), t, 8.1, x3, 16);
-      var ka = p(t, 8.2, 9.1), kn = p(t, 8.35, 9.25), ko3 = p(t, x3, x3 + 0.6, E.inn);
-      $("#s3-ana").style.opacity = ka * (1 - ko3);
-      $("#s3-ana").style.transform = "translate3d(" + ((1 - ka) * -70) + "px," + (-ko3 * 16) + "px,0)";
-      $("#s3-nico").style.opacity = kn * (1 - ko3);
-      $("#s3-nico").style.transform = "translate3d(" + ((1 - kn) * 70) + "px," + (-ko3 * 16) + "px,0)";
-      var kf = p(t, 8.6, 9.4);
-      var file = $("#s3-file");
-      file.style.opacity = kf * (1 - ko3);
-      file.style.transform = "translate3d(-50%," + ((1 - kf) * 24 - ko3 * 16) + "px,0)";
-      var la = p(t, 9.4, 10.5, E.io), lb = p(t, 9.6, 10.6, E.io);
-      $("#s3-la").style.strokeDashoffset = 1 - la; $("#s3-lb").style.strokeDashoffset = 1 - lb;
-      $("#s3-la").style.opacity = $("#s3-lb").style.opacity = 1 - ko3;
-      var hit = t >= 10.6, chip = $("#s3-chip");
-      chip.textContent = hit ? "conflict" : (t >= 9.6 ? "2 writers" : "idle");
-      chip.className = "chip " + (hit ? "bad" : t >= 9.6 ? "acc" : "dim");
-      var kr = p(t, 10.6, 11.0, E.soft);
-      file.style.borderColor = hit ? "rgba(255,179,179," + lerp(0.22, 1, kr) + ")" : "";
-      file.style.boxShadow = hit ? "0 0 0 " + (kr * 10) + "px rgba(255,179,179," + (0.22 * (1 - p(t, 10.8, 11.8, E.soft))) + ")" : "";
-      var ast = $("#s3-ast");
-      ast.textContent = t >= 10.9 ? "overwritten" : "writing";
-      ast.style.color = t >= 10.9 ? "var(--bad)" : "var(--ok)";
-      $$(".s3c").forEach(function (el, i) { rise(el, t, 11.2 + i * 0.25, x3 - 0.1 + i * 0.05, 14); });
-    }
-
-    // 4. introducing
-    if (scene("#s4", t, 14.4, 19.2)) {
-      var ki4 = p(t, 14.55, 15.5), ko4 = p(t, 18.45, 19.0, E.inn);
-      var tile = $("#s4-tile");
-      tile.style.opacity = ki4 * (1 - ko4);
-      tile.style.transform = "translate3d(0," + (-ko4 * 16) + "px,0) scale(" + lerp(0.86, 1, ki4) + ")";
-      words("s4a", t, 15.0, 18.4);
-      words("s4b", t, 15.3, 18.5);
-      rise($("#s4-sub"), t, 16.3, 18.45, 14);
-    }
-
-    // 5. demo
-    if (scene("#s5", t, 19.0, 31.6)) {
-      var x5 = 30.9;
-      rise($("#s5-label"), t, 19.1, x5, 14);
-      words("s5a", t, 19.2, x5);
-      var stage = $("#s5-stage");
-      var ks = p(t, 19.45, 20.5), kso = p(t, x5, x5 + 0.6, E.inn);
-      var push = lerp(1, 1.03, p(t, 19.45, 31.5, E.lin));
-      stage.style.opacity = ks * (1 - kso);
-      stage.style.transform = "translate3d(0," + ((1 - ks) * 60 - kso * 20) + "px,0) scale(" + push + ")";
-      var boardIdx = 0;
-      demoSteps.forEach(function (s) {
-        var k = p(t, s[1], s[1] + 0.55, E.soft);
-        s[0].style.opacity = k;
-        s[0].style.transform = "translate3d(0," + ((1 - k) * 10) + "px,0)";
-        if (s[2] != null && t >= s[1]) boardIdx = s[2];
-      });
-      // board text: crossfade to the latest state
-      var lastChange = 0;
-      demoSteps.forEach(function (s) { if (s[2] != null && t >= s[1]) lastChange = s[1]; });
-      var kb = lastChange ? p(t, lastChange, lastChange + 0.45, E.soft) : 1;
-      var prev = 0;
-      demoSteps.forEach(function (s) { if (s[2] != null && s[1] < lastChange) prev = s[2]; });
-      boardCodes.forEach(function (c, i) {
-        var o = 0, y = 0;
-        if (i === boardIdx) { o = kb; y = (1 - kb) * 10; }
-        else if (i === prev && kb < 1) { o = 1 - kb; y = -kb * 10; }
-        c.style.opacity = o; c.style.transform = "translate3d(0," + y + "px,0)";
+    // A3: consequences, one per beat
+    if (win("#a3", t, 4.0, 5.75)) {
+      var blocks = $$("#a3 > div");
+      blocks.forEach(function (b, i) {
+        var a = 4.0 + i * 0.5, z = i < 2 ? a + 0.5 : 5.75;
+        on(b, t >= a && t < z);
+        var spans = $$(".mask > span", b);
+        spans.forEach(function (s, j) { mask(s, t, a + j * 0.04, i === 2 ? 5.42 : null, 0.32); });
       });
     }
 
-    // 6. features
-    if (scene("#s6", t, 31.4, 37.7)) {
-      ["#f1", "#f2", "#f3"].forEach(function (id, i) {
-        var f = $(id), t0 = 31.6 + i * 0.28, tout = 37.0 + i * 0.06;
-        rise(f.querySelector(".label"), t, t0, tout, 16);
-        rise(f.querySelector("h3"), t, t0 + 0.1, tout, 22);
-        rise(f.querySelector(".card"), t, t0 + 0.25, tout, 40, 1.0);
-        $$(id + " .row").forEach(function (r, j) {
-          var k = p(t, t0 + 0.6 + j * 0.14, t0 + 1.2 + j * 0.14, E.soft);
-          r.style.opacity = k; r.style.transform = "translate3d(0," + ((1 - k) * 8) + "px,0)";
-        });
+    // B1: mark builds, its core floods the frame, wordmark lands
+    if (win("#b1", t, 5.75, 8.5)) {
+      $("#b1-a").style.strokeDashoffset = 1 - p(t, 5.85, 6.35, E.io);
+      $("#b1-b").style.strokeDashoffset = 1 - p(t, 5.97, 6.47, E.io);
+      var kc = p(t, 6.3, 6.75);
+      $("#b1-core").style.transform = "scale(" + kc + ")";
+      var S = lerp(1, 24, p(t, 7.0, 7.5, bez(0.7, 0, 0.9, 0.35)));
+      $("#b1-g").style.transform = "scale(" + S + ")";
+      on($("#flood"), t >= 7.0 && S >= 20);
+      on($("#b1-mark"), !(S >= 20));
+      on($("#b1-word"), t >= 7.4);
+      mask($("#b1-word .mask > span"), t, 7.45, null, 0.55);
+    }
+
+    // B2: positioning
+    if (win("#b2", t, 8.5, 11.0)) {
+      mask($("#b2-l1"), t, 8.5, 10.6);
+      mask($("#b2-l2"), t, 8.6, 10.64);
+      mask($("#b2-k"), t, 9.1, 10.68, 0.4);
+    }
+
+    // C1: the product, live
+    if (win("#c1", t, 11.0, 17.5)) {
+      var cpos = track(t, [
+        [11.0, [960, 540, 1]], [12.45, [960, 540, 1]],
+        [12.85, [1386, 420, 1.5]], [14.2, [1386, 440, 1.52], E.lin],
+        [14.6, [960, 540, 1]], [17.5, [960, 540, 1.04], E.lin]
+      ]);
+      var punch2 = t >= 13.0 ? 0.05 * Math.exp(-(t - 13.0) * 10) * (t < 14.2 ? 1 : 0) : 0;
+      var s = cpos[2] + punch2;
+      cam.style.transform = "translate(" + (960 - cpos[0] * s) + "px," + (540 - cpos[1] * s) + "px) scale(" + s + ")";
+      [["#pa", 11.0], ["#pn", 11.08]].forEach(function (q) {
+        var k = p(t, q[1], q[1] + 0.5);
+        $(q[0]).style.clipPath = "inset(0 0 " + ((1 - k) * 100) + "% 0 round 16px)";
+      });
+      $("#board").style.clipPath = "inset(0 " + ((1 - p(t, 11.2, 11.75)) * 100) + "% 0 0 round 14px)";
+
+      cursor.remove();
+      lines.forEach(function (L) {
+        var vis = t >= L.t;
+        show(L.el, vis);
+        if (L.typed) {
+          var k = clamp((t - L.t) / 0.24), n = Math.round(L.text.length * k);
+          L.body.textContent = L.text.slice(0, n);
+          if (vis && k < 1) L.body.appendChild(cursor);
+        }
+        if (L.el.id === "blocked") L.el.style.background = "rgba(255,179,179," + (0.2 * (1 - p(t, 13.0, 13.9))) + ")";
+      });
+      // the message leaves claude-nico and lands in codex-ana's pane
+      var kf = p(t, 14.6, 15.12, E.io);
+      show(flight, t >= 14.5 && t < 15.12);
+      if (t >= 14.5 && t < 15.12) {
+        var x = lerp(fromPt.x, toPt.x, kf), y = lerp(fromPt.y, toPt.y, kf) - Math.sin(kf * Math.PI) * 170;
+        var sc = lerp(0.85, 1, p(t, 14.5, 14.7)) ;
+        flight.style.transform = "translate(" + x + "px," + y + "px) scale(" + sc + ")";
+      }
+      // board state rolls like a split-flap
+      var cur = 0, at = 11.0, prev = -1;
+      boardCuts.forEach(function (c, i) { if (t >= c[0]) { prev = i ? boardCuts[i - 1][1] : -1; cur = c[1]; at = c[0]; } });
+      var kb = p(t, at, at + 0.35);
+      boardSpans.forEach(function (sp, i) {
+        var y = 100;
+        if (i === cur) y = at === 11.0 ? 0 : (1 - kb) * 100;
+        else if (i === prev) y = -kb * 100;
+        sp.style.transform = "translate3d(0," + y + "%,0)";
       });
     }
 
-    // 7. dashboard
-    if (scene("#s7", t, 37.5, 43.3)) {
-      var x7 = 42.65;
-      rise($("#s7-label"), t, 37.6, x7, 14);
-      words("s7a", t, 37.7, x7);
-      var fr = $("#s7-frame");
-      var kfr = p(t, 38.0, 39.4), kfo = p(t, x7, x7 + 0.6, E.inn);
-      var drift = lerp(0, -70, p(t, 38.0, 43.3, E.io));
-      fr.style.opacity = kfr * (1 - kfo);
-      fr.style.transform = "translate3d(0," + ((1 - kfr) * 180 + drift) + "px,0) scale(" + lerp(0.94, 1, kfr) + ")";
+    // C2: three features, one per bar half
+    [["#f1", 17.5], ["#f2", 18.5], ["#f3", 19.5]].forEach(function (f) {
+      if (!win(f[0], t, f[1], f[1] + 1)) return;
+      inner(f[0]).forEach(function (s, j) { mask(s, t, f[1] + j * 0.05, null, 0.4); });
+      $$(f[0] + " .rows > *").forEach(function (r, j) {
+        var k = p(t, f[1] + 0.1 + j * 0.07, f[1] + 0.55 + j * 0.07);
+        r.style.transform = "translate3d(" + ((1 - k) * 120) + "px,0,0)";
+        r.style.clipPath = "inset(0 0 0 " + ((1 - k) * 100) + "% round 16px)";
+      });
+    });
+
+    // C3: dashboard, pull out from the blocked edit to the whole board
+    if (win("#d1", t, 20.5, 24.0)) {
+      var d = track(t, [
+        [20.5, [1250, 810, 1.0, 960, 560]],
+        [20.95, [1250, 810, 0.95, 960, 560], E.lin],
+        [22.2, [1440, 900, 0.545, 960, 600]],
+        [24.0, [1440, 900, 0.56, 960, 600], E.lin]
+      ]);
+      $("#dash").style.transform = "translate(" + (d[3] - d[0] * d[2]) + "px," + (d[4] - d[1] * d[2]) + "px) scale(" + d[2] + ")";
     }
 
-    // 8. end card
-    if (scene("#s8", t, 43.2, DUR + 1)) {
-      rise($("#s8-lock"), t, 43.35, null, 24, 1.1);
-      rise($("#s8-tag"), t, 43.9, null, 18);
-      rise($("#s8-works"), t, 44.4, null, 14);
-      rise($("#s8-cta"), t, 44.8, null, 14);
-      var kend = p(t, 48.2, 49.0, E.io);
-      $("#s8").style.opacity = 1 - kend;
+    // D: end card
+    if (win("#e1", t, 24.0, DUR + 1)) {
+      $("#e-a").style.strokeDashoffset = 1 - p(t, 24.0, 24.4, E.io);
+      $("#e-b").style.strokeDashoffset = 1 - p(t, 24.07, 24.47, E.io);
+      $("#e-core").style.transform = "scale(" + p(t, 24.3, 24.7) + ")";
+      mask($("#e-word"), t, 24.2, null, 0.55);
+      mask($("#e-tag"), t, 24.6, null, 0.5);
+      var kr = p(t, 25.0, 25.6);
+      $("#e-row").style.clipPath = "inset(0 " + ((1 - kr) * 50) + "% 0 " + ((1 - kr) * 50) + "%)";
     }
   }
 
+  measure();
   window.FILM = { DUR: DUR, FPS: FPS, renderFrame: renderFrame };
-
-  // live preview in a browser: open index.html?play
   if (/[?&]play/.test(location.search)) {
     var start = performance.now();
     (function loop(now) { renderFrame(((now - start) / 1000) % DUR); requestAnimationFrame(loop); })(start);
