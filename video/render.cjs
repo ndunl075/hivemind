@@ -16,7 +16,7 @@ fs.mkdirSync(OUT, { recursive: true });
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   await page.goto("file://" + path.join(__dirname, "index.html"));
-  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => window.FILM.ready);
   await page.waitForTimeout(300);
   const fps = await page.evaluate(() => window.FILM.FPS);
   const shot = async (t) => {

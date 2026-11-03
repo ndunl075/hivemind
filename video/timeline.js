@@ -1,238 +1,294 @@
-// Deterministic timeline: renderFrame(t) sets every property from time t alone,
-// so any frame renders the same in any order. Cuts sit on a 120 BPM grid (0.5 s beats).
+// Hivemind launch film. Everything is drawn on one canvas, and renderFrame(t)
+// depends on t alone, so frames render identically in any order.
+//
+// Idea: agents are the hexagon cells of the Hivemind mark. They work side by side,
+// collide when they cannot see each other, then resolve into the mark itself:
+// two cells that overlap and share a lavender core.
 (function () {
-  var DUR = 28, FPS = 60;
+  var W = 1920, H = 1080, DUR = 26, FPS = 60;
+  var COL = { bg: "#14172f", a: "#E4E5EA", b: "#8E8EA0", core: "#A99BFF", bad: "#ffb3b3" };
+  var cv = document.getElementById("c"), g = cv.getContext("2d");
+  var R = 58, HW = Math.sqrt(3) * R;            // pointy-top cell: circumradius, width
+  var LOGO_STROKE = 5 / 32;                      // the mark's stroke as a fraction of R
 
-  function bez(x1, y1, x2, y2) {
-    function A(a, b) { return 1 - 3 * b + 3 * a; }
-    function B(a, b) { return 3 * b - 6 * a; }
-    function C(a) { return 3 * a; }
-    function at(t, a, b) { return ((A(a, b) * t + B(a, b)) * t + C(a)) * t; }
-    return function (x) {
-      if (x <= 0) return 0; if (x >= 1) return 1;
-      var lo = 0, hi = 1, t = x;
-      for (var i = 0; i < 40; i++) { var v = at(t, x1, x2); if (Math.abs(v - x) < 1e-7) break; if (v < x) lo = t; else hi = t; t = (lo + hi) / 2; }
-      return at(t, y1, y2);
-    };
-  }
+  // ---------- math ----------
   var E = {
-    out: bez(0.16, 1, 0.3, 1),   // fast arrival, long settle
-    io: bez(0.83, 0, 0.17, 1),   // whip moves
-    inn: bez(0.7, 0, 0.84, 0),   // exits
-    lin: function (x) { return x; }
+    io3: function (t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; },
+    io4: function (t) { return t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2; },
+    o3: function (t) { return 1 - Math.pow(1 - t, 3); },
+    back: function (t) { var c1 = 1.15, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); },
+    lin: function (t) { return t; }
   };
-  function clamp(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
-  function p(t, a, b, e) { return (e || E.out)(clamp((t - a) / (b - a))); }
+  function clamp(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+  function p(t, a, b, e) { return (e || E.o3)(clamp((t - a) / (b - a))); }
   function lerp(a, b, k) { return a + (b - a) * k; }
-  function $(s) { return document.querySelector(s); }
-  function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
-  // keyframe track: [[t, v], [t, v, ease], ...]; ease applies to the segment ending at that key
+  function mix(c1, c2, k) {
+    var a = parseInt(c1.slice(1), 16), b = parseInt(c2.slice(1), 16);
+    var r = Math.round(lerp(a >> 16, b >> 16, k)), gg = Math.round(lerp((a >> 8) & 255, (b >> 8) & 255, k)), bb = Math.round(lerp(a & 255, b & 255, k));
+    return "rgb(" + r + "," + gg + "," + bb + ")";
+  }
   function track(t, keys) {
-    if (t <= keys[0][0]) return keys[0][1];
-    for (var i = 1; i < keys.length; i++) {
-      if (t <= keys[i][0]) {
-        var a = keys[i - 1], b = keys[i], k = (keys[i][2] || E.io)(clamp((t - a[0]) / (b[0] - a[0])));
-        return Array.isArray(a[1]) ? a[1].map(function (v, j) { return lerp(v, b[1][j], k); }) : lerp(a[1], b[1], k);
-      }
+    if (t <= keys[0][0]) return keys[0][1].slice();
+    for (var i = 1; i < keys.length; i++) if (t <= keys[i][0]) {
+      var a = keys[i - 1], b = keys[i], k = (b[2] || E.io3)(clamp((t - a[0]) / (b[0] - a[0])));
+      return a[1].map(function (v, j) { return lerp(v, b[1][j], k); });
     }
-    return keys[keys.length - 1][1];
+    return keys[keys.length - 1][1].slice();
   }
-  function show(el, on) { el.style.visibility = on ? "visible" : "hidden"; }
-  // scenes and blocks toggle display, so nothing inside them can leak past their window
-  function on(el, v) { el.style.display = v ? "" : "none"; }
-  function win(id, t, a, b) { var v = t >= a && t < b; on($(id), v); if (v) $(id).style.visibility = "visible"; return v; }
-  // masked line: slides up into its mask, and out of the top on exit
-  function mask(el, t, tin, tout, dur) {
-    var ki = p(t, tin, tin + (dur || 0.45), E.out);
-    var ko = tout == null ? 0 : p(t, tout, tout + 0.3, E.inn);
-    el.style.transform = "translate3d(0," + ((1 - ki) * 105 - ko * 105) + "%,0)";
+  function axial(q, r) { return [HW * (q + r / 2), 1.5 * R * r]; }
+  function key(q, r) { return q + "," + r; }
+  var NB = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, -1], [-1, 1]];
+  function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; var t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+  // ---------- choreography (precomputed, deterministic) ----------
+  var rand = rng(11);
+  var inField = function (q, r) { var w = axial(q, r); return Math.abs(w[0]) < 780 && w[1] > -320 && w[1] < 230; };
+  var agents = [];
+  while (agents.length < 12) {
+    var q = Math.round(rand() * 20 - 10), r = Math.round(rand() * 8 - 4);
+    if (!inField(q, r)) continue;
+    var w = axial(q, r);
+    if (agents.some(function (a) { var o = axial(a.q, a.r); return Math.hypot(o[0] - w[0], o[1] - w[1]) < HW * 2.3; })) continue;
+    agents.push({ q: q, r: r, col: agents.length % 2 ? COL.b : COL.a, moves: [] });
   }
-  function inner(sel) { return $$(sel + " .mask > span"); }
-  function offsetIn(el, root) {
-    var x = 0, y = 0;
-    while (el && el !== root) { x += el.offsetLeft; y += el.offsetTop; el = el.offsetParent; }
-    return { x: x, y: y };
+  agents.forEach(function (a) { a.home = axial(a.q, a.r); a.cell = [a.q, a.r]; });
+
+  // independent work: each tick a few agents step to a free neighbouring cell
+  var occ = {}; agents.forEach(function (a) { occ[key(a.q, a.r)] = 1; });
+  for (var tick = 0; tick < 11; tick++) {
+    var at = 0.9 + tick * 0.36;
+    for (var n = 0; n < 4; n++) {
+      var a = agents[Math.floor(rand() * agents.length)];
+      if (a.busy && a.busy > at) continue;
+      var nb = NB[Math.floor(rand() * 6)], nq = a.cell[0] + nb[0], nr = a.cell[1] + nb[1];
+      if (!inField(nq, nr) || occ[key(nq, nr)]) continue;
+      delete occ[key(a.cell[0], a.cell[1])]; occ[key(nq, nr)] = 1;
+      a.moves.push({ t: at, d: 0.62, to: axial(nq, nr), e: E.back });
+      a.cell = [nq, nr]; a.busy = at + 0.62;
+    }
   }
 
-  // ---------- chrome ----------
-  var secs = $$("#sec span");
-  var secCuts = [[0, 0], [11.0, 1], [17.5, 2], [20.5, 3]];
-  function chrome(t) {
-    var vis = (t >= 0 && t < 5.75) || (t >= 11.0 && t < 20.5);
-    on($("#chrome"), vis);
-    var cur = 0, at = -1, prev = -1;
-    secCuts.forEach(function (c, i) { if (t >= c[0]) { prev = i ? secCuts[i - 1][1] : -1; cur = c[1]; at = c[0]; } });
-    var k = p(t, at + 0.05, at + 0.4, E.out);
-    secs.forEach(function (s, i) {
-      var y = 100;
-      if (i === cur) y = (1 - k) * 100;
-      else if (i === prev && at > 11.0) y = -k * 100;
-      s.style.transform = "translate3d(0," + y + "%,0)";
+  // collisions: three pairs of a light and a dark cell land on the same cell
+  var light = agents.filter(function (a) { return a.col === COL.a; }), dark = agents.filter(function (a) { return a.col === COL.b; });
+  var pairs = [], usedDark = [];
+  light.slice(0, 3).forEach(function (A) {
+    var best = null, bd = 1e9, pa = axial(A.cell[0], A.cell[1]);
+    dark.forEach(function (B) {
+      if (usedDark.indexOf(B) >= 0) return;
+      var pb = axial(B.cell[0], B.cell[1]), d = Math.hypot(pa[0] - pb[0], pa[1] - pb[1]);
+      if (d < bd) { bd = d; best = B; }
     });
+    usedDark.push(best); pairs.push([A, best]);
+  });
+  // the pair nearest the centre becomes the mark
+  pairs.sort(function (x, y) { var a = axial(x[0].cell[0], x[0].cell[1]), b = axial(y[0].cell[0], y[0].cell[1]); return Math.hypot(a[0], a[1]) - Math.hypot(b[0], b[1]); });
+  pairs.forEach(function (pr, i) {
+    var A = pr[0], B = pr[1], at = 5.55 + i * 0.32;
+    B.moves.push({ t: at, d: 0.8, to: axial(A.cell[0], A.cell[1]), e: E.io3 });
+    A.hit = B.hit = at + 0.8; B.offender = true;
+  });
+
+  // resolution: the first pair forms the mark at the origin, everyone else takes a seat on ring 2
+  // everyone else takes an evenly spaced seat on a circle around it
+  var ring = [];
+  for (var s = 0; s < 10; s++) { var ang = (-90 + 18 + s * 36) * Math.PI / 180; ring.push([Math.cos(ang) * HW * 2.85, Math.sin(ang) * HW * 2.85]); }
+  var markPair = pairs[0];
+  markPair[0].final = [-HW / 4, 0]; markPair[1].final = [HW / 4, 0];
+  agents.filter(function (a) { return !a.final; }).forEach(function (a) {
+    var pos = a.moves.length ? a.moves[a.moves.length - 1].to : a.home, bi = 0, bd = 1e9;
+    ring.forEach(function (s, i) { if (!s.taken) { var d = Math.hypot(s[0] - pos[0], s[1] - pos[1]); if (d < bd) { bd = d; bi = i; } } });
+    ring[bi].taken = true; a.final = ring[bi]; a.ringed = true;
+  });
+  agents.forEach(function (a, i) { a.moves.push({ t: 9.0 + (a.ringed ? 0.08 + (i % 5) * 0.05 : 0), d: 1.05, to: a.final, e: E.io3 }); });
+
+  function posOf(a, t) {
+    var cur = a.home;
+    for (var i = 0; i < a.moves.length; i++) {
+      var m = a.moves[i];
+      if (t < m.t) break;
+      var k = m.e(clamp((t - m.t) / m.d));
+      cur = [lerp(cur[0], m.to[0], k), lerp(cur[1], m.to[1], k)];
+      if (t < m.t + m.d) return cur;
+      cur = m.to;
+    }
+    return cur;
   }
 
-  // ---------- terminal lines ----------
-  var lines = $$("#c1 .ln").map(function (el) {
-    var body = el.querySelector(".body");
-    return { el: el, t: +el.dataset.t, typed: el.hasAttribute("data-type"), body: body, text: body.textContent };
-  });
-  var cursor = document.createElement("span"); cursor.className = "cursor";
-  var boardSpans = $$("#slot span");
-  var boardCuts = [[11.0, 0], [12.27, 1], [14.12, 2], [15.85, 3], [16.6, 4]];
-  var cam = $("#cam"), flight = $("#flight");
-  var fromPt, toPt;
-  function measure() {
-    var s = offsetIn($("#send"), cam), d = offsetIn($("#land"), cam);
-    fromPt = { x: s.x + 40, y: s.y + 36 };
-    toPt = { x: d.x, y: d.y };
+  // ---------- drawing ----------
+  var cam = { x: 0, y: 60, z: 1 };
+  function sx(wx) { return (wx - cam.x) * cam.z + W / 2; }
+  function sy(wy) { return (wy - cam.y) * cam.z + H / 2; }
+  function hexPath(cx, cy, rad) {
+    g.beginPath();
+    for (var k = 0; k < 6; k++) {
+      var ang = (-90 + 60 * k) * Math.PI / 180;
+      var X = sx(cx + rad * Math.cos(ang)), Y = sy(cy + rad * Math.sin(ang));
+      k ? g.lineTo(X, Y) : g.moveTo(X, Y);
+    }
+    g.closePath();
+  }
+  function hex(cx, cy, color, width, trim, alpha) {
+    hexPath(cx, cy, R);
+    g.globalAlpha = alpha == null ? 1 : alpha;
+    g.strokeStyle = color; g.lineWidth = width; g.lineJoin = "round";
+    if (trim < 1) { var per = 6 * R * cam.z; g.setLineDash([per * trim, per]); } else g.setLineDash([]);
+    g.stroke(); g.setLineDash([]); g.globalAlpha = 1;
+  }
+  function core(cx, cy, k) {
+    if (k <= 0) return;
+    var pts = [[0, -0.75], [0.428, -0.5], [0.428, 0.5], [0, 0.75], [-0.428, 0.5], [-0.428, -0.5]];
+    g.beginPath();
+    pts.forEach(function (pt, i) { var X = sx(cx + pt[0] * R * k), Y = sy(cy + pt[1] * R * k); i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+    g.closePath(); g.fillStyle = COL.core; g.fill();
+  }
+  function lattice(alpha) {
+    if (alpha <= 0) return;
+    g.strokeStyle = "rgba(255,255,255," + alpha + ")"; g.lineWidth = 1;
+    for (var r = -9; r <= 9; r++) for (var q = -16; q <= 16; q++) {
+      var w = axial(q, r);
+      if (Math.abs(sx(w[0]) - W / 2) > W / 2 + 80 || Math.abs(sy(w[1]) - H / 2) > H / 2 + 80) continue;
+      hexPath(w[0], w[1], R); g.stroke();
+    }
+  }
+  function text(str, x, y, size, color, alpha, weight, align) {
+    if (alpha <= 0) return;
+    g.globalAlpha = alpha; g.fillStyle = color; g.textAlign = align || "left"; g.textBaseline = "alphabetic";
+    g.font = (weight || 500) + " " + size + "px Inter";
+    g.letterSpacing = (-0.022 * size).toFixed(2) + "px";
+    g.fillText(str, x, y); g.globalAlpha = 1;
+  }
+  function inOut(t, a, b, fin, fout) { return p(t, a, a + (fin || 0.5), E.io3) * (1 - p(t, b, b + (fout || 0.4), E.io3)); }
+
+  var dash = new Image(); dash.src = "../site/dashboard.png";
+  var wordW = 0, ZL = 1.85, lock = { x: 0, y: 0 };
+  // camera target that centres the lockup (mark, gap, wordmark) on screen
+  function solveLock() {
+    var mw = 1.5 * HW * ZL, total = mw + 52 + wordW, left = W / 2 - total / 2;
+    lock.x = (W / 2 - (left + mw / 2)) / ZL; lock.y = (H / 2 - 470) / ZL;
+  }
+
+  // ---------- scenes ----------
+  function field(t) {
+    // camera: still, then a slow push into the pair that becomes the mark
+    var c = track(t, [[0, [0, 60, 1]], [9.0, [0, 40, 1.02], E.lin], [11.0, [0, 30, 1.06], E.lin], [12.4, [lock.x, lock.y, ZL], E.io4], [14, [lock.x, lock.y, ZL * 1.012], E.lin]]);
+    cam.x = c[0]; cam.y = c[1]; cam.z = c[2];
+    var zk = clamp((cam.z - 1.06) / (ZL - 1.06));
+    var fadeOthers = 1 - p(t, 11.0, 11.7, E.io3);
+    lattice(0.045 * p(t, 0, 1.2, E.io3) * fadeOthers);
+
+    var stroke = lerp(3, LOGO_STROKE * R * cam.z, zk);
+    // connections: every agent to the shared core
+    var coreK = p(t, 10.0, 10.55, E.back);
+    agents.forEach(function (a, i) {
+      if (!a.ringed) return;
+      var k = p(t, 10.25 + i * 0.03, 10.85 + i * 0.03, E.io3);
+      if (k <= 0) return;
+      var P = posOf(a, t), d = Math.hypot(P[0], P[1]), ux = -P[0] / d, uy = -P[1] / d;
+      var x0 = P[0] + ux * R * 0.95, y0 = P[1] + uy * R * 0.95;  // leave from the agent's edge
+      var endX = -ux * R * 0.62, endY = -uy * R * 0.62;            // stop at the core's edge
+      var tx = lerp(x0, endX, k), ty = lerp(y0, endY, k);
+      g.globalAlpha = 0.75 * fadeOthers; g.strokeStyle = COL.core; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(sx(x0), sy(y0)); g.lineTo(sx(tx), sy(ty)); g.stroke(); g.globalAlpha = 1;
+    });
+
+    var mp = posOf(markPair[0], t), mq = posOf(markPair[1], t);
+    core((mp[0] + mq[0]) / 2, (mp[1] + mq[1]) / 2, coreK);
+
+    agents.forEach(function (a, i) {
+      var P = posOf(a, t);
+      var draw = p(t, 0.15 + i * 0.07, 0.85 + i * 0.07, E.io3);
+      var color = a.col, alpha = a.ringed ? fadeOthers : 1;
+      if (a.hit && t >= a.hit) {
+        var k = p(t, a.hit, a.hit + 0.12) * (1 - p(t, 9.0, 9.4, E.io3));
+        color = mix(a.col, COL.bad, k);
+        if (a.offender && t < 9.4) {
+          var dt = t - a.hit, j = Math.exp(-dt * 6) * Math.sin(dt * 2 * Math.PI * 7);
+          var settle = 1 - p(t, 9.0, 9.4, E.io3);
+          P = [P[0] + (6 + 9 * j) * settle, P[1] + (4 - 5 * j) * settle];
+        }
+      }
+      if (alpha <= 0) return;
+      hex(P[0], P[1], color, stroke, draw, alpha);
+    });
+
+    // lines of copy
+    text("Your AI agents work side by side.", 120, 965, 54, "#fff", inOut(t, 1.3, 4.9));
+    text("None of them knows what the others are doing.", 120, 965, 54, "#fff", inOut(t, 6.2, 8.75));
+
+    // lockup: wordmark wipes on beside the mark
+    var markRight = sx(HW * 0.75) + 52 * (cam.z / ZL);
+    if (t >= 12.2) {
+      var kw = p(t, 12.2, 12.85, E.o3);
+      g.save(); g.beginPath(); g.rect(markRight - 10, 0, (wordW + 40) * kw, H); g.clip();
+      text("Hivemind", markRight + (1 - kw) * -24, sy(0) + 54, 156, "#fff", 1, 500);
+      g.restore();
+    }
+    text("Hivemind connects them to one live board.", W / 2, 760, 40, "rgba(255,255,255,.72)", p(t, 12.9, 13.4, E.io3), 400, "center");
+  }
+
+  function dashboard(t) {
+    var c = track(t, [
+      [14.0, [1240, 800, 0.82, 120, 1680]],
+      [16.5, [1270, 790, 0.86, 120, 1680], E.lin],
+      [17.4, [2080, 1420, 1.0, 120, 1680], E.io3],
+      [19.3, [2060, 1400, 1.03, 120, 1680], E.lin],
+      [20.5, [1440, 900, 0.4334, 336, 1248], E.io4],
+      [22.0, [1440, 900, 0.44, 336, 1248], E.lin]
+    ]);
+    var wx = c[3], ww = c[4], wy = 96, wh = 780, s = c[2];
+    g.save();
+    g.beginPath(); g.roundRect(wx, wy, ww, wh, 14); g.clip();
+    g.fillStyle = "#101010"; g.fillRect(wx, wy, ww, wh);
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high";
+    g.drawImage(dash, wx + ww / 2 - c[0] * s, wy + wh / 2 - c[1] * s, 2880 * s, 1800 * s);
+    g.restore();
+    g.strokeStyle = "rgba(255,255,255,.14)"; g.lineWidth = 1.5;
+    g.beginPath(); g.roundRect(wx + 0.75, wy + 0.75, ww - 1.5, wh - 1.5, 14); g.stroke();
+
+    text("Before an agent edits a file, Hivemind checks who already has it.", 120, 975, 44, "#fff", inOut(t, 14.25, 16.75, 0.45, 0.35));
+    text("Agents can message each other while they work.", 120, 975, 44, "#fff", inOut(t, 17.3, 19.25, 0.45, 0.35));
+    text("A live dashboard shows every agent and what it is working on.", 120, 975, 44, "#fff", inOut(t, 20.3, 30, 0.45));
+  }
+
+  function endCard(t) {
+    cam.x = 0; cam.y = 0; cam.z = 1.62;
+    var cx = W / 2, word = 132, gap = 46;
+    g.font = "500 " + word + "px Inter"; g.letterSpacing = (-0.022 * word).toFixed(2) + "px";
+    var ww = g.measureText("Hivemind").width, mw = 1.5 * HW * cam.z;
+    var left = cx - (mw + gap + ww) / 2;
+    cam.x = -((left + mw / 2) - W / 2) / cam.z; cam.y = -(470 - H / 2) / cam.z;
+    var k = p(t, 22.15, 22.65, E.io3);
+    g.globalAlpha = k;
+    core(0, 0, 1);
+    hex(-HW / 4, 0, COL.a, LOGO_STROKE * R * cam.z, 1, k);
+    hex(HW / 4, 0, COL.b, LOGO_STROKE * R * cam.z, 1, k);
+    g.globalAlpha = 1;
+    text("Hivemind", left + mw + gap, 470 + word * 0.36, word, "#fff", p(t, 22.3, 22.8, E.io3));
+    text("Real-time coordination for your AI agents, across every device and account.", cx, 680, 38, "rgba(255,255,255,.72)", p(t, 22.6, 23.1, E.io3), 400, "center");
+    text("usefrontierdigital.com/hivemind", cx, 780, 34, COL.core, p(t, 22.9, 23.4, E.io3), 500, "center");
   }
 
   function renderFrame(t) {
-    chrome(t);
-
-    // A1: two agents, one file
-    if (win("#a1", t, 0, 1.5)) {
-      mask($("#a1-l1"), t, 0.06, 1.2);
-      mask($("#a1-l2"), t, 0.75, 1.25);
-    }
-
-    // A2: the collision
-    if (win("#a2", t, 1.5, 4.0)) {
-      var punch = t >= 2.75 ? 0.035 * Math.exp(-(t - 2.75) * 9) : 0;
-      $("#a2-cam").style.transform = "scale(" + (lerp(1, 1.05, p(t, 1.5, 4.0, E.lin)) + punch) + ")";
-      $("#a-path").parentElement.style.transform = "";
-      mask($("#a-path"), t, 1.5, null, 0.5);
-      var ka = p(t, 1.62, 2.1), kn = p(t, 1.82, 2.3);
-      $("#a2-ana").style.transform = "translate3d(" + ((1 - ka) * -900) + "px,0,0)";
-      $("#a2-nico").style.transform = "translate3d(" + ((1 - kn) * -900) + "px,0,0)";
-      var hit = t >= 2.75;
-      $("#a2-ana-s").textContent = hit ? "overwritten" : t >= 2.25 ? "writing" : "editing";
-      $("#a2-nico-s").textContent = t >= 2.25 ? "writing" : "editing";
-      $("#a2-ana-s").style.color = hit ? "var(--bad)" : "";
-      $("#a-path").style.color = hit ? "var(--bad)" : "";
-      $("#a-strike").style.transform = "scaleX(" + p(t, 2.75, 3.05) + ")";
-      mask($("#a2-k .mask > span"), t, 3.05, null, 0.4);
-    }
-
-    // A3: consequences, one per beat
-    if (win("#a3", t, 4.0, 5.75)) {
-      var blocks = $$("#a3 > div");
-      blocks.forEach(function (b, i) {
-        var a = 4.0 + i * 0.5, z = i < 2 ? a + 0.5 : 5.75;
-        on(b, t >= a && t < z);
-        var spans = $$(".mask > span", b);
-        spans.forEach(function (s, j) { mask(s, t, a + j * 0.04, i === 2 ? 5.42 : null, 0.32); });
-      });
-    }
-
-    // B1: mark builds, its core floods the frame, wordmark lands
-    if (win("#b1", t, 5.75, 8.5)) {
-      $("#b1-a").style.strokeDashoffset = 1 - p(t, 5.85, 6.35, E.io);
-      $("#b1-b").style.strokeDashoffset = 1 - p(t, 5.97, 6.47, E.io);
-      var kc = p(t, 6.3, 6.75);
-      $("#b1-core").style.transform = "scale(" + kc + ")";
-      var S = lerp(1, 24, p(t, 7.0, 7.5, bez(0.7, 0, 0.9, 0.35)));
-      $("#b1-g").style.transform = "scale(" + S + ")";
-      on($("#flood"), t >= 7.0 && S >= 20);
-      on($("#b1-mark"), !(S >= 20));
-      on($("#b1-word"), t >= 7.4);
-      mask($("#b1-word .mask > span"), t, 7.45, null, 0.55);
-    }
-
-    // B2: positioning
-    if (win("#b2", t, 8.5, 11.0)) {
-      mask($("#b2-l1"), t, 8.5, 10.6);
-      mask($("#b2-l2"), t, 8.6, 10.64);
-      mask($("#b2-k"), t, 9.1, 10.68, 0.4);
-    }
-
-    // C1: the product, live
-    if (win("#c1", t, 11.0, 17.5)) {
-      var cpos = track(t, [
-        [11.0, [960, 540, 1]], [12.45, [960, 540, 1]],
-        [12.85, [1386, 420, 1.5]], [14.2, [1386, 440, 1.52], E.lin],
-        [14.6, [960, 540, 1]], [17.5, [960, 540, 1.04], E.lin]
-      ]);
-      var punch2 = t >= 13.0 ? 0.05 * Math.exp(-(t - 13.0) * 10) * (t < 14.2 ? 1 : 0) : 0;
-      var s = cpos[2] + punch2;
-      cam.style.transform = "translate(" + (960 - cpos[0] * s) + "px," + (540 - cpos[1] * s) + "px) scale(" + s + ")";
-      [["#pa", 11.0], ["#pn", 11.08]].forEach(function (q) {
-        var k = p(t, q[1], q[1] + 0.5);
-        $(q[0]).style.clipPath = "inset(0 0 " + ((1 - k) * 100) + "% 0 round 16px)";
-      });
-      $("#board").style.clipPath = "inset(0 " + ((1 - p(t, 11.2, 11.75)) * 100) + "% 0 0 round 14px)";
-
-      cursor.remove();
-      lines.forEach(function (L) {
-        var vis = t >= L.t;
-        show(L.el, vis);
-        if (L.typed) {
-          var k = clamp((t - L.t) / 0.24), n = Math.round(L.text.length * k);
-          L.body.textContent = L.text.slice(0, n);
-          if (vis && k < 1) L.body.appendChild(cursor);
-        }
-        if (L.el.id === "blocked") L.el.style.background = "rgba(255,179,179," + (0.2 * (1 - p(t, 13.0, 13.9))) + ")";
-      });
-      // the message leaves claude-nico and lands in codex-ana's pane
-      var kf = p(t, 14.6, 15.12, E.io);
-      show(flight, t >= 14.5 && t < 15.12);
-      if (t >= 14.5 && t < 15.12) {
-        var x = lerp(fromPt.x, toPt.x, kf), y = lerp(fromPt.y, toPt.y, kf) - Math.sin(kf * Math.PI) * 170;
-        var sc = lerp(0.85, 1, p(t, 14.5, 14.7)) ;
-        flight.style.transform = "translate(" + x + "px," + y + "px) scale(" + sc + ")";
-      }
-      // board state rolls like a split-flap
-      var cur = 0, at = 11.0, prev = -1;
-      boardCuts.forEach(function (c, i) { if (t >= c[0]) { prev = i ? boardCuts[i - 1][1] : -1; cur = c[1]; at = c[0]; } });
-      var kb = p(t, at, at + 0.35);
-      boardSpans.forEach(function (sp, i) {
-        var y = 100;
-        if (i === cur) y = at === 11.0 ? 0 : (1 - kb) * 100;
-        else if (i === prev) y = -kb * 100;
-        sp.style.transform = "translate3d(0," + y + "%,0)";
-      });
-    }
-
-    // C2: three features, one per bar half
-    [["#f1", 17.5], ["#f2", 18.5], ["#f3", 19.5]].forEach(function (f) {
-      if (!win(f[0], t, f[1], f[1] + 1)) return;
-      inner(f[0]).forEach(function (s, j) { mask(s, t, f[1] + j * 0.05, null, 0.4); });
-      $$(f[0] + " .rows > *").forEach(function (r, j) {
-        var k = p(t, f[1] + 0.1 + j * 0.07, f[1] + 0.55 + j * 0.07);
-        r.style.transform = "translate3d(" + ((1 - k) * 120) + "px,0,0)";
-        r.style.clipPath = "inset(0 0 0 " + ((1 - k) * 100) + "% round 16px)";
-      });
-    });
-
-    // C3: dashboard, pull out from the blocked edit to the whole board
-    if (win("#d1", t, 20.5, 24.0)) {
-      var d = track(t, [
-        [20.5, [1250, 810, 1.0, 960, 560]],
-        [20.95, [1250, 810, 0.95, 960, 560], E.lin],
-        [22.2, [1440, 900, 0.545, 960, 600]],
-        [24.0, [1440, 900, 0.56, 960, 600], E.lin]
-      ]);
-      $("#dash").style.transform = "translate(" + (d[3] - d[0] * d[2]) + "px," + (d[4] - d[1] * d[2]) + "px) scale(" + d[2] + ")";
-    }
-
-    // D: end card
-    if (win("#e1", t, 24.0, DUR + 1)) {
-      $("#e-a").style.strokeDashoffset = 1 - p(t, 24.0, 24.4, E.io);
-      $("#e-b").style.strokeDashoffset = 1 - p(t, 24.07, 24.47, E.io);
-      $("#e-core").style.transform = "scale(" + p(t, 24.3, 24.7) + ")";
-      mask($("#e-word"), t, 24.2, null, 0.55);
-      mask($("#e-tag"), t, 24.6, null, 0.5);
-      var kr = p(t, 25.0, 25.6);
-      $("#e-row").style.clipPath = "inset(0 " + ((1 - kr) * 50) + "% 0 " + ((1 - kr) * 50) + "%)";
-    }
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.fillStyle = COL.bg; g.fillRect(0, 0, W, H);
+    if (t < 14.0) field(t);
+    else if (t < 22.0) dashboard(t);
+    else endCard(t);
   }
 
-  measure();
-  window.FILM = { DUR: DUR, FPS: FPS, renderFrame: renderFrame };
-  if (/[?&]play/.test(location.search)) {
+  var ready = Promise.all([
+    document.fonts.load("500 54px Inter"), document.fonts.load("400 40px Inter"),
+    new Promise(function (res) { if (dash.complete) res(); else dash.onload = res; })
+  ]).then(function () {
+    g.font = "500 156px Inter"; g.letterSpacing = (-0.022 * 156).toFixed(2) + "px";
+    wordW = g.measureText("Hivemind").width;
+    solveLock();
+    renderFrame(0);
+  });
+
+  window.FILM = { DUR: DUR, FPS: FPS, renderFrame: renderFrame, ready: ready };
+  if (/[?&]play/.test(location.search)) ready.then(function () {
     var start = performance.now();
     (function loop(now) { renderFrame(((now - start) / 1000) % DUR); requestAnimationFrame(loop); })(start);
-  } else {
-    renderFrame(0);
-  }
+  });
 })();

@@ -1,32 +1,28 @@
 # Hivemind launch film
 
-A 28 second, 1920×1080, 60 fps launch film cut on a 120 BPM grid (a cut lands every 0.5 s beat). It uses the landing page's brand (navy, lavender, Inter, Geist Mono, the hex mark) on flat color, with no gradients, glass or texture. Each frame averages four subframes across a 180° shutter, so fast moves get real motion blur.
+A 26 second, 1920×1080, 60 fps launch film. Everything is drawn on one canvas from the brand's own parts: the navy, the mark's three colors (#E4E5EA, #8E8EA0, #A99BFF), Inter, and the hexagon itself. The only product imagery is the real dashboard screenshot from `site/`. Each frame averages four subframes across a 180° shutter, so moving shapes get real motion blur.
+
+The idea: agents are the hexagon cells of the mark. They work side by side, collide when they can't see each other, then resolve into the mark itself, two cells that overlap and share a lavender core.
 
 | Time | Scene |
 |---|---|
-| 0:00 | "Two agents. One file." |
-| 0:01.5 | codex-ana and claude-nico both edit `src/auth/login.ts`; one overwrites the other |
-| 0:04 | Duplicate work. Lost changes. Merge conflicts. One per beat |
-| 0:05.75 | The mark draws, its core floods the frame lavender, wordmark lands |
-| 0:08.5 | "Real-time coordination for your AI agents." |
-| 0:11 | Live terminals: claim, hold, blocked (camera push), message flies between panes, push, release |
-| 0:17.5 | One owner per task / One writer per file / Agents that talk |
-| 0:20.5 | Dashboard: pull out from the blocked edit to the whole board |
-| 0:24 | End card |
+| 0:00 | Agents draw on and work across a hex field. "Your AI agents work side by side." |
+| 0:05.5 | Three pairs land on the same cell and conflict. "None of them knows what the others are doing." |
+| 0:09 | Everyone reorganizes around one shared core and connects to it |
+| 0:11 | The camera pushes into the center pair, which is the Hivemind mark; wordmark wipes on |
+| 0:14 | Real dashboard: the blocked edit, agent messages, then the full board |
+| 0:22 | End card |
+
+The master has no audio. Lay a licensed track under it; the strongest beats are the collisions (5.6 to 6.9 s), the resolve (9.0 s), the lockup (12.2 s) and the end card (22.0 s).
 
 ## Files
 
 - `index.html`, `timeline.js`: the composition. Open `index.html?play` in a browser for a live preview.
 - `render.cjs`, `render-all.sh`: frame-accurate render with headless Chromium (Playwright) into ffmpeg.
-- `score.py`: a 120 BPM music bed and sound design, synthesized with numpy on the same cues as `timeline.js`. Writes `out/score.wav` (music and effects) and `out/sfx.wav` (effects only, for laying a licensed 120 BPM track underneath).
 
 ## Build
 
 ```sh
-./render-all.sh            # picture -> out/picture.mkv
-python3 score.py           # audio   -> out/score.wav
-ffmpeg -i out/picture.mkv -i out/score.wav -c:v libx264 -preset slow -crf 15 -pix_fmt yuv420p \
-  -map 0:v -map 1:a -c:a aac -b:a 256k -movflags +faststart -shortest hivemind-launch.mp4
+./render-all.sh   # picture -> out/picture.mkv
+ffmpeg -i out/picture.mkv -c:v libx264 -preset slow -crf 14 -pix_fmt yuv420p -movflags +faststart hivemind-launch.mp4
 ```
-
-To change timing, edit the times in `timeline.js` and the matching cues in `score.py`.
